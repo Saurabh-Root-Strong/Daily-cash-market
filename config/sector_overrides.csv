@@ -1,0 +1,4 @@
+# Sector overrides — manually assign stocks to sectors/industries
+# Format: symbol,sector,industry,notes
+# Example: HDFCBANK,Pvt Bank,Banking,Manually classified
+symbol,sector,industry,notes

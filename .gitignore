@@ -1,0 +1,17 @@
+.claude/
+venv/
+__pycache__/
+*.pyc
+*.pyo
+logs/*.log
+logs/scheduler.log
+data/*.duckdb
+data/*.duckdb.wal
+.pytest_cache/
+.idea/
+.DS_Store
+*.egg-info/
+dist/
+build/
+stock_list.csv
+NSE_Sector_Wise_Classification.xlsx

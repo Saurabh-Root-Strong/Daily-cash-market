@@ -1,0 +1,79 @@
+database:
+  path: data/market_data.duckdb
+
+ingestion:
+  user_agent: "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+  retries: 3
+  timeout: 30
+  polite_delay: 2.0
+  bhavcopy_url: "https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{date}_F_0000.csv.zip"
+  delivery_url: "https://nsearchives.nseindia.com/archives/equities/mto/MTO_{date}.DAT"
+
+backfill:
+  trading_days: 100
+
+analytics:
+  delivery_avg_window: 10
+  volume_avg_window: 20
+  accumulation_threshold: 1.2
+  distribution_threshold: 0.8
+  min_turnover_lacs: 100
+  weighting_method: "turnover"
+
+dashboard:
+  port: 8501
+
+scheduler:
+  run_time: "18:30"
+
+sectors:
+  sources:
+    - name: "NIFTY PHARMA"
+      filename: "nifty_pharma"
+      sector: "Pharma"
+    - name: "NIFTY IT"
+      filename: "nifty_it"
+      sector: "IT"
+    - name: "NIFTY BANK"
+      filename: "nifty_bank"
+      sector: "Bank"
+    - name: "NIFTY AUTO"
+      filename: "nifty_auto"
+      sector: "Auto"
+    - name: "NIFTY FMCG"
+      filename: "nifty_fmcg"
+      sector: "FMCG"
+    - name: "NIFTY METAL"
+      filename: "nifty_metal"
+      sector: "Metal"
+    - name: "NIFTY REALTY"
+      filename: "nifty_realty"
+      sector: "Realty"
+    - name: "NIFTY ENERGY"
+      filename: "nifty_energy"
+      sector: "Energy"
+    - name: "NIFTY MEDIA"
+      filename: "nifty_media"
+      sector: "Media"
+    - name: "NIFTY PSU BANK"
+      filename: "nifty_psubank"
+      sector: "PSU Bank"
+    - name: "NIFTY PVT BANK"
+      filename: "nifty_pvtbank"
+      sector: "Pvt Bank"
+    - name: "NIFTY FIN SERVICE"
+      filename: "nifty_fin_service"
+      sector: "Fin Service"
+    - name: "NIFTY CONSUMER DURABLES"
+      filename: "nifty_consr_durbl"
+      sector: "Consumer Durables"
+    - name: "NIFTY HEALTHCARE"
+      filename: "nifty_healthcare"
+      sector: "Healthcare"
+    - name: "NIFTY OIL AND GAS"
+      filename: "nifty_oil_and_gas"
+      sector: "Oil & Gas"
+
+logging:
+  level: "INFO"
+  log_dir: "logs"

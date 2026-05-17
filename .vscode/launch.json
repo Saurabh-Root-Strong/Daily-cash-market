@@ -1,0 +1,45 @@
+{
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Streamlit Dashboard",
+            "type": "python",
+            "request": "launch",
+            "module": "streamlit",
+            "args": ["run", "src/dashboard/streamlit_app.py", "--server.port", "8501"],
+            "justMyCode": true
+        },
+        {
+            "name": "Daily Fetch",
+            "type": "python",
+            "request": "launch",
+            "module": "src.cli",
+            "args": ["daily"],
+            "justMyCode": true
+        },
+        {
+            "name": "Backfill 60 Days",
+            "type": "python",
+            "request": "launch",
+            "module": "src.cli",
+            "args": ["backfill", "60"],
+            "justMyCode": true
+        },
+        {
+            "name": "Seed Sectors",
+            "type": "python",
+            "request": "launch",
+            "module": "src.cli",
+            "args": ["seed-sectors"],
+            "justMyCode": true
+        },
+        {
+            "name": "Run Tests",
+            "type": "python",
+            "request": "launch",
+            "module": "pytest",
+            "args": ["tests/", "-v"],
+            "justMyCode": false
+        }
+    ]
+}
