@@ -383,63 +383,131 @@ def render(selected_date: date, min_turnover: float) -> None:
         "1M Deliv%":  "1M_deliv_pct",
         "3M Deliv%":  "3M_deliv_pct",
     }
+    _METRIC_LABELS = list(_SORT_COL_MAP.keys())
 
-    _FILTER_MAP = {
-        "Price Up (1W)":                       lambda df: df[df["1W_price_chg_pct"] > 0],
-        "Price Down (1W)":                     lambda df: df[df["1W_price_chg_pct"] < 0],
-        "Price Up (1M)":                       lambda df: df[df["1M_price_chg_pct"] > 0],
-        "Price Down (1M)":                     lambda df: df[df["1M_price_chg_pct"] < 0],
-        "High Delivery 1W (> 45%)":            lambda df: df[df["1W_deliv_pct"] > 45],
-        "Low Delivery 1W (< 30%)":             lambda df: df[df["1W_deliv_pct"] < 30],
-        "Accumulating (1W Deliv > 3M Deliv)":  lambda df: df[df["1W_deliv_pct"] > df["3M_deliv_pct"]],
-        "Distributing (1W Deliv < 3M Deliv)":  lambda df: df[df["1W_deliv_pct"] < df["3M_deliv_pct"]],
-    }
-
-    ctrl1, ctrl2, ctrl3, ctrl4 = st.columns([2, 2, 3, 1.2])
-    with ctrl1:
-        sort_by = st.selectbox(
-            "Sort by",
-            options=list(_SORT_COL_MAP.keys()),
-            index=0,
-            key="master_sort_col",
-        )
-    with ctrl2:
-        sort_dir = st.radio(
-            "Order",
-            ["Highest first", "Lowest first"],
-            horizontal=True,
-            key="master_sort_dir",
-        )
-    with ctrl3:
-        filters = st.multiselect(
-            "Filter (combine multiple — AND logic)",
-            options=list(_FILTER_MAP.keys()),
-            key="master_filter",
-            placeholder="Select one or more filters…",
-        )
-    with ctrl4:
+    # ── Sort controls ─────────────────────────────────────────────────────────
+    sc1, sc2, sc3 = st.columns([2.5, 2.5, 1.2])
+    with sc1:
+        sort_by = st.selectbox("Sort by", _METRIC_LABELS, index=0, key="master_sort_col")
+    with sc2:
+        sort_dir = st.radio("Order", ["Highest first", "Lowest first"],
+                            horizontal=True, key="master_sort_dir")
+    with sc3:
         st.write("")
         st.write("")
-        col_ca, col_cf = st.columns(2)
-        if col_ca.button("Collapse All", use_container_width=True):
+        if st.button("Collapse All", use_container_width=True, key="collapse_all_btn"):
             st.session_state["exp_sectors"] = set()
             st.session_state["exp_subsectors"] = set()
             st.rerun()
-        if col_cf.button("Clear Filters", use_container_width=True):
-            st.session_state["master_filter"] = []
+
+    # ── Custom filter builder ─────────────────────────────────────────────────
+    st.markdown(
+        "<div style='font-size:13px;font-weight:600;margin-bottom:4px'>"
+        "Custom Filters &nbsp;<span style='font-weight:400;color:#aaa'>"
+        "— type your own thresholds, all rows must match (AND logic)</span></div>",
+        unsafe_allow_html=True,
+    )
+
+    if "custom_filters" not in st.session_state:
+        st.session_state["custom_filters"] = []
+
+    _OP_LABELS   = ["> greater than", "< less than"]
+    _OP_SYMBOLS  = {">  greater than": ">", "< less than": "<"}
+
+    # Column header labels for the filter rows
+    fh1, fh2, fh3, fh4, fh5 = st.columns([0.12, 2.5, 1.5, 1.8, 0.5])
+    fh2.markdown("<small style='color:#888'>Metric</small>", unsafe_allow_html=True)
+    fh3.markdown("<small style='color:#888'>Condition</small>", unsafe_allow_html=True)
+    fh4.markdown("<small style='color:#888'>Value (%)</small>", unsafe_allow_html=True)
+
+    delete_idx = None
+    for i, flt in enumerate(st.session_state["custom_filters"]):
+        fc0, fc1, fc2, fc3, fc4 = st.columns([0.12, 2.5, 1.5, 1.8, 0.5])
+        fc0.markdown(
+            f"<div style='font-size:11px;color:#888;padding-top:8px'>#{i+1}</div>",
+            unsafe_allow_html=True,
+        )
+        with fc1:
+            cur_lbl = flt.get("label", _METRIC_LABELS[0])
+            lbl_idx = _METRIC_LABELS.index(cur_lbl) if cur_lbl in _METRIC_LABELS else 0
+            st.selectbox("m", _METRIC_LABELS, index=lbl_idx,
+                         key=f"fm_{i}", label_visibility="collapsed")
+        with fc2:
+            cur_op = flt.get("op", ">")
+            op_lbl = _OP_LABELS[0] if cur_op == ">" else _OP_LABELS[1]
+            op_idx = _OP_LABELS.index(op_lbl)
+            st.selectbox("op", _OP_LABELS, index=op_idx,
+                         key=f"fo_{i}", label_visibility="collapsed")
+        with fc3:
+            st.number_input(
+                "val", value=float(flt.get("value", 0.0)),
+                min_value=-100.0, max_value=100.0, step=0.5, format="%.1f",
+                key=f"fv_{i}", label_visibility="collapsed",
+            )
+        with fc4:
+            if st.button("✕", key=f"fdel_{i}", use_container_width=True):
+                delete_idx = i
+
+    # Handle delete (persist current widget values before removing)
+    if delete_idx is not None:
+        for j in range(len(st.session_state["custom_filters"])):
+            if f"fm_{j}" in st.session_state:
+                op_raw = st.session_state.get(f"fo_{j}", _OP_LABELS[0])
+                st.session_state["custom_filters"][j].update({
+                    "label": st.session_state[f"fm_{j}"],
+                    "op":    ">" if op_raw.startswith(">") else "<",
+                    "value": float(st.session_state.get(f"fv_{j}", 0.0)),
+                })
+        st.session_state["custom_filters"].pop(delete_idx)
+        st.rerun()
+
+    # Add / Clear buttons
+    ba, bc = st.columns([1.5, 1.5])
+    with ba:
+        if st.button("＋ Add Filter", use_container_width=True, key="add_filter_btn"):
+            st.session_state["custom_filters"].append(
+                {"label": "1W Price%", "op": ">", "value": 0.0}
+            )
+            st.rerun()
+    with bc:
+        if st.button("✕ Clear All Filters", use_container_width=True, key="clear_filters_btn"):
+            st.session_state["custom_filters"] = []
             st.rerun()
 
+    # ── Apply sort + filters ──────────────────────────────────────────────────
     display_df = sector_df.copy()
-    for f in filters:
-        if f in _FILTER_MAP:
-            display_df = _FILTER_MAP[f](display_df)
+    for i, flt in enumerate(st.session_state["custom_filters"]):
+        label = st.session_state.get(f"fm_{i}", flt.get("label", _METRIC_LABELS[0]))
+        op_raw = st.session_state.get(f"fo_{i}", _OP_LABELS[0])
+        op     = ">" if op_raw.startswith(">") else "<"
+        val    = float(st.session_state.get(f"fv_{i}", flt.get("value", 0.0)))
+        col    = _SORT_COL_MAP.get(label)
+        if col and col in display_df.columns:
+            mask = display_df[col] > val if op == ">" else display_df[col] < val
+            display_df = display_df[mask]
 
-    sort_col = _SORT_COL_MAP[sort_by]
+    sort_col  = _SORT_COL_MAP[sort_by]
     ascending = sort_dir == "Lowest first"
-    display_df = display_df.sort_values(sort_col, ascending=ascending, na_position="last").reset_index(drop=True)
+    display_df = display_df.sort_values(
+        sort_col, ascending=ascending, na_position="last"
+    ).reset_index(drop=True)
+
+    # Active filter summary badge
+    if st.session_state["custom_filters"]:
+        active = []
+        for i, flt in enumerate(st.session_state["custom_filters"]):
+            lbl = st.session_state.get(f"fm_{i}", flt.get("label", "?"))
+            op_raw = st.session_state.get(f"fo_{i}", _OP_LABELS[0])
+            op_sym = ">" if op_raw.startswith(">") else "<"
+            val = float(st.session_state.get(f"fv_{i}", flt.get("value", 0.0)))
+            active.append(f"**{lbl}** {op_sym} {val:.1f}%")
+        st.caption(
+            f"Active filters ({len(active)}): " + " &nbsp;AND&nbsp; ".join(active)
+            + f" → **{len(display_df)} sector(s)** match"
+        )
 
     if display_df.empty:
-        st.info("No sectors match the selected filters. Use **Clear Filters** to reset.")
+        st.info("No sectors match the current filters. Use **✕ Clear All Filters** to reset.")
     else:
         _master_table(display_df, subsector_df, selected_date, min_turnover)
 
