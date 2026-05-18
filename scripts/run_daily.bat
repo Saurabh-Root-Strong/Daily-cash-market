@@ -1,12 +1,15 @@
 @echo off
 cd /d "%~dp0.."
 call venv\Scripts\activate.bat
-python -m src.cli daily >> logs\scheduler.log 2>&1
 
-REM Auto-push code changes to GitHub
-git add -A
-git diff --cached --quiet
+REM ── Check if today is an NSE trading day (Mon-Fri, not a holiday) ──────────
+python scripts\market_open_check.py >> logs\scheduler.log 2>&1
 if errorlevel 1 (
-    git commit -m "auto: daily fetch %date%" >> logs\scheduler.log 2>&1
-    git push origin main >> logs\scheduler.log 2>&1
+    echo [%date% %time%] Skipped — market closed today >> logs\scheduler.log
+    exit /b 0
 )
+
+REM ── Fetch today's NSE data ────────────────────────────────────────────────
+echo [%date% %time%] Starting daily fetch... >> logs\scheduler.log
+python -m src.cli daily >> logs\scheduler.log 2>&1
+echo [%date% %time%] Fetch complete. >> logs\scheduler.log
