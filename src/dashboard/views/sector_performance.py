@@ -87,6 +87,29 @@ def _is_sub_open(key):
     return key in st.session_state.get("exp_subsectors", set())
 
 
+# ── Column header tooltips ────────────────────────────────────────────────────
+_COL_TOOLTIPS = {
+    "1W Price%": "Cumulative price return over the last 7 days.\n(end close − start close) ÷ start close × 100, weighted by today's turnover.",
+    "2W Price%": "Cumulative price return over the last 14 days.",
+    "1M Price%": "Cumulative price return over the last 30 days.",
+    "3M Price%": "Cumulative price return over the last 90 days (one quarter).",
+    "1W Deliv%": "Turnover-weighted avg delivery % over last 7 days.\nHigher = more shares held overnight = investor conviction buying.",
+    "2W Deliv%": "Turnover-weighted avg delivery % over last 14 days.",
+    "1M Deliv%": "Turnover-weighted avg delivery % over last 30 days.",
+    "3M Deliv%": "Turnover-weighted avg delivery % over last 90 days — long-term conviction baseline.",
+}
+
+def _header_cell(col, label, tooltip=None, bold=True):
+    if tooltip:
+        style = "cursor:help;font-weight:600;border-bottom:1px dashed rgba(255,255,255,0.4);font-size:13px"
+        col.markdown(
+            f'<span title="{tooltip}" style="{style}">{label}</span>',
+            unsafe_allow_html=True,
+        )
+    else:
+        col.markdown(f"**{label}**" if (bold and label) else label)
+
+
 # ── Write a styled metric cell ────────────────────────────────────────────────
 def _price_cell(col, val):
     col.markdown(
@@ -105,10 +128,11 @@ def _deliv_cell(col, val):
 def _master_table(sector_df, subsector_df, selected_date, min_turnover):
     # ── Header row ─────────────────────────────────────────────────────────
     h = st.columns(_SEC_COLS)
-    for col, label in zip(h, ["", "**Sector**",
-                               "**1W Price%**","**2W Price%**","**1M Price%**","**3M Price%**",
-                               "**1W Deliv%**","**2W Deliv%**","**1M Deliv%**","**3M Deliv%**"]):
-        col.markdown(label)
+    _header_cell(h[0], "")
+    _header_cell(h[1], "Sector")
+    for col, key in zip(h[2:], ["1W Price%","2W Price%","1M Price%","3M Price%",
+                                  "1W Deliv%","2W Deliv%","1M Deliv%","3M Deliv%"]):
+        _header_cell(col, key, tooltip=_COL_TOOLTIPS.get(key))
     st.markdown("<hr style='margin:3px 0 5px 0;border-color:rgba(255,255,255,0.2)'>",
                 unsafe_allow_html=True)
 
@@ -360,7 +384,18 @@ def render(selected_date: date, min_turnover: float) -> None:
         "3M Deliv%":  "3M_deliv_pct",
     }
 
-    ctrl1, ctrl2, ctrl3 = st.columns([2, 2, 2])
+    _FILTER_MAP = {
+        "Price Up (1W)":                       lambda df: df[df["1W_price_chg_pct"] > 0],
+        "Price Down (1W)":                     lambda df: df[df["1W_price_chg_pct"] < 0],
+        "Price Up (1M)":                       lambda df: df[df["1M_price_chg_pct"] > 0],
+        "Price Down (1M)":                     lambda df: df[df["1M_price_chg_pct"] < 0],
+        "High Delivery 1W (> 45%)":            lambda df: df[df["1W_deliv_pct"] > 45],
+        "Low Delivery 1W (< 30%)":             lambda df: df[df["1W_deliv_pct"] < 30],
+        "Accumulating (1W Deliv > 3M Deliv)":  lambda df: df[df["1W_deliv_pct"] > df["3M_deliv_pct"]],
+        "Distributing (1W Deliv < 3M Deliv)":  lambda df: df[df["1W_deliv_pct"] < df["3M_deliv_pct"]],
+    }
+
+    ctrl1, ctrl2, ctrl3, ctrl4 = st.columns([2, 2, 3, 1.2])
     with ctrl1:
         sort_by = st.selectbox(
             "Sort by",
@@ -376,33 +411,37 @@ def render(selected_date: date, min_turnover: float) -> None:
             key="master_sort_dir",
         )
     with ctrl3:
-        filter_by = st.selectbox(
-            "Filter",
-            options=[
-                "All sectors",
-                "Price Up (1W)",
-                "Price Down (1W)",
-                "High Delivery 1W (> 45%)",
-                "Low Delivery 1W (< 30%)",
-            ],
+        filters = st.multiselect(
+            "Filter (combine multiple — AND logic)",
+            options=list(_FILTER_MAP.keys()),
             key="master_filter",
+            placeholder="Select one or more filters…",
         )
+    with ctrl4:
+        st.write("")
+        st.write("")
+        col_ca, col_cf = st.columns(2)
+        if col_ca.button("Collapse All", use_container_width=True):
+            st.session_state["exp_sectors"] = set()
+            st.session_state["exp_subsectors"] = set()
+            st.rerun()
+        if col_cf.button("Clear Filters", use_container_width=True):
+            st.session_state["master_filter"] = []
+            st.rerun()
 
     display_df = sector_df.copy()
-    if filter_by == "Price Up (1W)":
-        display_df = display_df[display_df["1W_price_chg_pct"] > 0]
-    elif filter_by == "Price Down (1W)":
-        display_df = display_df[display_df["1W_price_chg_pct"] < 0]
-    elif filter_by == "High Delivery 1W (> 45%)":
-        display_df = display_df[display_df["1W_deliv_pct"] > 45]
-    elif filter_by == "Low Delivery 1W (< 30%)":
-        display_df = display_df[display_df["1W_deliv_pct"] < 30]
+    for f in filters:
+        if f in _FILTER_MAP:
+            display_df = _FILTER_MAP[f](display_df)
 
     sort_col = _SORT_COL_MAP[sort_by]
     ascending = sort_dir == "Lowest first"
     display_df = display_df.sort_values(sort_col, ascending=ascending, na_position="last").reset_index(drop=True)
 
-    _master_table(display_df, subsector_df, selected_date, min_turnover)
+    if display_df.empty:
+        st.info("No sectors match the selected filters. Use **Clear Filters** to reset.")
+    else:
+        _master_table(display_df, subsector_df, selected_date, min_turnover)
 
     st.markdown("---")
 
