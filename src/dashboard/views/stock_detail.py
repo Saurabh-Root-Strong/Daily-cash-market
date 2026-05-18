@@ -3,7 +3,7 @@ import streamlit as st
 
 from src.analytics.delivery_signals import get_stock_metrics, get_stock_history
 from src.dashboard.components.charts import stock_price_chart
-from src.dashboard.components.tables import STOCK_TABLE_COLUMNS
+from src.dashboard.components.tables import STOCK_TABLE_COLUMNS, to_display_df
 
 
 def render(selected_date: date, min_turnover: float) -> None:
@@ -48,5 +48,6 @@ def render(selected_date: date, min_turnover: float) -> None:
         st.plotly_chart(fig, use_container_width=True)
 
     with st.expander("Raw data"):
+        row = to_display_df(row, STOCK_TABLE_COLUMNS)
         show_cols = {k: v for k, v in STOCK_TABLE_COLUMNS.items() if k in row.columns}
-        st.dataframe(row, column_config=show_cols, use_container_width=True)
+        st.dataframe(row, column_config=show_cols, use_container_width=True, hide_index=True)

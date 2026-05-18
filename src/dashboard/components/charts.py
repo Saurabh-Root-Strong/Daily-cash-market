@@ -54,33 +54,76 @@ def sector_trend_chart(history_df: pd.DataFrame, sector_name: str) -> go.Figure:
     if history_df.empty:
         return go.Figure()
 
+    df = history_df.copy()
+    bar_colors = df["avg_price_change_pct"].apply(
+        lambda v: "#2ca02c" if (v is not None and v > 0)
+        else ("#d62728" if (v is not None and v < 0) else "#888888")
+    ).tolist()
+
     fig = go.Figure()
 
     fig.add_trace(go.Bar(
-        x=history_df["trade_date"],
-        y=history_df["avg_deliv_per"],
-        name="Avg Delivery %",
-        marker_color="steelblue",
+        x=df["trade_date"],
+        y=df["avg_deliv_per"],
+        name="Wtd Delivery %",
+        marker=dict(color=bar_colors, opacity=0.85),
         yaxis="y1",
+        hovertemplate=(
+            "<b>%{x|%d %b %Y}</b><br>"
+            "Delivery %: %{y:.1f}%<br>"
+            "<extra></extra>"
+        ),
     ))
 
     fig.add_trace(go.Scatter(
-        x=history_df["trade_date"],
-        y=history_df["avg_price_change_pct"],
-        name="Avg Price Chg %",
+        x=df["trade_date"],
+        y=df["avg_price_change_pct"],
+        name="Wtd Price Chg %",
         mode="lines+markers",
-        marker=dict(size=5),
-        line=dict(color="orange"),
+        marker=dict(
+            size=6,
+            color=bar_colors,
+            line=dict(width=1, color="white"),
+        ),
+        line=dict(color="rgba(255,165,0,0.7)", width=1.5, dash="dot"),
         yaxis="y2",
+        hovertemplate=(
+            "<b>%{x|%d %b %Y}</b><br>"
+            "Price Chg: %{y:+.2f}%<br>"
+            "<extra></extra>"
+        ),
     ))
 
     fig.update_layout(
-        title=f"{sector_name} — 60-Day Trend",
-        xaxis=dict(title="Date"),
-        yaxis=dict(title="Avg Delivery %", side="left"),
-        yaxis2=dict(title="Avg Price Chg %", side="right", overlaying="y"),
-        legend=dict(orientation="h"),
-        height=350,
+        xaxis=dict(
+            tickformat="%d %b",
+            tickangle=-30,
+            showgrid=False,
+            type="date",
+        ),
+        yaxis=dict(
+            title="Wtd Delivery %",
+            side="left",
+            showgrid=True,
+            gridcolor="rgba(255,255,255,0.08)",
+            rangemode="tozero",
+        ),
+        yaxis2=dict(
+            title="Wtd Price Chg %",
+            side="right",
+            overlaying="y",
+            zeroline=True,
+            zerolinecolor="rgba(255,255,255,0.4)",
+            zerolinewidth=1.5,
+            showgrid=False,
+        ),
+        legend=dict(orientation="h", y=1.08, x=0, font=dict(size=12)),
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
+        margin=dict(t=10, b=60, l=60, r=60),
+        height=360,
+        hovermode="x unified",
+        bargap=0.25,
     )
     return fig
 

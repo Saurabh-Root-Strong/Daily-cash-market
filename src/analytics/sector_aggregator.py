@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 from typing import Optional, Dict
 import pandas as pd
 
@@ -116,20 +116,82 @@ def get_sector_drilldown(trade_date: date, sector_name: str, top_n: int = 10) ->
 
 
 def get_sector_history(sector_name: str, days: int = 60) -> pd.DataFrame:
+    min_turnover_lacs = get_min_turnover_filter()
     sql = """
         SELECT
             b.trade_date,
-            COALESCE(s.sector, 'Others') AS sector,
-            AVG(CASE WHEN b.prev_close > 0 THEN (b.close_price - b.prev_close)/b.prev_close*100 END) AS avg_price_change_pct,
-            AVG(b.deliv_per) AS avg_deliv_per,
-            SUM(b.turnover_lacs) AS total_turnover_lacs,
-            COUNT(*) AS stock_count
+            SUM(b.deliv_per * b.turnover_lacs) / NULLIF(SUM(b.turnover_lacs), 0)
+                AS avg_deliv_per,
+            SUM(
+                CASE WHEN b.prev_close > 0
+                THEN (b.close_price - b.prev_close) / b.prev_close * 100
+                END * b.turnover_lacs
+            ) / NULLIF(SUM(CASE WHEN b.prev_close > 0 THEN b.turnover_lacs END), 0)
+                AS avg_price_change_pct,
+            SUM(b.turnover_lacs) / 100 AS total_turnover_cr,
+            COUNT(DISTINCT b.symbol) AS stock_count
         FROM daily_data b
-        LEFT JOIN sector_master s ON b.symbol = s.symbol
-        WHERE COALESCE(s.sector, 'Others') = ?
-        GROUP BY b.trade_date, COALESCE(s.sector, 'Others')
+        INNER JOIN sector_master s ON b.symbol = s.symbol
+        WHERE s.sector = ?
+          AND b.series IN ('EQ', 'SM', 'ST')
+          AND b.turnover_lacs >= ?
+        GROUP BY b.trade_date
         ORDER BY b.trade_date DESC
         LIMIT ?
     """
-    df = query_dataframe(sql, [sector_name, days])
+    df = query_dataframe(sql, [sector_name, min_turnover_lacs, days])
     return df.sort_values("trade_date").reset_index(drop=True)
+
+
+def get_sector_master_performance(
+    as_of_date: date,
+    min_turnover_lacs: Optional[float] = None,
+) -> pd.DataFrame:
+    if min_turnover_lacs is None:
+        min_turnover_lacs = get_min_turnover_filter()
+
+    _sql = """
+        SELECT
+            s.sector,
+            SUM(b.deliv_per * b.turnover_lacs) / NULLIF(SUM(b.turnover_lacs), 0)
+                AS deliv_pct,
+            SUM(
+                CASE WHEN b.prev_close > 0
+                THEN (b.close_price - b.prev_close) / b.prev_close * 100 * b.turnover_lacs
+                END
+            ) / NULLIF(SUM(CASE WHEN b.prev_close > 0 THEN b.turnover_lacs END), 0)
+                AS price_chg_pct,
+            SUM(b.turnover_lacs) / 100 AS turnover_cr,
+            COUNT(DISTINCT b.trade_date) AS trading_days
+        FROM daily_data b
+        INNER JOIN sector_master s ON b.symbol = s.symbol
+        WHERE s.sector IS NOT NULL
+          AND b.series IN ('EQ', 'SM', 'ST')
+          AND b.turnover_lacs >= ?
+          AND b.trade_date > ?
+          AND b.trade_date <= ?
+        GROUP BY s.sector
+    """
+
+    def _fetch(label: str, calendar_days: int) -> pd.DataFrame:
+        start = as_of_date - timedelta(days=calendar_days)
+        df = query_dataframe(_sql, [min_turnover_lacs, start, as_of_date])
+        df.columns = [
+            "sector",
+            f"{label}_deliv_pct",
+            f"{label}_price_chg_pct",
+            f"{label}_turnover_cr",
+            f"{label}_trading_days",
+        ]
+        return df
+
+    w  = _fetch("1W", 7)
+    tw = _fetch("2W", 14)
+    m  = _fetch("1M", 30)
+    q  = _fetch("3M", 90)
+
+    result = (w.merge(tw, on="sector", how="outer")
+               .merge(m,  on="sector", how="outer")
+               .merge(q,  on="sector", how="outer"))
+    result = result.sort_values("3M_deliv_pct", ascending=False).reset_index(drop=True)
+    return result

@@ -45,27 +45,32 @@ def main():
             format_func=lambda d: d.strftime("%d %b %Y (%a)"),
         )
 
-        min_turnover = st.slider(
-            "Min Turnover Filter (Lakhs)",
-            min_value=0,
-            max_value=1000,
-            value=int(cfg["analytics"]["min_turnover_lacs"]),
-            step=25,
+        default_cr = cfg["analytics"]["min_turnover_lacs"] / 100
+        min_turnover_cr = st.slider(
+            "Min Traded Value Filter (Cr)",
+            min_value=0.0,
+            max_value=10.0,
+            value=float(default_cr),
+            step=0.25,
+            help="Hide stocks with traded value below this threshold. 1 Cr = ₹1 Crore",
         )
+        min_turnover = min_turnover_cr * 100  # convert back to lakhs for analytics
 
         page = st.radio(
             "Page",
-            options=["Sector Overview", "Stock Detail", "Signals"],
+            options=["Sector Overview", "Sector Performance", "Stock Detail", "Signals"],
             index=0,
         )
 
         st.divider()
         st.caption(f"Data: {len(available_dates)} trading days")
 
-    from src.dashboard.pages import sector_overview, stock_detail, signals
+    from src.dashboard.views import sector_overview, sector_performance, stock_detail, signals
 
     if page == "Sector Overview":
         sector_overview.render(selected_date, float(min_turnover))
+    elif page == "Sector Performance":
+        sector_performance.render(selected_date, float(min_turnover))
     elif page == "Stock Detail":
         stock_detail.render(selected_date, float(min_turnover))
     elif page == "Signals":
