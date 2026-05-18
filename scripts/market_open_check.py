@@ -1,59 +1,65 @@
 """
-Exit 0  → market is open today, proceed with fetch.
-Exit 1  → market is closed today (weekend or NSE holiday), skip fetch.
+Exit 0  → market open today, proceed with fetch.
+Exit 1  → market closed (weekend or NSE holiday), skip.
 
-Update NSE_HOLIDAYS each January with the new year's list from:
-  https://www.nseindia.com/resources/exchange-communication-holidays
+Holiday list is read from config/nse_holidays.yaml — update each January.
+Source: https://www.nseindia.com/resources/exchange-communication-holidays
 """
-import sys
+from __future__ import annotations
+
 import datetime
+import sys
+from pathlib import Path
 
-NSE_HOLIDAYS: set[datetime.date] = {
-    # ── 2025 ──────────────────────────────────────────────────────────────────
-    datetime.date(2025, 2, 26),   # Mahashivratri
-    datetime.date(2025, 3, 14),   # Holi
-    datetime.date(2025, 3, 31),   # Id-Ul-Fitr (Ramzan Eid)
-    datetime.date(2025, 4, 14),   # Dr. Ambedkar Jayanti / Ram Navami
-    datetime.date(2025, 4, 18),   # Good Friday
-    datetime.date(2025, 5, 1),    # Maharashtra Day
-    datetime.date(2025, 6, 7),    # Bakri Id (Eid ul-Adha)
-    datetime.date(2025, 7, 6),    # Muharram
-    datetime.date(2025, 8, 15),   # Independence Day
-    datetime.date(2025, 8, 27),   # Ganesh Chaturthi
-    datetime.date(2025, 10, 2),   # Mahatma Gandhi Jayanti / Dussehra
-    datetime.date(2025, 10, 21),  # Diwali — Laxmi Pujan
-    datetime.date(2025, 10, 22),  # Diwali — Balipratipada
-    datetime.date(2025, 11, 5),   # Prakash Gurpurb (Guru Nanak Jayanti)
-    datetime.date(2025, 12, 25),  # Christmas
+import yaml
 
-    # ── 2026 ──────────────────────────────────────────────────────────────────
-    datetime.date(2026, 1, 26),   # Republic Day
-    datetime.date(2026, 3, 3),    # Holi
-    datetime.date(2026, 3, 20),   # Gudi Padwa / Ugadi
-    datetime.date(2026, 4, 3),    # Good Friday
-    datetime.date(2026, 4, 14),   # Dr. Ambedkar Jayanti
-    datetime.date(2026, 4, 22),   # Ram Navami
-    datetime.date(2026, 5, 1),    # Maharashtra Day
-    datetime.date(2026, 5, 27),   # Bakri Id (Eid ul-Adha, approximate)
-    datetime.date(2026, 8, 15),   # Independence Day
-    datetime.date(2026, 9, 16),   # Ganesh Chaturthi
-    datetime.date(2026, 10, 2),   # Mahatma Gandhi Jayanti
-    datetime.date(2026, 10, 20),  # Dussehra (approximate)
-    datetime.date(2026, 11, 9),   # Diwali — Laxmi Pujan (approximate)
-    datetime.date(2026, 11, 10),  # Diwali — Balipratipada (approximate)
-    datetime.date(2026, 11, 24),  # Guru Nanak Jayanti (approximate)
-    datetime.date(2026, 12, 25),  # Christmas
-}
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+HOLIDAY_FILE = PROJECT_ROOT / "config" / "nse_holidays.yaml"
 
-today = datetime.date.today()
 
-if today.weekday() >= 5:
-    print(f"[market_check] Skipping — {today.strftime('%A %d %b %Y')} is a weekend")
-    sys.exit(1)
+def _load_holidays() -> frozenset[datetime.date]:
+    if not HOLIDAY_FILE.exists():
+        print(f"[market_check] WARNING: {HOLIDAY_FILE} not found — assuming no holidays")
+        return frozenset()
+    with HOLIDAY_FILE.open(encoding="utf-8") as fh:
+        data = yaml.safe_load(fh)
+    holidays: list[datetime.date] = []
+    for year_entries in (data.get("holidays") or {}).values():
+        for entry in year_entries:
+            try:
+                holidays.append(datetime.date.fromisoformat(entry["date"]))
+            except (KeyError, ValueError):
+                pass
+    return frozenset(holidays)
 
-if today in NSE_HOLIDAYS:
-    print(f"[market_check] Skipping — {today.strftime('%d %b %Y')} is an NSE public holiday")
-    sys.exit(1)
 
-print(f"[market_check] Market open — proceeding with fetch for {today.strftime('%d %b %Y (%A)')}")
-sys.exit(0)
+def main() -> int:
+    today = datetime.date.today()
+
+    if today.weekday() >= 5:
+        day_name = today.strftime("%A")
+        print(f"[market_check] Skipping — {today.strftime('%d %b %Y')} is a {day_name}")
+        return 1
+
+    holidays = _load_holidays()
+    if today in holidays:
+        # Find the holiday name for the log
+        with HOLIDAY_FILE.open(encoding="utf-8") as fh:
+            raw = yaml.safe_load(fh)
+        name = today.isoformat()
+        for year_entries in (raw.get("holidays") or {}).values():
+            for entry in year_entries:
+                if entry.get("date") == today.isoformat():
+                    name = entry.get("name", today.isoformat())
+        print(f"[market_check] Skipping — {today.strftime('%d %b %Y')} is an NSE holiday: {name}")
+        return 1
+
+    print(
+        f"[market_check] Market open — proceeding with fetch for "
+        f"{today.strftime('%d %b %Y (%A)')}"
+    )
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

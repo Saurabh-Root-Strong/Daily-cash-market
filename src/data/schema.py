@@ -1,8 +1,20 @@
-from src.data.connection import get_connection
+"""
+Database DDL — idempotent, safe to run repeatedly.
+
+Call initialize_schema() once at startup or after init-db.
+All table/index definitions live here; no DDL anywhere else.
+"""
+from __future__ import annotations
+
+from src.data.repository import get_repository
+
+__all__ = ["initialize_schema"]
 
 
 def initialize_schema() -> None:
-    with get_connection() as conn:
+    """Create all tables, sequences, and indexes if they do not exist."""
+    repo = get_repository()
+    with repo._cm.connect() as conn:
         conn.execute("""
             CREATE TABLE IF NOT EXISTS daily_data (
                 trade_date        DATE       NOT NULL,
@@ -26,18 +38,16 @@ def initialize_schema() -> None:
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS sector_master (
-                symbol             VARCHAR PRIMARY KEY,
-                company_name       VARCHAR,
-                sector             VARCHAR,
-                industry           VARCHAR,
+                symbol              VARCHAR PRIMARY KEY,
+                company_name        VARCHAR,
+                sector              VARCHAR,
+                industry            VARCHAR,
                 market_cap_category VARCHAR,
-                last_updated       TIMESTAMP
+                last_updated        TIMESTAMP
             )
         """)
 
-        conn.execute("""
-            CREATE SEQUENCE IF NOT EXISTS run_log_seq START 1
-        """)
+        conn.execute("CREATE SEQUENCE IF NOT EXISTS run_log_seq START 1")
 
         conn.execute("""
             CREATE TABLE IF NOT EXISTS run_log (
@@ -52,7 +62,7 @@ def initialize_schema() -> None:
             )
         """)
 
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_dd_date ON daily_data(trade_date)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_dd_symbol ON daily_data(symbol)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_dd_date        ON daily_data(trade_date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_dd_symbol      ON daily_data(symbol)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_dd_date_symbol ON daily_data(trade_date, symbol)")
-        conn.execute("CREATE INDEX IF NOT EXISTS idx_sm_sector ON sector_master(sector)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_sm_sector      ON sector_master(sector)")
