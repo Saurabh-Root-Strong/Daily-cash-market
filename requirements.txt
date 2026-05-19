@@ -6,3 +6,6 @@ plotly>=5.18
 pyyaml>=6.0
 python-dateutil>=2.8.2
 pytest>=7.4
+pandas-ta>=0.4.71b0  # install with --no-deps; numba shim in venv/Lib/site-packages/numba/
+tqdm>=4.60           # required by pandas-ta
+scipy>=1.10          # required by pandas-ta
