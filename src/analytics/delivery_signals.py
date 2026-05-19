@@ -3,9 +3,7 @@ from typing import Optional
 import pandas as pd
 
 from src.data.repository import query_dataframe
-from src.analytics.base import (
-    get_min_turnover_filter, get_delivery_window, get_volume_window, get_thresholds
-)
+from src.analytics.base import get_min_turnover_filter, get_delivery_window, get_volume_window
 from src.logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -78,28 +76,6 @@ def get_stock_metrics(trade_date: date, min_turnover_lacs: Optional[float] = Non
     """
 
     return query_dataframe(sql, [min_turnover_lacs, trade_date])
-
-
-def get_top_accumulation(trade_date: date, limit: int = 20) -> pd.DataFrame:
-    df = get_stock_metrics(trade_date)
-    if df.empty:
-        return df
-    _, acc_threshold = 0, 0
-    acc_threshold, _ = get_thresholds()
-    filtered = df[df["deliv_ratio"] >= acc_threshold].copy()
-    return filtered.nlargest(limit, "deliv_ratio")
-
-
-def get_top_distribution(trade_date: date, limit: int = 20) -> pd.DataFrame:
-    df = get_stock_metrics(trade_date)
-    if df.empty:
-        return df
-    _, dist_threshold = get_thresholds()
-    filtered = df[
-        (df["price_change_pct"] > 1.0) &
-        (df["deliv_ratio"] < dist_threshold)
-    ].copy()
-    return filtered.nlargest(limit, "price_change_pct")
 
 
 def get_stock_history(symbol: str, days: int = 60) -> pd.DataFrame:

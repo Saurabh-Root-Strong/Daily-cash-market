@@ -69,21 +69,6 @@ def cached_stock_history(symbol: str, days: int = 60) -> pd.DataFrame:
     return get_stock_history(symbol, days=days)
 
 
-@st.cache_data(ttl=_TTL)
-def cached_top_accumulation(
-    trade_date: date, min_turnover_lacs: float, limit: int = 20
-) -> pd.DataFrame:
-    from src.analytics.delivery_signals import get_top_accumulation
-    return get_top_accumulation(trade_date, limit=limit)
-
-
-@st.cache_data(ttl=_TTL)
-def cached_top_distribution(
-    trade_date: date, min_turnover_lacs: float, limit: int = 20
-) -> pd.DataFrame:
-    from src.analytics.delivery_signals import get_top_distribution
-    return get_top_distribution(trade_date, limit=limit)
-
 
 @st.cache_data(ttl=_TTL)
 def cached_sector_rotation(trade_date: date, min_turnover_lacs: float) -> pd.DataFrame:
