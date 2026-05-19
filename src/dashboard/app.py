@@ -77,7 +77,7 @@ def main() -> None:
 
         page = st.radio(
             "Page",
-            options=["Sector Overview", "Sector Performance", "Stock Detail", "Signals", "🔄 Sector Rotation"],
+            options=["Sector Overview", "Sector Performance", "Stock Detail", "🔄 Sector Rotation"],
             index=0,
         )
 
@@ -94,7 +94,7 @@ def main() -> None:
             st.cache_data.clear()
             st.rerun()
 
-    from src.dashboard.views import sector_overview, sector_performance, stock_detail, signals
+    from src.dashboard.views import sector_overview, sector_performance, stock_detail
 
     if page == "Sector Overview":
         sector_overview.render(selected_date, float(min_turnover))
@@ -102,8 +102,6 @@ def main() -> None:
         sector_performance.render(selected_date, float(min_turnover))
     elif page == "Stock Detail":
         stock_detail.render(selected_date, float(min_turnover))
-    elif page == "Signals":
-        signals.render(selected_date, float(min_turnover))
     elif page == "🔄 Sector Rotation":
         from src.dashboard.views import sector_rotation
         sector_rotation.render(selected_date, float(min_turnover))
