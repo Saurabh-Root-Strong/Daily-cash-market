@@ -308,10 +308,32 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> No
             stocks = stocks.copy()
             stocks["conviction"] = stocks.apply(_stock_signal, axis=1)
 
-            # Invest: sort by delivery value desc (most ₹ delivered = highest conviction)
-            # Avoid:  sort by price_chg_pct desc (still rising = most dangerous to hold)
-            sort_col = "deliv_value_cr" if invest_signal else "price_chg_pct"
-            stocks = stocks.sort_values(sort_col, ascending=False)
+            # Sort by conviction strength first, then by delivery % within each group.
+            # Sorting by ₹ delivery value alone was wrong — it put high-cap Weak stocks
+            # at the top and buried Strong/Buying stocks that had smaller market caps.
+            if invest_signal:
+                _rank = {"🔥 Strong": 0, "✅ Buying": 1, "👀 Watch": 2, "⚪ Weak": 3}
+            else:
+                _rank = {"❌ Exit Now": 0, "⚠️ Reducing": 1, "📉 Fading": 2, "⚪ Neutral": 3}
+
+            stocks["_rank"] = stocks["conviction"].map(_rank).fillna(9)
+            stocks = stocks.sort_values(
+                ["_rank", "wtd_deliv_per", "deliv_value_cr"],
+                ascending=[True, False, False],
+            ).drop(columns="_rank")
+
+            # Flag if a single stock dominates sector turnover (>30%) — misleading context
+            total_turnover = stocks["turnover_cr"].sum()
+            dominant = stocks[stocks["turnover_cr"] / total_turnover > 0.30]
+            if not dominant.empty:
+                dom = dominant.iloc[0]
+                dom_pct = dom["turnover_cr"] / total_turnover * 100
+                dom_conv = stocks.loc[stocks["symbol"] == dom["symbol"], "conviction"].values[0]
+                st.caption(
+                    f"⚠️ **{dom['symbol']}** dominates {dom_pct:.0f}% of sector turnover "
+                    f"with **{dom_conv}** conviction ({dom['wtd_deliv_per']:.1f}% delivery) "
+                    f"— sector signal is heavily influenced by this single stock."
+                )
 
             st.dataframe(
                 stocks[["symbol", "company_name", "industry", "ltp", "conviction",
@@ -325,13 +347,16 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> No
                     "ltp":           st.column_config.NumberColumn(
                         "LTP (₹)", format="₹%.2f",
                         help="Last traded price (most recent close in the period)"),
-                    "conviction":    st.column_config.TextColumn("Conviction"),
+                    "conviction":    st.column_config.TextColumn("Conviction",
+                        help="Strong/Buying = top-third delivery % (institutional accumulation)\n"
+                             "Watch = mid-third delivery %\n"
+                             "Weak = bottom-third delivery % (relative to sector peers)"),
                     "wtd_deliv_per": st.column_config.NumberColumn(
                         "Wtd Deliv %", format="%.1f%%",
                         help="Turnover-weighted delivery % — last 7 days"),
                     "deliv_value_cr":st.column_config.NumberColumn(
                         "Deliv Value (₹ Cr)", format="₹%.1f",
-                        help="₹ value of shares delivered — true institutional conviction"),
+                        help="₹ value of shares delivered — absolute institutional conviction"),
                     "turnover_cr":   st.column_config.NumberColumn("Turnover (₹ Cr)", format="₹%.1f"),
                     "price_chg_pct": st.column_config.NumberColumn("Price Chg %", format="%+.2f%%"),
                 },
