@@ -420,7 +420,7 @@ The first stock has *far* more real institutional commitment — which is why we
             use_container_width=True,
             column_config={
                 "Score":           st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%.0f"),
-                "Coverage":        st.column_config.TextColumn("Coverage", help="Swing=3–15d · Positional=1–2M · Mid Term=3–4M"),
+                "Coverage":        st.column_config.TextColumn("Coverage", help="Swing=3–15 days · Positional=4–8 weeks · Mid Term=3–4 months"),
                 "Deliv Momentum %":st.column_config.NumberColumn(format="%.1f%%"),
                 "Price 1W %":      st.column_config.NumberColumn(format="%+.2f%%"),
                 "Wtd Deliv 1W %":  st.column_config.NumberColumn(format="%.1f%%"),
@@ -518,10 +518,10 @@ The first stock has *far* more real institutional commitment — which is why we
                     "Score", max_value=100, format="%.0f"),
                 "coverage":       st.column_config.TextColumn(
                     "Coverage",
-                    help="Swing = 3–15 days (Elder impulse + Weinstein Stage 1→2)\n"
-                         "Positional = 1–2 months (Weinstein Stage 2 + Pring weekly KST)\n"
-                         "Mid Term = 3–4 months (Murphy sector leadership + steep 100-day slope)\n"
-                         "BTST = not shown here — use Signals page for single-day delivery spikes"),
+                    help="Swing (3–15 days): Elder impulse + Weinstein Stage 1→2 breakout\n"
+                         "Positional (4–8 weeks): Weinstein Stage 2 + Pring weekly KST\n"
+                         "Mid Term (3–4 months): Murphy sector leadership + steep 100-day slope\n"
+                         "BTST (1–2 days): not shown here — use Signals page for single-day delivery spikes"),
                 "horizon":        st.column_config.TextColumn("Horizon"),
                 "deliv_momentum": st.column_config.NumberColumn(
                     "Deliv Momentum %", format="%+.1f%%",

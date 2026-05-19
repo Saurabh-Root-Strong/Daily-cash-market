@@ -232,7 +232,7 @@ def get_sector_rotation(
             # Condition: delivery acceleration this week + momentum shift > 10%
             swing_buy = (short_term and deliv_momentum > 10)
             if swing_buy:
-                cov.append("Swing")
+                cov.append("Swing (3–15 days)")
 
             # Positional (1–2 months)
             # Weinstein Stage 2: price above rising 30-week SMA, sustained volume.
@@ -247,7 +247,7 @@ def get_sector_rotation(
                 and deliv_momentum > 5
             )
             if positional_buy:
-                cov.append("Positional")
+                cov.append("Positional (4–8 weeks)")
 
             # Mid Term (3–4 months)
             # Murphy: confirmed sector leadership phase (4–12 weeks per phase).
@@ -263,7 +263,7 @@ def get_sector_rotation(
                 and deliv_momentum > 10
             )
             if mid_term_buy:
-                cov.append("Mid Term")
+                cov.append("Mid Term (3–4 months)")
 
         else:
             # Avoid/exit signals — coverage = how long the weakness is likely to persist
@@ -272,18 +272,18 @@ def get_sector_rotation(
 
             # Swing exit: fast delivery deterioration this week
             if weak_accel and deliv_momentum < -10:
-                cov.append("Swing")
+                cov.append("Swing (3–15 days)")
 
             # Positional exit: 1-month delivery below 3-month + negative 100-day slope
             if (not pd.isna(d1m) and not pd.isna(d3m)
                     and d1m < d3m and trend_slope < -0.03):
-                cov.append("Positional")
+                cov.append("Positional (4–8 weeks)")
 
             # Mid Term exit: steep downward slope + sustained multi-month weakness
             if (trend_slope < -0.12
                     and not pd.isna(d1m) and not pd.isna(d3m)
                     and d1m < d3m and deliv_momentum < -10):
-                cov.append("Mid Term")
+                cov.append("Mid Term (3–4 months)")
 
         coverage = " + ".join(cov) if cov else "—"
 
