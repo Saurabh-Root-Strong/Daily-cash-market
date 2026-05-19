@@ -26,6 +26,7 @@ def get_stock_metrics(trade_date: date, min_turnover_lacs: Optional[float] = Non
                 COALESCE(s.company_name, b.symbol) AS company_name,
                 COALESCE(s.sector, 'Others') AS sector,
                 COALESCE(s.industry, 'Others') AS industry,
+                COALESCE(s.category, '') AS category,
                 b.close_price,
                 b.prev_close,
                 CASE
@@ -58,6 +59,7 @@ def get_stock_metrics(trade_date: date, min_turnover_lacs: Optional[float] = Non
             b.company_name,
             b.sector,
             b.industry,
+            b.category,
             b.close_price,
             b.prev_close,
             b.price_change_pct,

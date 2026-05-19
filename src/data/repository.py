@@ -77,15 +77,24 @@ class MarketDataRepository:
     def upsert_sector_master(self, df: pd.DataFrame) -> None:
         if df.empty:
             return
+        # Ensure all expected columns are present (back-fill optional ones)
+        for col, default in [("category", ""), ("market_cap_category", "")]:
+            if col not in df.columns:
+                df = df.copy()
+                df[col] = default
         with self._cm.connect() as conn:
             conn.register("_sector_df", df)
             conn.execute("""
                 INSERT INTO sector_master
-                SELECT * FROM _sector_df
+                    (symbol, company_name, sector, industry, category, market_cap_category, last_updated)
+                SELECT
+                    symbol, company_name, sector, industry, category, market_cap_category, last_updated
+                FROM _sector_df
                 ON CONFLICT (symbol) DO UPDATE SET
                     company_name        = excluded.company_name,
                     sector              = excluded.sector,
                     industry            = excluded.industry,
+                    category            = excluded.category,
                     market_cap_category = excluded.market_cap_category,
                     last_updated        = excluded.last_updated
             """)

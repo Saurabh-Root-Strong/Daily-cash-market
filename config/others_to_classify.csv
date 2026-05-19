@@ -1,0 +1,374 @@
+symbol,company_name,sector,industry,avg_turnover_cr
+GROWW,Billionbrains Garage Ventures Ltd.,,,854.7
+NETWEB,Netweb Technologies India Ltd.,,,674.9
+TATSILV,,,,603.9
+TMCV,Tata Motors Ltd.,,,512.0
+POWERINDIA,Hitachi Energy India Ltd.,,,386.9
+SWIGGY,Swiggy Ltd.,,,351.8
+KISSHT,,,,340.0
+CUPID,,,,339.7
+MTARTECH,,,,337.5
+MEESHO,Meesho Ltd.,,,287.9
+HDFCSILVER,,,,284.9
+ATHERENERG,Ather Energy Ltd.,,,267.4
+GVT&D,GE Vernova T&D India Ltd.,,,263.4
+SOLARINDS,Solar Industries India Ltd.,,,247.6
+HSCL,Himadri Speciality Chemical Ltd.,,,244.0
+VMM,Vishal Mega Mart Ltd.,,,241.4
+SAMMAANCAP,Sammaan Capital Ltd.,,,206.3
+TARIL,Transformers And Rectifiers (India) Ltd.,,,202.5
+IFCI,IFCI Ltd.,,,195.1
+NAUKRI,Info Edge (India) Ltd.,,,187.6
+APOLLO,,,,182.5
+HEG,H.E.G. Ltd.,,,178.8
+IEX,Indian Energy Exchange Ltd.,,,177.5
+LENSKART,Lenskart Solutions Ltd.,,,169.8
+GALLANTT,Gallantt Ispat Ltd.,,,162.8
+BHARATCOAL,,,,154.5
+ICICIAMC,ICICI Prudential Asset Management Company Ltd.,,,148.7
+CMPDI,,,,142.8
+HDFCGOLD,,,,141.4
+SBISILVER,,,,139.5
+GRAPHITE,Graphite India Ltd.,,,136.8
+KRN,,,,131.5
+LGEINDIA,LG Electronics India Ltd.,,,131.1
+ENRIN,Siemens Energy India Ltd.,,,124.8
+SAGILITY,Sagility Ltd.,,,124.6
+QPOWER,,,,123.3
+NTPCGREEN,NTPC Green Energy Ltd.,,,122.7
+360ONE,360 ONE WAM Ltd.,,,122.1
+FIRSTCRY,Brainbees Solutions Ltd.,,,119.1
+COHANCE,Cohance Lifesciences Ltd.,,,116.9
+BLS,BLS International Services Ltd.,,,116.1
+IRMENERGY,,,,113.4
+JINDRILL,,,,111.2
+CARTRADE,Cartrade Tech Ltd.,,,110.6
+SBICARD,SBI Cards and Payment Services Ltd.,,,108.0
+ORIENTTECH,,,,103.3
+DEEDEV,,,,102.2
+OLECTRA,Olectra Greentech Ltd.,,,102.2
+BELRISE,Belrise Industries Ltd.,,,100.5
+PCBL,PCBL Chemical Ltd.,,,98.9
+M&MFIN,Mahindra & Mahindra Financial Services Ltd.,,,96.9
+LLOYDSME,Lloyds Metals And Energy Ltd.,,,93.6
+URBANCO,Urban Company Ltd.,,,93.5
+TATACAP,Tata Capital Ltd.,,,89.7
+PWL,Physicswallah Ltd.,,,87.7
+FRACTAL,,,,87.0
+SHAKTIPUMP,,,,86.0
+SHAILY,,,,85.7
+GVPIL,,,,85.6
+RPSGVENT,,,,83.8
+AGIIL,,,,83.7
+EMMVEE,Emmvee Photovoltaic Power Ltd.,,,82.3
+JAINREC,Jain Resource Recycling Ltd.,,,80.8
+AEROFLEX,,,,80.3
+RAIN,,,,76.5
+CEMPRO,Cemindia Projects Ltd.,,,75.6
+ITCHOTELS,ITC Hotels Ltd.,,,73.9
+EIEL,,,,72.6
+ONESOURCE,Onesource Specialty Pharma Ltd.,,,71.4
+E2E,,,,68.3
+SANDUMA,,,,66.4
+SAILIFE,Sai Life Sciences Ltd.,,,65.9
+AWL,AWL Agri Business Ltd.,,,65.7
+HDBFS,HDB Financial Services Ltd.,,,64.7
+SWSOLAR,,,,64.5
+WAAREERTL,,,,64.4
+GANECOS,,,,63.1
+THANGAMAYL,,,,61.1
+APOLLOPIPE,,,,60.7
+JAYNECOIND,,,,60.3
+WEBELSOLAR,,,,59.2
+MMTC,MMTC Ltd.,,,58.9
+DEEPAKFERT,Deepak Fertilisers & Petrochemicals Corp. Ltd.,,,57.6
+BAJAJHFL,Bajaj Housing Finance Ltd.,,,57.0
+AFFLE,Affle 3i Ltd.,,,56.5
+BALUFORGE,,,,56.3
+HEXT,Hexaware Technologies Ltd.,,,56.1
+CPPLUS,Aditya Infotech Ltd.,,,55.2
+TENNIND,Tenneco Clean Air India Ltd.,,,54.7
+RSYSTEMS,,,,53.6
+MOBIKWIK,,,,51.9
+SWANCORP,Swan Corp Ltd.,,,51.6
+VIKRAMSOLR,,,,51.0
+SANSERA,,,,51.0
+WABAG,,,,50.4
+SEDEMAC,,,,49.9
+ELECON,Elecon Engineering Co. Ltd.,,,49.2
+NAVA,Nava Ltd.,,,47.6
+TIMETECHNO,,,,47.5
+PINELABS,Pine Labs Ltd.,,,47.2
+STYLEBAAZA,,,,46.0
+BLACKBUCK,,,,45.6
+BBOX,,,,45.6
+CLEANMAX,,,,45.2
+DREDGECORP,,,,44.8
+SMLMAH,,,,44.6
+SKYGOLD,,,,44.6
+IXIGO,,,,44.2
+IKS,Inventurus Knowledge Solutions Ltd.,,,42.4
+AXISGOLD,,,,42.3
+AXISILVER,,,,42.1
+RAYMONDREL,,,,42.1
+SHREEJISPG,,,,41.7
+AMIRCHAND,,,,41.6
+RELIGARE,,,,41.3
+INOXGREEN,,,,40.9
+AFCONS,Afcons Infrastructure Ltd.,,,40.2
+DIACABS,,,,39.9
+GRWRHITECH,,,,39.7
+SHADOWFAX,,,,39.6
+PRECWIRE,,,,39.4
+MANINDS,,,,39.1
+ANURAS,Anupam Rasayan India Ltd.,,,38.7
+ARSSBL,,,,38.7
+MSUMI,Motherson Sumi Wiring India Ltd.,,,38.5
+MODEFENCE,,,,38.3
+TRANSRAILL,,,,38.1
+OMNI,,,,37.4
+POCL,,,,36.2
+RGL,,,,35.8
+SBC,,,,35.5
+LLOYDSENGG,,,,34.9
+AEQUS,,,,34.7
+AIIL,Authum Investment & Infrastructure Ltd.,,,34.4
+AVALON,,,,34.1
+IRB,IRB Infrastructure Developers Ltd.,,,33.9
+GROWWSLVR,,,,33.8
+KWIL,,,,33.5
+GODREJIND,Godrej Industries Ltd.,,,33.4
+ANTELOPUS,,,,33.2
+STAR,,,,32.8
+IMFA,,,,32.0
+OSWALPUMPS,,,,31.2
+KERNEX,,,,31.1
+JSWCEMENT,JSW Cement Ltd.,,,30.7
+CYIENTDLM,,,,30.7
+SHRIPISTON,,,,30.7
+ALKYLAMINE,,,,30.6
+PTC,,,,30.3
+VIDYAWIRES,,,,30.3
+FLUOROCHEM,Gujarat Fluorochemicals Ltd.,,,30.2
+DOMS,DOMS Industries Ltd.,,,30.2
+PAISALO,,,,30.2
+GOLDIAM,,,,30.2
+SHRINGARMS,,,,30.1
+BHARTIHEXA,Bharti Hexacom Ltd.,,,30.1
+DYNAMATECH,,,,29.8
+INDIAMART,Indiamart Intermesh Ltd.,,,29.5
+CGCL,Capri Global Capital Ltd.,,,29.5
+RATNAVEER,,,,29.0
+AVANTEL,,,,28.8
+WALCHANNAG,,,,28.0
+AGI,,,,28.0
+POWERICA,,,,28.0
+GARUDA,,,,27.8
+VIKRAN,,,,27.6
+AYE,,,,27.3
+VINCOFE,,,,27.2
+KMEW,,,,27.0
+TECHNOE,Techno Electric & Engineering Company Ltd.,,,27.0
+KROSS,,,,27.0
+PTCIL,PTC Industries Ltd.,,,27.0
+ACE,Action Construction Equipment Ltd.,,,26.8
+JAIBALAJI,,,,26.0
+TI,,,,25.9
+SPARC,,,,25.4
+BLUESTONE,,,,25.3
+ATLANTAELE,,,,25.2
+RBA,,,,24.8
+GPPL,,,,24.8
+V2RETAIL,,,,24.7
+MARSONS,,,,24.6
+AXISCADES,,,,24.4
+LLOYDSENT,,,,24.4
+SJS,,,,24.1
+ABLBL,Aditya Birla Lifestyle Brands Ltd.,,,24.1
+AEGISVOPAK,Aegis Vopak Terminals Ltd.,,,23.8
+NSLNISP,NMDC Steel Ltd.,,,23.8
+JSFB,,,,23.6
+CIEINDIA,CIE Automotive India Ltd.,,,23.5
+SKIPPER,,,,23.4
+CENTUM,,,,23.4
+JSLL,,,,23.0
+SILVERAG,,,,23.0
+INDOTHAI,,,,23.0
+IGIL,International Gemological Institute Ltd.,,,22.9
+TRIVENI,,,,22.9
+PATELENG,,,,22.7
+SHANTIGOLD,,,,22.4
+DELTACORP,,,,22.3
+SENORES,,,,22.0
+BAJEL,,,,21.7
+PACEDIGITK,,,,21.6
+CANHLIFE,Canara HSBC Life Insurance Company Ltd.,,,21.3
+LOTUSDEV,,,,21.2
+PARKHOSPS,,,,21.1
+SASKEN,,,,20.9
+SPMLINFRA,,,,20.6
+INTERARCH,,,,20.5
+RENUKA,,,,20.4
+HINDOILEXP,,,,20.3
+KPIL,Kalpataru Projects International Ltd.,,,20.0
+MANORAMA,,,,20.0
+PROTEAN,,,,20.0
+ANTHEM,Anthem Biosciences Ltd.,,,20.0
+FEDFINA,,,,19.9
+CMSINFO,,,,19.5
+SUNFLAG,,,,19.4
+TTML,Tata Teleservices (Maharashtra) Ltd.,,,19.4
+AADHARHFC,Aadhar Housing Finance Ltd.,,,19.3
+MUFIN,,,,19.3
+HONAUT,Honeywell Automation India Ltd.,,,19.1
+DEEPINDS,,,,19.0
+RSL,,,,18.7
+CAMLINFINE,,,,18.5
+STALLION,,,,18.4
+GMRP&UI,,,,18.3
+SHILCTECH,,,,18.1
+KIRLPNU,,,,17.9
+TEGA,Tega Industries Ltd.,,,17.6
+RUBICON,,,,17.6
+KSHINTL,,,,17.5
+JARO,,,,17.2
+PNGJL,,,,17.2
+VIYASH,,,,17.1
+PNGSREVA,,,,17.0
+NORTHARC,,,,16.9
+GENESYS,,,,16.9
+SGMART,,,,16.9
+ARIS,,,,16.8
+INDGN,Indegene Ltd.,,,16.7
+PGIL,,,,16.7
+KRISHNADEF,,,,16.6
+INA,,,,16.6
+BHARATWIRE,,,,16.5
+CRAMC,,,,16.0
+HUBTOWN,,,,15.9
+3MINDIA,3M India Ltd.,,,15.8
+GAEL,,,,15.8
+SAMBHV,,,,15.8
+SBCL,,,,15.7
+SIRCA,,,,15.5
+SGFIN,,,,15.4
+GLOBUSSPR,,,,15.4
+AARTIPHARM,,,,15.3
+CONFIPET,,,,15.1
+SAMHI,,,,15.1
+IBULLSLTD,,,,14.8
+THELEELA,Leela Palaces Hotels & Resorts Ltd.,,,14.7
+CEIGALL,,,,14.7
+BOMDYEING,,,,14.7
+AWFIS,,,,14.7
+KPEL,,,,14.5
+EPACKPEB,,,,14.4
+SMSPHARMA,,,,14.3
+EMSLIMITED,,,,14.1
+IOLCP,,,,14.1
+GKSL,,,,13.8
+GOODLUCK,,,,13.6
+BHARATSE,,,,13.5
+PENIND,,,,13.4
+MANINFRA,,,,13.4
+MBAPL,,,,13.3
+HARDWYN,,,,13.0
+INDIAGLYCO,,,,13.0
+EBGNG,,,,12.9
+ROSSTECH,,,,12.9
+CIGNITITEC,,,,12.8
+BBL,,,,12.7
+ARFIN,,,,12.6
+WHEELS,,,,12.4
+INDOTECH,,,,12.4
+JISLJALEQS,,,,12.4
+SFL,,,,12.1
+UNIVCABLES,,,,12.0
+UTLSOLAR,,,,11.8
+HEMIPROP,,,,11.6
+SPLPETRO,Supreme Petrochem Ltd.,,,11.4
+QUESS,,,,11.2
+INDRAMEDCO,,,,11.2
+HIRECT,,,,11.1
+KRISHANA,,,,11.1
+WAKEFIT,,,,11.0
+SAFARI,,,,11.0
+MUTHOOTMF,,,,10.9
+VIPIND,,,,10.8
+HCG,,,,10.8
+SERVOTECH,,,,10.7
+CEINSYS,,,,10.7
+KALAMANDIR,,,,10.7
+TRUALT,,,,10.7
+ELLEN,,,,10.7
+WELENT,,,,10.6
+NEPHROPLUS,,,,10.6
+IONEXCHANG,,,,10.4
+AQYLON,,,,10.4
+JKPAPER,,,,10.3
+IPL,,,,10.3
+RTNINDIA,,,,10.3
+EFCIL,,,,10.0
+DYCL,,,,9.9
+ADVENZYMES,,,,9.8
+EPIGRAL,,,,9.4
+BBTC,Bombay Burmah Trading Corporation Ltd.,,,9.4
+FUSION,,,,9.3
+RIIL,,,,9.3
+GKENERGY,,,,9.2
+RHETAN,,,,9.2
+AVL,,,,9.0
+HPL,,,,9.0
+STLNETWORK,,,,9.0
+CORONA,,,,8.9
+ACI,,,,8.9
+ATALREAL,,,,8.8
+ALIVUS,,,,8.5
+SOUTHWEST,,,,8.5
+MIRCELECTR,,,,8.4
+MARINE,,,,8.4
+SEIL,,,,8.4
+HAPPYFORGE,,,,8.4
+ETHOSLTD,,,,8.3
+TRAVELFOOD,Travel Food Services Ltd.,,,8.1
+DCW,,,,8.0
+PARACABLES,,,,8.0
+FCL,,,,7.9
+RPTECH,,,,7.8
+GCSL,,,,7.8
+NITCO,,,,7.7
+NACLIND,,,,7.6
+PVP,,,,7.5
+COSMOFIRST,,,,7.4
+ONEPOINT,,,,7.4
+VERANDA,,,,7.3
+DCAL,,,,7.1
+STANLEY,,,,7.0
+SAKAR,,,,6.9
+RPEL,,,,6.9
+INNOVACAP,,,,6.9
+MICEL,,,,6.8
+MOLDTKPAC,,,,6.7
+ALGOQUANT,,,,6.4
+PNBGILTS,,,,6.4
+JSWDULUX,JSW Dulux Ltd.,,,5.9
+SALZERELEC,,,,5.3
+MOCAPITAL,,,,5.0
+IFBAGRO,,,,5.0
+SIS,,,,4.9
+MAYURUNIQ,,,,4.8
+MARKOLINES,,,,4.6
+WSTCSTPAPR,,,,4.6
+SIGMAADV,,,,4.5
+SCILAL,,,,4.4
+ADSL,,,,4.2
+GULPOLY,,,,3.9
+INDIANHUME,,,,3.9
+RANEHOLDIN,,,,3.8
+UDS,,,,3.8
+HARSHA,,,,3.8
+FOSECOIND,,,,2.9
+SOTL,,,,2.9
+RML,,,,2.7
+OMAXAUTO,,,,2.6
+APCOTEXIND,,,,2.5

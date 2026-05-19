@@ -313,6 +313,144 @@ def get_subsector_master_performance(
     return result.reset_index(drop=True)
 
 
+def get_all_stocks() -> pd.DataFrame:
+    """All EQ/SM/ST stocks with company name — used to populate the search selectbox."""
+    sql = """
+        SELECT
+            b.symbol,
+            COALESCE(s.company_name, b.symbol) AS company_name,
+            COALESCE(s.sector, 'Others') AS sector,
+            COALESCE(s.industry, 'Others') AS industry,
+            MAX(b.turnover_lacs) AS recent_turnover
+        FROM daily_data b
+        LEFT JOIN sector_master s ON b.symbol = s.symbol
+        WHERE b.series IN ('EQ', 'SM', 'ST')
+        GROUP BY b.symbol, COALESCE(s.company_name, b.symbol),
+                 COALESCE(s.sector, 'Others'), COALESCE(s.industry, 'Others')
+        ORDER BY company_name
+    """
+    return query_dataframe(sql, [])
+
+
+def search_stock_suggestions(query: str, limit: int = 15) -> pd.DataFrame:
+    """Fast symbol/name lookup — returns symbol + company for dropdown suggestions."""
+    pattern = f"%{query.upper()}%"
+    sql = """
+        SELECT
+            b.symbol,
+            COALESCE(s.company_name, b.symbol) AS company_name,
+            COALESCE(s.sector, 'Others') AS sector,
+            COALESCE(s.industry, 'Others') AS industry,
+            MAX(b.turnover_lacs) AS recent_turnover
+        FROM daily_data b
+        INNER JOIN sector_master s ON b.symbol = s.symbol
+        WHERE b.series IN ('EQ', 'SM', 'ST')
+          AND (UPPER(b.symbol) LIKE ? OR UPPER(COALESCE(s.company_name, b.symbol)) LIKE ?)
+        GROUP BY b.symbol, COALESCE(s.company_name, b.symbol),
+                 COALESCE(s.sector, 'Others'), COALESCE(s.industry, 'Others')
+        ORDER BY recent_turnover DESC
+        LIMIT ?
+    """
+    return query_dataframe(sql, [pattern, pattern, limit])
+
+
+def search_stocks_performance(
+    as_of_date: date,
+    query: str,
+    min_turnover_lacs: Optional[float] = None,
+) -> pd.DataFrame:
+    """Multi-period stock performance for all stocks matching symbol or company name."""
+    if min_turnover_lacs is None:
+        min_turnover_lacs = get_min_turnover_filter()
+
+    pattern = f"%{query.upper()}%"
+
+    today_sql = """
+        WITH base AS (
+            SELECT b.symbol,
+                   b.trade_date,
+                   COALESCE(s.company_name, b.symbol) AS company_name,
+                   COALESCE(s.sector, 'Others') AS sector,
+                   COALESCE(s.industry, 'Others') AS industry,
+                   COALESCE(s.category, '') AS category,
+                   b.close_price, b.turnover_lacs, b.deliv_per,
+                   b.ttl_trd_qnty,
+                   CASE WHEN b.prev_close > 0
+                   THEN (b.close_price - b.prev_close) / b.prev_close * 100
+                   ELSE NULL END AS price_change_pct,
+                   AVG(b.deliv_per) OVER (
+                       PARTITION BY b.symbol, b.series
+                       ORDER BY b.trade_date
+                       ROWS BETWEEN 10 PRECEDING AND 1 PRECEDING
+                   ) AS deliv_per_10d_avg,
+                   AVG(b.ttl_trd_qnty) OVER (
+                       PARTITION BY b.symbol, b.series
+                       ORDER BY b.trade_date
+                       ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING
+                   ) AS vol_20d_avg
+            FROM daily_data b
+            INNER JOIN sector_master s ON b.symbol = s.symbol
+            WHERE b.series IN ('EQ', 'SM', 'ST')
+              AND (UPPER(b.symbol) LIKE ? OR UPPER(COALESCE(s.company_name, b.symbol)) LIKE ?)
+        )
+        SELECT symbol, company_name, sector, industry, category,
+               close_price, price_change_pct, turnover_lacs, deliv_per,
+               (deliv_per / NULLIF(deliv_per_10d_avg, 0)) AS deliv_ratio,
+               (ttl_trd_qnty / NULLIF(vol_20d_avg, 0))    AS vol_ratio
+        FROM base
+        WHERE trade_date = ?
+        ORDER BY turnover_lacs DESC
+    """
+    df = query_dataframe(today_sql, [pattern, pattern, as_of_date])
+    if df.empty:
+        return df
+
+    symbols = df["symbol"].tolist()
+    ph = ",".join("?" * len(symbols))
+
+    price_hist_sql = f"""
+        SELECT b.symbol, b.close_price AS start_price
+        FROM daily_data b
+        INNER JOIN (
+            SELECT symbol, MAX(trade_date) AS td
+            FROM daily_data
+            WHERE trade_date <= ?
+              AND series IN ('EQ', 'SM', 'ST')
+              AND symbol IN ({ph})
+            GROUP BY symbol
+        ) t ON b.symbol = t.symbol AND b.trade_date = t.td
+        WHERE b.symbol IN ({ph})
+    """
+
+    deliv_hist_sql = f"""
+        SELECT b.symbol, AVG(b.deliv_per) AS deliv_pct
+        FROM daily_data b
+        WHERE b.trade_date > ?
+          AND b.trade_date <= ?
+          AND b.series IN ('EQ', 'SM', 'ST')
+          AND b.symbol IN ({ph})
+        GROUP BY b.symbol
+    """
+
+    for label, cal_days in [("1W", 7), ("2W", 14), ("1M", 30), ("3M", 90)]:
+        start = as_of_date - timedelta(days=cal_days)
+
+        price_df = query_dataframe(price_hist_sql, [start] + symbols + symbols)
+        price_df.columns = ["symbol", "start_price"]
+        df = df.merge(price_df, on="symbol", how="left")
+        df[f"{label}_price_chg_pct"] = (
+            (df["close_price"] - df["start_price"])
+            / df["start_price"].replace(0, float("nan")) * 100
+        )
+        df.drop(columns=["start_price"], inplace=True)
+
+        deliv_df = query_dataframe(deliv_hist_sql, [start, as_of_date] + symbols)
+        deliv_df.columns = ["symbol", f"{label}_deliv_pct"]
+        df = df.merge(deliv_df, on="symbol", how="left")
+
+    return df.reset_index(drop=True)
+
+
 def get_subsector_stocks_performance(
     as_of_date: date,
     sector_name: str,
@@ -327,6 +465,7 @@ def get_subsector_stocks_performance(
         WITH base AS (
             SELECT b.symbol,
                    COALESCE(s.company_name, b.symbol) AS company_name,
+                   COALESCE(s.category, '') AS category,
                    b.trade_date,
                    b.close_price, b.turnover_lacs, b.deliv_per,
                    b.ttl_trd_qnty,
@@ -346,7 +485,7 @@ def get_subsector_stocks_performance(
               AND s.sector = ?
               AND COALESCE(s.industry, 'Others') = ?
         )
-        SELECT symbol, company_name, close_price, turnover_lacs, deliv_per,
+        SELECT symbol, company_name, category, close_price, turnover_lacs, deliv_per,
                (deliv_per / NULLIF(deliv_per_10d_avg, 0)) AS deliv_ratio,
                (ttl_trd_qnty / NULLIF(vol_20d_avg, 0))    AS vol_ratio
         FROM base

@@ -42,10 +42,19 @@ def initialize_schema() -> None:
                 company_name        VARCHAR,
                 sector              VARCHAR,
                 industry            VARCHAR,
+                category            VARCHAR,
                 market_cap_category VARCHAR,
                 last_updated        TIMESTAMP
             )
         """)
+
+        # Non-destructive migration: add category column to existing databases
+        try:
+            conn.execute(
+                "ALTER TABLE sector_master ADD COLUMN IF NOT EXISTS category VARCHAR DEFAULT ''"
+            )
+        except Exception:
+            pass  # DuckDB versions that don't support IF NOT EXISTS in ALTER TABLE
 
         conn.execute("CREATE SEQUENCE IF NOT EXISTS run_log_seq START 1")
 

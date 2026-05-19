@@ -18,6 +18,11 @@ STOCK_TABLE_COLUMNS = {
         "Sub-Sector",
         help="Industry sub-sector within the broad sector",
     ),
+    "category": st.column_config.TextColumn(
+        "Category",
+        help="Specific product / business category within the sub-sector "
+             "(e.g. Automobile → Auto Components → Forgings)",
+    ),
     "close_price": st.column_config.NumberColumn(
         "Close (₹)",
         format="₹%.2f",

@@ -97,6 +97,10 @@ def run_daily_job(
         if d.weekday() >= 5:
             d -= timedelta(days=1)
             continue
+        # Skip NSE request entirely if data is already present (retry-safe)
+        if d in repo.get_dates_present([d]):
+            log.info("Daily job: data already present for %s — skipping", d)
+            return
         status, rows = fetch_one_date(d, client, repo)
         if status == "success":
             log.info("Daily job complete: %s (%d rows)", d, rows)
@@ -184,17 +188,32 @@ def _apply_overrides(repo: MarketDataRepository) -> None:
     if not override_path.exists():
         return
     try:
-        df = pd.read_csv(override_path, comment="#")
-        df.columns = [c.strip() for c in df.columns]
-        if df.empty or "symbol" not in df.columns:
+        overrides = pd.read_csv(override_path, comment="#")
+        overrides.columns = [c.strip() for c in overrides.columns]
+        if overrides.empty or "symbol" not in overrides.columns:
             return
-        df["company_name"] = df.get("company_name", "")
-        df["market_cap_category"] = df.get("market_cap_category", "")
-        df["last_updated"] = datetime.now()
-        repo.upsert_sector_master(
-            df[["symbol", "company_name", "sector", "industry",
-                "market_cap_category", "last_updated"]]
-        )
-        log.info("Applied %d sector overrides", len(df))
+
+        # Fetch existing rows so we don't wipe company_name / market_cap_category
+        existing = repo.query(
+            "SELECT symbol, company_name, market_cap_category FROM sector_master"
+        ).set_index("symbol")
+
+        rows = []
+        now = datetime.now()
+        for _, ov in overrides.iterrows():
+            sym = ov["symbol"]
+            ex = existing.loc[sym] if sym in existing.index else None
+            rows.append({
+                "symbol":              sym,
+                "company_name":        (ex["company_name"]        if ex is not None else "") or "",
+                "sector":              ov.get("sector",   "") or "",
+                "industry":            ov.get("industry", "") or "",
+                "category":            ov.get("category", "") or "",
+                "market_cap_category": (ex["market_cap_category"] if ex is not None else "") or "",
+                "last_updated":        now,
+            })
+
+        repo.upsert_sector_master(pd.DataFrame(rows))
+        log.info("Applied %d sector overrides", len(rows))
     except Exception as exc:
         log.error("Failed to apply overrides: %s", exc)

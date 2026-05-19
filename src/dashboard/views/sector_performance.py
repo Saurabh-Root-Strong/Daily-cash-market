@@ -1,28 +1,54 @@
-from datetime import date
-import streamlit as st
-import plotly.graph_objects as go
-import pandas as pd
-import numpy as np
+"""
+Sector Performance page — multi-period summary with expandable tree table.
 
-from src.analytics.sector_aggregator import (
-    get_sector_master_performance,
-    get_subsector_master_performance,
-    get_subsector_stocks_performance,
+Imports:
+  - cache.queries  → all SQL calls (cached 5 min)
+  - components.kpi → performance_kpi_strip
+  - components.filters → render_filter_builder / apply_filters / render_filter_summary
+  - components.charts  → outlook_bar_chart, period_comparison_chart
+  - state          → expand/collapse session state helpers
+  - constants      → shared column keys, widths, tooltips
+"""
+from __future__ import annotations
+
+from datetime import date
+
+import numpy as np
+import pandas as pd
+import streamlit as st
+
+from src.dashboard import state as ss
+from src.dashboard.cache.queries import (
+    cached_sector_master_performance,
+    cached_subsector_master_performance,
+    cached_subsector_stocks_performance,
+    cached_all_stocks,
+    cached_search_stocks,
+)
+from src.dashboard.components.charts import outlook_bar_chart, period_comparison_chart
+from src.dashboard.components.filters import (
+    apply_filters,
+    render_filter_builder,
+    render_filter_summary,
+)
+from src.dashboard.components.kpi import performance_kpi_strip
+from src.dashboard.constants import (
+    COL_TOOLTIPS,
+    DELIV_KEYS,
+    METRIC_LABELS,
+    PRICE_KEYS,
+    SECTOR_COL_WIDTHS,
+    SORT_COL_MAP,
+    SUBSECTOR_COL_WIDTHS,
 )
 
-# ── Column layout constants ───────────────────────────────────────────────────
-# [btn | name | 1W% | 2W% | 1M% | 3M% | 1WD | 2WD | 1MD | 3MD]
-_SEC_COLS  = [0.28, 2.0, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75]
-_SUB_COLS  = [0.28, 0.28, 1.9, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75]
-
-_PRICE_KEYS = ["1W_price_chg_pct", "2W_price_chg_pct", "1M_price_chg_pct", "3M_price_chg_pct"]
-_DELIV_KEYS = ["1W_deliv_pct",     "2W_deliv_pct",     "1M_deliv_pct",     "3M_deliv_pct"]
-
+# ── Stock-level column config (period performance drilldown) ──────────────────
 _STOCK_COL_CONFIG = {
     "symbol":           st.column_config.TextColumn("Symbol"),
     "company_name":     st.column_config.TextColumn("Company"),
+    "category":         st.column_config.TextColumn("Category",
+                            help="Specific product/business category within the sub-sector"),
     "close_price":      st.column_config.NumberColumn("Close (₹)", format="₹%.2f"),
-    # Price change by period
     "1W_price_chg_pct": st.column_config.NumberColumn("1W Price%",  format="%.2f%%",
                             help="Cumulative price change over last 1 week"),
     "2W_price_chg_pct": st.column_config.NumberColumn("2W Price%",  format="%.2f%%",
@@ -31,77 +57,83 @@ _STOCK_COL_CONFIG = {
                             help="Cumulative price change over last 1 month"),
     "3M_price_chg_pct": st.column_config.NumberColumn("3M Price%",  format="%.2f%%",
                             help="Cumulative price change over last 3 months"),
-    # Avg delivery % by period
     "1W_deliv_pct":     st.column_config.NumberColumn("1W Deliv%",  format="%.1f%%",
-                            help="Average delivery % over last 1 week — conviction of buyers"),
+                            help="Average delivery % over last 1 week"),
     "2W_deliv_pct":     st.column_config.NumberColumn("2W Deliv%",  format="%.1f%%",
                             help="Average delivery % over last 2 weeks"),
     "1M_deliv_pct":     st.column_config.NumberColumn("1M Deliv%",  format="%.1f%%",
                             help="Average delivery % over last 1 month"),
     "3M_deliv_pct":     st.column_config.NumberColumn("3M Deliv%",  format="%.1f%%",
-                            help="Average delivery % over last 3 months (long-term baseline)"),
-    # Today's signals
+                            help="Average delivery % over last 3 months"),
     "deliv_per":        st.column_config.NumberColumn("Today Deliv%", format="%.1f%%",
                             help="Today's delivery % — compare with period averages to spot change"),
     "deliv_ratio":      st.column_config.NumberColumn("Deliv Ratio",  format="%.2f",
                             help=">1.2 = accumulating above norm, <0.8 = distributing below norm"),
 }
 _STOCK_SHOW = [
-    "symbol", "company_name", "close_price",
+    "symbol", "company_name", "category", "close_price",
     "1W_price_chg_pct", "2W_price_chg_pct", "1M_price_chg_pct", "3M_price_chg_pct",
     "1W_deliv_pct",     "2W_deliv_pct",     "1M_deliv_pct",     "3M_deliv_pct",
     "deliv_per", "deliv_ratio",
 ]
 
+# ── Search results column config (adds sector + industry to stock config) ─────
+_SEARCH_COL_CONFIG = {
+    "symbol":           st.column_config.TextColumn("Symbol"),
+    "company_name":     st.column_config.TextColumn("Company"),
+    "sector":           st.column_config.TextColumn("Sector"),
+    "industry":         st.column_config.TextColumn("Sub-Sector"),
+    "category":         st.column_config.TextColumn("Category"),
+    "close_price":      st.column_config.NumberColumn("Close (₹)", format="₹%.2f"),
+    "price_change_pct": st.column_config.NumberColumn("Today Chg%", format="%.2f%%",
+                            help="Price change vs previous close"),
+    "1W_price_chg_pct": st.column_config.NumberColumn("1W Price%",  format="%.2f%%"),
+    "2W_price_chg_pct": st.column_config.NumberColumn("2W Price%",  format="%.2f%%"),
+    "1M_price_chg_pct": st.column_config.NumberColumn("1M Price%",  format="%.2f%%"),
+    "3M_price_chg_pct": st.column_config.NumberColumn("3M Price%",  format="%.2f%%"),
+    "deliv_per":        st.column_config.NumberColumn("Today Deliv%", format="%.1f%%"),
+    "1W_deliv_pct":     st.column_config.NumberColumn("1W Deliv%",  format="%.1f%%"),
+    "1M_deliv_pct":     st.column_config.NumberColumn("1M Deliv%",  format="%.1f%%"),
+    "3M_deliv_pct":     st.column_config.NumberColumn("3M Deliv%",  format="%.1f%%"),
+    "deliv_ratio":      st.column_config.NumberColumn("Deliv Ratio", format="%.2f",
+                            help=">1.2 = accumulating, <0.8 = distributing"),
+    "vol_ratio":        st.column_config.NumberColumn("Vol Ratio",   format="%.2f",
+                            help="Today's volume vs 20-day avg"),
+}
+_SEARCH_SHOW = [
+    "symbol", "company_name", "sector", "industry", "category",
+    "close_price", "price_change_pct",
+    "1W_price_chg_pct", "2W_price_chg_pct", "1M_price_chg_pct", "3M_price_chg_pct",
+    "deliv_per", "1W_deliv_pct", "1M_deliv_pct", "3M_deliv_pct",
+    "deliv_ratio", "vol_ratio",
+]
 
-# ── Formatting helpers ────────────────────────────────────────────────────────
-def _color(val):
-    if pd.isna(val): return "#888"
+
+# ── Local formatting helpers ──────────────────────────────────────────────────
+def _color(val) -> str:
+    if pd.isna(val):
+        return "#888"
     return "#2ca02c" if val > 0 else ("#d62728" if val < 0 else "#888")
 
-def _fmt(val, dec=2):
-    if pd.isna(val): return "—"
-    sign = "+" if val > 0 else ""
-    return f"{sign}{val:.{dec}f}%"
 
-def _normalize(s):
+def _fmt(val, dec: int = 2) -> str:
+    if pd.isna(val):
+        return "—"
+    return f"{'+'if val>0 else ''}{val:.{dec}f}%"
+
+
+def _normalize(s: pd.Series) -> pd.Series:
     mn, mx = s.min(), s.max()
     return (s - mn) / (mx - mn + 1e-9)
 
 
-# ── Session state toggle helpers ──────────────────────────────────────────────
-def _toggle_sector(key):
-    s = st.session_state.setdefault("exp_sectors", set())
-    if key in s: s.discard(key)
-    else: s.add(key)
-
-def _toggle_subsector(key):
-    s = st.session_state.setdefault("exp_subsectors", set())
-    if key in s: s.discard(key)
-    else: s.add(key)
-
-def _is_sec_open(key):
-    return key in st.session_state.get("exp_sectors", set())
-
-def _is_sub_open(key):
-    return key in st.session_state.get("exp_subsectors", set())
-
-
-# ── Column header tooltips ────────────────────────────────────────────────────
-_COL_TOOLTIPS = {
-    "1W Price%": "Cumulative price return over the last 7 days.\n(end close − start close) ÷ start close × 100, weighted by today's turnover.",
-    "2W Price%": "Cumulative price return over the last 14 days.",
-    "1M Price%": "Cumulative price return over the last 30 days.",
-    "3M Price%": "Cumulative price return over the last 90 days (one quarter).",
-    "1W Deliv%": "Turnover-weighted avg delivery % over last 7 days.\nHigher = more shares held overnight = investor conviction buying.",
-    "2W Deliv%": "Turnover-weighted avg delivery % over last 14 days.",
-    "1M Deliv%": "Turnover-weighted avg delivery % over last 30 days.",
-    "3M Deliv%": "Turnover-weighted avg delivery % over last 90 days — long-term conviction baseline.",
-}
-
-def _header_cell(col, label, tooltip=None, bold=True):
+# ── Column header with hover tooltip ─────────────────────────────────────────
+def _header_cell(col, label: str, tooltip: str | None = None, bold: bool = True) -> None:
     if tooltip:
-        style = "cursor:help;font-weight:600;border-bottom:1px dashed rgba(255,255,255,0.4);font-size:13px"
+        style = (
+            "cursor:help;font-weight:600;"
+            "border-bottom:1px dashed rgba(255,255,255,0.4);font-size:13px"
+        )
         col.markdown(
             f'<span title="{tooltip}" style="{style}">{label}</span>',
             unsafe_allow_html=True,
@@ -110,86 +142,100 @@ def _header_cell(col, label, tooltip=None, bold=True):
         col.markdown(f"**{label}**" if (bold and label) else label)
 
 
-# ── Write a styled metric cell ────────────────────────────────────────────────
-def _price_cell(col, val):
+def _price_cell(col, val) -> None:
     col.markdown(
         f"<div style='color:{_color(val)};font-weight:600;font-size:13px'>{_fmt(val)}</div>",
         unsafe_allow_html=True,
     )
 
-def _deliv_cell(col, val):
+
+def _deliv_cell(col, val) -> None:
     col.markdown(
-        f"<div style='font-size:13px'>{_fmt(val,1)}</div>",
+        f"<div style='font-size:13px'>{_fmt(val, 1)}</div>",
         unsafe_allow_html=True,
     )
 
 
-# ── Master table renderer ─────────────────────────────────────────────────────
-def _master_table(sector_df, subsector_df, selected_date, min_turnover):
-    # ── Header row ─────────────────────────────────────────────────────────
-    h = st.columns(_SEC_COLS)
+# ── Master expandable tree table ──────────────────────────────────────────────
+def _master_table(
+    sector_df: pd.DataFrame,
+    subsector_df: pd.DataFrame,
+    selected_date: date,
+    min_turnover: float,
+) -> None:
+    # Header row
+    h = st.columns(SECTOR_COL_WIDTHS)
     _header_cell(h[0], "")
     _header_cell(h[1], "Sector")
-    for col, key in zip(h[2:], ["1W Price%","2W Price%","1M Price%","3M Price%",
-                                  "1W Deliv%","2W Deliv%","1M Deliv%","3M Deliv%"]):
-        _header_cell(col, key, tooltip=_COL_TOOLTIPS.get(key))
-    st.markdown("<hr style='margin:3px 0 5px 0;border-color:rgba(255,255,255,0.2)'>",
-                unsafe_allow_html=True)
+    for col, key in zip(h[2:], ["1W Price%", "2W Price%", "1M Price%", "3M Price%",
+                                  "1W Deliv%",  "2W Deliv%",  "1M Deliv%",  "3M Deliv%"]):
+        _header_cell(col, key, tooltip=COL_TOOLTIPS.get(key))
+
+    st.markdown(
+        "<hr style='margin:3px 0 5px 0;border-color:rgba(255,255,255,0.2)'>",
+        unsafe_allow_html=True,
+    )
 
     for _, sec_row in sector_df.iterrows():
-        sector = sec_row["sector"]
-        sec_open = _is_sec_open(sector)
+        sector   = sec_row["sector"]
+        sec_open = ss.is_sector_open(sector)
 
-        # ── Sector row ────────────────────────────────────────────────────
-        r = st.columns(_SEC_COLS)
-        icon = "▼" if sec_open else "▶"
-        r[0].button(icon, key=f"s_{sector}",
-                    on_click=_toggle_sector, args=(sector,),
-                    use_container_width=True)
+        # ── Sector row ────────────────────────────────────────────────────────
+        r = st.columns(SECTOR_COL_WIDTHS)
+        r[0].button(
+            "▼" if sec_open else "▶",
+            key=f"s_{sector}",
+            on_click=ss.toggle_sector, args=(sector,),
+            use_container_width=True,
+        )
         r[1].markdown(f"**{sector}**")
-        for c, k in zip(r[2:6], _PRICE_KEYS):
+        for c, k in zip(r[2:6], PRICE_KEYS):
             _price_cell(c, sec_row.get(k, float("nan")))
-        for c, k in zip(r[6:10], _DELIV_KEYS):
+        for c, k in zip(r[6:10], DELIV_KEYS):
             _deliv_cell(c, sec_row.get(k, float("nan")))
 
-        # ── Sub-sector rows (visible when sector is open) ─────────────────
+        # ── Sub-sector rows ───────────────────────────────────────────────────
         if sec_open:
             sub_df = subsector_df[subsector_df["sector"] == sector].copy()
 
-            # Sub-sector header
-            sh = st.columns(_SUB_COLS)
-            for col, lbl in zip(sh, ["","","**Sub-Sector**",
-                                      "1W Price%","2W Price%","1M Price%","3M Price%",
-                                      "1W Deliv%","2W Deliv%","1M Deliv%","3M Deliv%"]):
-                col.markdown(f"<small style='color:#aaa'>{lbl}</small>", unsafe_allow_html=True)
+            sh = st.columns(SUBSECTOR_COL_WIDTHS)
+            for col, lbl in zip(sh, ["", "", "**Sub-Sector**",
+                                      "1W Price%", "2W Price%", "1M Price%", "3M Price%",
+                                      "1W Deliv%",  "2W Deliv%",  "1M Deliv%",  "3M Deliv%"]):
+                col.markdown(
+                    f"<small style='color:#aaa'>{lbl}</small>",
+                    unsafe_allow_html=True,
+                )
 
             for _, sub_row in sub_df.iterrows():
-                industry = sub_row["industry"]
+                industry    = sub_row["industry"]
                 stock_count = int(sub_row.get("stock_count", 0))
-                sub_key = f"{sector}|{industry}"
-                sub_open = _is_sub_open(sub_key)
+                sub_key     = f"{sector}|{industry}"
+                sub_open    = ss.is_subsector_open(sub_key)
 
-                sr = st.columns(_SUB_COLS)
-                sr[0].write("")   # indent spacer
-                sub_icon = "▼" if sub_open else "▶"
-                sr[1].button(sub_icon, key=f"ss_{sub_key}",
-                             on_click=_toggle_subsector, args=(sub_key,),
-                             use_container_width=True)
+                sr = st.columns(SUBSECTOR_COL_WIDTHS)
+                sr[0].write("")
+                sr[1].button(
+                    "▼" if sub_open else "▶",
+                    key=f"ss_{sub_key}",
+                    on_click=ss.toggle_subsector, args=(sub_key,),
+                    use_container_width=True,
+                )
                 count_label = f"({stock_count})" if stock_count else ""
                 sr[2].markdown(
                     f"<span style='font-size:13px'>{industry} "
                     f"<span style='color:#888;font-size:11px'>{count_label}</span></span>",
                     unsafe_allow_html=True,
                 )
-                for c, k in zip(sr[3:7], _PRICE_KEYS):
+                for c, k in zip(sr[3:7], PRICE_KEYS):
                     _price_cell(c, sub_row.get(k, float("nan")))
-                for c, k in zip(sr[7:11], _DELIV_KEYS):
+                for c, k in zip(sr[7:11], DELIV_KEYS):
                     _deliv_cell(c, sub_row.get(k, float("nan")))
 
-                # ── Stock rows (visible when sub-sector is open) ──────────
+                # ── Stock rows ────────────────────────────────────────────────
                 if sub_open:
                     with st.spinner(f"Loading {industry} stocks…"):
-                        stocks = get_subsector_stocks_performance(
+                        stocks = cached_subsector_stocks_performance(
                             selected_date, sector, industry, min_turnover
                         )
                     if stocks.empty:
@@ -197,19 +243,14 @@ def _master_table(sector_df, subsector_df, selected_date, min_turnover):
                     else:
                         show_cols = [c for c in _STOCK_SHOW if c in stocks.columns]
                         cfg = {k: v for k, v in _STOCK_COL_CONFIG.items() if k in show_cols}
-                        st.dataframe(
-                            stocks[show_cols],
-                            column_config=cfg,
-                            use_container_width=True,
-                            hide_index=True,
-                        )
+                        st.dataframe(stocks[show_cols], column_config=cfg,
+                                     use_container_width=True, hide_index=True)
 
             st.markdown(
                 "<hr style='margin:4px 0;border-color:rgba(255,255,255,0.08)'>",
                 unsafe_allow_html=True,
             )
 
-        # thin separator between sectors
         st.markdown(
             "<div style='border-bottom:1px solid rgba(255,255,255,0.05);margin:2px 0'></div>",
             unsafe_allow_html=True,
@@ -217,7 +258,7 @@ def _master_table(sector_df, subsector_df, selected_date, min_turnover):
 
 
 # ── Outlook scoring ───────────────────────────────────────────────────────────
-def _compute_outlook(df):
+def _compute_outlook(df: pd.DataFrame) -> pd.DataFrame:
     out = df.copy()
     out["_dm"]  = out["1W_deliv_pct"] - out["3M_deliv_pct"]
     out["_pm"]  = out.get("2W_price_chg_pct", out["1W_price_chg_pct"])
@@ -227,82 +268,19 @@ def _compute_outlook(df):
         (out.get("2W_deliv_pct", out["1M_deliv_pct"]) > out["1M_deliv_pct"]).astype(float)
     )
     out["Score"] = (
-        _normalize(out["_dm"])  * 35 + _normalize(out["_bc"]) * 25 +
-        _normalize(out["_pm"])  * 25 + _normalize(out["_acc"]) * 15
+        _normalize(out["_dm"]) * 35 + _normalize(out["_bc"]) * 25 +
+        _normalize(out["_pm"]) * 25 + _normalize(out["_acc"]) * 15
     ).round(1)
 
-    def _sig(row):
+    def _sig(row) -> str:
         if row["_dm"] > 0 and row["_pm"] > 0: return "🟢 Accumulating"
         if row["_dm"] > 0:                     return "🟡 Buying Dips"
         if row["_pm"] > 0:                     return "🟠 Weak Rally"
         return "🔴 Distributing"
 
     out["Signal"] = out.apply(_sig, axis=1)
-    return out.drop(columns=[c for c in out.columns if c.startswith("_")]) \
-              .sort_values("Score", ascending=False).reset_index(drop=True)
-
-
-def _kpi_row(df):
-    c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Top Deliv (1W)",  df.nlargest(1,"1W_deliv_pct").iloc[0]["sector"],
-              f"{df.nlargest(1,'1W_deliv_pct').iloc[0]['1W_deliv_pct']:.1f}%")
-    c2.metric("Top Deliv (1M)",  df.nlargest(1,"1M_deliv_pct").iloc[0]["sector"],
-              f"{df.nlargest(1,'1M_deliv_pct').iloc[0]['1M_deliv_pct']:.1f}%")
-    c3.metric("Top Deliv (3M)",  df.nlargest(1,"3M_deliv_pct").iloc[0]["sector"],
-              f"{df.nlargest(1,'3M_deliv_pct').iloc[0]['3M_deliv_pct']:.1f}%")
-    c4.metric("Best Price (1W)", df.nlargest(1,"1W_price_chg_pct").iloc[0]["sector"],
-              f"{df.nlargest(1,'1W_price_chg_pct').iloc[0]['1W_price_chg_pct']:+.2f}%")
-    if "2W_price_chg_pct" in df.columns:
-        c5.metric("Best Price (2W)", df.nlargest(1,"2W_price_chg_pct").iloc[0]["sector"],
-                  f"{df.nlargest(1,'2W_price_chg_pct').iloc[0]['2W_price_chg_pct']:+.2f}%")
-
-
-def _outlook_chart(scored):
-    top = scored.head(10)
-    colors = top["Signal"].map({
-        "🟢 Accumulating":"#2ca02c","🟡 Buying Dips":"#f0b429",
-        "🟠 Weak Rally":"#f58518","🔴 Distributing":"#d62728",
-    }).tolist()
-    fig = go.Figure(go.Bar(
-        x=top["Score"], y=top["sector"], orientation="h",
-        marker_color=colors, text=top["Signal"], textposition="outside",
-        hovertemplate="<b>%{y}</b><br>Score: %{x:.1f}<extra></extra>",
-    ))
-    fig.update_layout(
-        xaxis=dict(title="Composite Score (0–100)", range=[0,115]),
-        yaxis=dict(autorange="reversed", tickfont=dict(size=12)),
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=160,r=200,t=20,b=40), height=360,
-    )
-    return fig
-
-
-def _comparison_chart(df, metric):
-    col_map = {
-        "Delivery %":     ("1W_deliv_pct","2W_deliv_pct","1M_deliv_pct","3M_deliv_pct"),
-        "Price Change %": ("1W_price_chg_pct","2W_price_chg_pct","1M_price_chg_pct","3M_price_chg_pct"),
-    }
-    cols   = [c for c in col_map[metric] if c in df.columns]
-    labels = ["1W","2W","1M","3M"]
-    colors = ["#4c78a8","#72b7b2","#f58518","#54a24b"]
-    sdf = df.sort_values(cols[-1], ascending=True).fillna(0)
-    fig = go.Figure()
-    for col, name, color in zip(cols, labels, colors):
-        fig.add_trace(go.Bar(
-            y=sdf["sector"], x=sdf[col], name=name, orientation="h",
-            marker_color=color, opacity=0.85,
-            hovertemplate=f"<b>%{{y}}</b><br>{name}: %{{x:.2f}}%<extra></extra>",
-        ))
-    fig.update_layout(
-        barmode="group",
-        xaxis=dict(title=metric, zeroline=True, zerolinecolor="rgba(255,255,255,0.3)", ticksuffix="%"),
-        yaxis=dict(tickfont=dict(size=11)),
-        legend=dict(orientation="h", y=1.04, x=0, font=dict(size=12)),
-        plot_bgcolor="rgba(0,0,0,0)", paper_bgcolor="rgba(0,0,0,0)",
-        margin=dict(l=160,r=40,t=40,b=50),
-        height=max(440, len(df)*28+120), bargap=0.18, bargroupgap=0.06,
-    )
-    return fig
+    drop_cols = [c for c in out.columns if c.startswith("_")]
+    return out.drop(columns=drop_cols).sort_values("Score", ascending=False).reset_index(drop=True)
 
 
 # ── Main render ───────────────────────────────────────────────────────────────
@@ -313,31 +291,34 @@ def render(selected_date: date, min_turnover: float) -> None:
         f"**{selected_date.strftime('%d %b %Y')}**"
     )
 
-    sector_df    = get_sector_master_performance(selected_date, min_turnover_lacs=min_turnover)
-    subsector_df = get_subsector_master_performance(selected_date, min_turnover_lacs=min_turnover)
+    sector_df    = cached_sector_master_performance(selected_date, min_turnover)
+    subsector_df = cached_subsector_master_performance(selected_date, min_turnover)
 
     if sector_df.empty:
         st.warning("No data available. Run a backfill first.")
         return
 
-    _kpi_row(sector_df)
+    performance_kpi_strip(sector_df)
     st.markdown("---")
 
-    # ── 1-2 Week Outlook ─────────────────────────────────────────────────────
+    # ── 1-2 Week Outlook ──────────────────────────────────────────────────────
     st.markdown("### 📈 1–2 Week Sector Outlook")
-    st.caption("Score = 35% delivery momentum + 25% base conviction + 25% price momentum + 15% acceleration")
+    st.caption(
+        "Score = 35% delivery momentum + 25% base conviction "
+        "+ 25% price momentum + 15% acceleration"
+    )
     scored = _compute_outlook(sector_df)
-    top3 = scored.head(3)
     c1, c2, c3 = st.columns(3)
-    for col, (_, row) in zip([c1,c2,c3], top3.iterrows()):
-        col.metric(f"{row['Signal']} — {row['sector']}",
-                   f"Score: {row['Score']:.0f}/100",
-                   f"Deliv {row['1W_deliv_pct']:.1f}% vs {row['3M_deliv_pct']:.1f}% (3M avg)")
-    st.plotly_chart(_outlook_chart(scored), use_container_width=True)
-
+    for col, (_, row) in zip([c1, c2, c3], scored.head(3).iterrows()):
+        col.metric(
+            f"{row['Signal']} — {row['sector']}",
+            f"Score: {row['Score']:.0f}/100",
+            f"Deliv {row['1W_deliv_pct']:.1f}% vs {row['3M_deliv_pct']:.1f}% (3M avg)",
+        )
+    st.plotly_chart(outlook_bar_chart(scored), use_container_width=True)
     st.markdown("---")
 
-    # ── Master expandable table ───────────────────────────────────────────────
+    # ── Master Performance Table ──────────────────────────────────────────────
     st.markdown("### 📋 Master Performance Table")
 
     with st.expander("❓ How to read this table", expanded=False):
@@ -349,15 +330,13 @@ def render(selected_date: date, min_turnover: float) -> None:
 
 **Delivery % columns (1W / 2W / 1M / 3M)**
 : Turnover-weighted average of daily delivery % over the period.
-  Higher delivery % = more shares taken home (not squared off intraday) = investor conviction.
+  Higher delivery % = more shares taken home = investor conviction.
   Compare short-period to long-period: rising delivery over time → accumulation.
 
 **Expanding rows**
 : Click ▶ next to a **Sector** to see its sub-sectors.
   Click ▶ next to a **Sub-Sector** to see individual stock performance.
   The number in **(  )** is the stock count passing your turnover filter.
-
-**Reading signals together**
 
 | Price % | Delivery % | What it likely means |
 |---------|------------|----------------------|
@@ -373,150 +352,79 @@ def render(selected_date: date, min_turnover: float) -> None:
         "Numbers in **(  )** = stock count in that sub-sector"
     )
 
-    _SORT_COL_MAP = {
-        "1W Price%":  "1W_price_chg_pct",
-        "2W Price%":  "2W_price_chg_pct",
-        "1M Price%":  "1M_price_chg_pct",
-        "3M Price%":  "3M_price_chg_pct",
-        "1W Deliv%":  "1W_deliv_pct",
-        "2W Deliv%":  "2W_deliv_pct",
-        "1M Deliv%":  "1M_deliv_pct",
-        "3M Deliv%":  "3M_deliv_pct",
-    }
-    _METRIC_LABELS = list(_SORT_COL_MAP.keys())
-
-    # ── Sort controls ─────────────────────────────────────────────────────────
-    sc1, sc2, sc3 = st.columns([2.5, 2.5, 1.2])
-    with sc1:
-        sort_by = st.selectbox("Sort by", _METRIC_LABELS, index=0, key="master_sort_col")
-    with sc2:
-        sort_dir = st.radio("Order", ["Highest first", "Lowest first"],
-                            horizontal=True, key="master_sort_dir")
-    with sc3:
-        st.write("")
-        st.write("")
-        if st.button("Collapse All", use_container_width=True, key="collapse_all_btn"):
-            st.session_state["exp_sectors"] = set()
-            st.session_state["exp_subsectors"] = set()
-            st.rerun()
-
-    # ── Custom filter builder ─────────────────────────────────────────────────
-    st.markdown(
-        "<div style='font-size:13px;font-weight:600;margin-bottom:4px'>"
-        "Custom Filters &nbsp;<span style='font-weight:400;color:#aaa'>"
-        "— type your own thresholds, all rows must match (AND logic)</span></div>",
-        unsafe_allow_html=True,
+    # ── Stock search — native selectbox typeahead ─────────────────────────────
+    all_stocks_df = cached_all_stocks()
+    stock_options = (
+        [f"{r['symbol']} — {r['company_name']}" for _, r in all_stocks_df.iterrows()]
+        if not all_stocks_df.empty else []
     )
 
-    if "custom_filters" not in st.session_state:
-        st.session_state["custom_filters"] = []
+    chosen = st.selectbox(
+        "stock_search",
+        options=stock_options,
+        index=None,
+        placeholder="🔍  Search by stock name or symbol…",
+        key="stock_search_select",
+        label_visibility="collapsed",
+    )
 
-    _OP_LABELS   = ["> greater than", "< less than"]
-    _OP_SYMBOLS  = {">  greater than": ">", "< less than": "<"}
+    if chosen:
+        selected_symbol = chosen.split(" — ")[0].strip()
+        with st.spinner(f"Loading {selected_symbol}…"):
+            results = cached_search_stocks(selected_date, selected_symbol, min_turnover)
+            results = results[results["symbol"] == selected_symbol]
 
-    # Column header labels for the filter rows
-    fh1, fh2, fh3, fh4, fh5 = st.columns([0.12, 2.5, 1.5, 1.8, 0.5])
-    fh2.markdown("<small style='color:#888'>Metric</small>", unsafe_allow_html=True)
-    fh3.markdown("<small style='color:#888'>Condition</small>", unsafe_allow_html=True)
-    fh4.markdown("<small style='color:#888'>Value (%)</small>", unsafe_allow_html=True)
-
-    delete_idx = None
-    for i, flt in enumerate(st.session_state["custom_filters"]):
-        fc0, fc1, fc2, fc3, fc4 = st.columns([0.12, 2.5, 1.5, 1.8, 0.5])
-        fc0.markdown(
-            f"<div style='font-size:11px;color:#888;padding-top:8px'>#{i+1}</div>",
-            unsafe_allow_html=True,
-        )
-        with fc1:
-            cur_lbl = flt.get("label", _METRIC_LABELS[0])
-            lbl_idx = _METRIC_LABELS.index(cur_lbl) if cur_lbl in _METRIC_LABELS else 0
-            st.selectbox("m", _METRIC_LABELS, index=lbl_idx,
-                         key=f"fm_{i}", label_visibility="collapsed")
-        with fc2:
-            cur_op = flt.get("op", ">")
-            op_lbl = _OP_LABELS[0] if cur_op == ">" else _OP_LABELS[1]
-            op_idx = _OP_LABELS.index(op_lbl)
-            st.selectbox("op", _OP_LABELS, index=op_idx,
-                         key=f"fo_{i}", label_visibility="collapsed")
-        with fc3:
-            st.number_input(
-                "val", value=float(flt.get("value", 0.0)),
-                min_value=-100.0, max_value=100.0, step=0.5, format="%.1f",
-                key=f"fv_{i}", label_visibility="collapsed",
+        if results.empty:
+            st.info(
+                f"No trading data for **{selected_symbol}** on "
+                f"{selected_date.strftime('%d %b %Y')}. Try a different date."
             )
-        with fc4:
-            if st.button("✕", key=f"fdel_{i}", use_container_width=True):
-                delete_idx = i
-
-    # Handle delete (persist current widget values before removing)
-    if delete_idx is not None:
-        for j in range(len(st.session_state["custom_filters"])):
-            if f"fm_{j}" in st.session_state:
-                op_raw = st.session_state.get(f"fo_{j}", _OP_LABELS[0])
-                st.session_state["custom_filters"][j].update({
-                    "label": st.session_state[f"fm_{j}"],
-                    "op":    ">" if op_raw.startswith(">") else "<",
-                    "value": float(st.session_state.get(f"fv_{j}", 0.0)),
-                })
-        st.session_state["custom_filters"].pop(delete_idx)
-        st.rerun()
-
-    # Add / Clear buttons
-    ba, bc = st.columns([1.5, 1.5])
-    with ba:
-        if st.button("＋ Add Filter", use_container_width=True, key="add_filter_btn"):
-            st.session_state["custom_filters"].append(
-                {"label": "1W Price%", "op": ">", "value": 0.0}
-            )
-            st.rerun()
-    with bc:
-        if st.button("✕ Clear All Filters", use_container_width=True, key="clear_filters_btn"):
-            st.session_state["custom_filters"] = []
-            st.rerun()
-
-    # ── Apply sort + filters ──────────────────────────────────────────────────
-    display_df = sector_df.copy()
-    for i, flt in enumerate(st.session_state["custom_filters"]):
-        label = st.session_state.get(f"fm_{i}", flt.get("label", _METRIC_LABELS[0]))
-        op_raw = st.session_state.get(f"fo_{i}", _OP_LABELS[0])
-        op     = ">" if op_raw.startswith(">") else "<"
-        val    = float(st.session_state.get(f"fv_{i}", flt.get("value", 0.0)))
-        col    = _SORT_COL_MAP.get(label)
-        if col and col in display_df.columns:
-            mask = display_df[col] > val if op == ">" else display_df[col] < val
-            display_df = display_df[mask]
-
-    sort_col  = _SORT_COL_MAP[sort_by]
-    ascending = sort_dir == "Lowest first"
-    display_df = display_df.sort_values(
-        sort_col, ascending=ascending, na_position="last"
-    ).reset_index(drop=True)
-
-    # Active filter summary badge
-    if st.session_state["custom_filters"]:
-        active = []
-        for i, flt in enumerate(st.session_state["custom_filters"]):
-            lbl = st.session_state.get(f"fm_{i}", flt.get("label", "?"))
-            op_raw = st.session_state.get(f"fo_{i}", _OP_LABELS[0])
-            op_sym = ">" if op_raw.startswith(">") else "<"
-            val = float(st.session_state.get(f"fv_{i}", flt.get("value", 0.0)))
-            active.append(f"**{lbl}** {op_sym} {val:.1f}%")
-        st.caption(
-            f"Active filters ({len(active)}): " + " &nbsp;AND&nbsp; ".join(active)
-            + f" → **{len(display_df)} sector(s)** match"
-        )
-
-    if display_df.empty:
-        st.info("No sectors match the current filters. Use **✕ Clear All Filters** to reset.")
+        else:
+            show_cols = [c for c in _SEARCH_SHOW if c in results.columns]
+            cfg = {k: v for k, v in _SEARCH_COL_CONFIG.items() if k in show_cols}
+            st.dataframe(results[show_cols], column_config=cfg,
+                         use_container_width=True, hide_index=True)
     else:
-        _master_table(display_df, subsector_df, selected_date, min_turnover)
+        # ── Sort + Collapse controls ──────────────────────────────────────────
+        sc1, sc2, sc3 = st.columns([2.5, 2.5, 1.2])
+        with sc1:
+            sort_by = st.selectbox("Sort by", METRIC_LABELS, index=0, key=ss.MASTER_SORT_COL)
+        with sc2:
+            sort_dir = st.radio(
+                "Order", ["Highest first", "Lowest first"],
+                horizontal=True, key=ss.MASTER_SORT_DIR,
+            )
+        with sc3:
+            st.write("")
+            st.write("")
+            if st.button("Collapse All", use_container_width=True, key="collapse_all_btn"):
+                ss.collapse_all()
+                st.rerun()
+
+        # ── Custom filter builder ─────────────────────────────────────────────
+        active_filters = render_filter_builder()
+
+        # ── Apply sort + filters ──────────────────────────────────────────────
+        display_df = apply_filters(sector_df, active_filters)
+        render_filter_summary(active_filters, len(display_df))
+
+        sort_col  = SORT_COL_MAP[sort_by]
+        ascending = sort_dir == "Lowest first"
+        display_df = display_df.sort_values(
+            sort_col, ascending=ascending, na_position="last"
+        ).reset_index(drop=True)
+
+        if display_df.empty:
+            st.info("No sectors match the current filters. Use **✕ Clear All Filters** to reset.")
+        else:
+            _master_table(display_df, subsector_df, selected_date, min_turnover)
 
     st.markdown("---")
 
     # ── Visual comparison ─────────────────────────────────────────────────────
     st.markdown("### Visual Comparison")
     metric = st.radio("Compare by", ["Delivery %", "Price Change %"], horizontal=True)
-    st.plotly_chart(_comparison_chart(sector_df, metric), use_container_width=True)
+    st.plotly_chart(period_comparison_chart(sector_df, metric), use_container_width=True)
 
     with st.expander("ℹ️ Signal Legend", expanded=False):
         st.markdown("""
