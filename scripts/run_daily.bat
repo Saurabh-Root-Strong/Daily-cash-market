@@ -13,3 +13,8 @@ REM ── Fetch today's NSE data ───────────────�
 echo [%date% %time%] Starting daily fetch... >> logs\scheduler.log
 python -m src.cli daily >> logs\scheduler.log 2>&1
 echo [%date% %time%] Fetch complete. >> logs\scheduler.log
+
+REM ── Apply sector overrides so new symbols get classified immediately ───────
+echo [%date% %time%] Applying sector overrides... >> logs\scheduler.log
+python -m src.cli reload-overrides >> logs\scheduler.log 2>&1
+echo [%date% %time%] Sector overrides applied. >> logs\scheduler.log

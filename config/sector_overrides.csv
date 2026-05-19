@@ -416,3 +416,45 @@ SILVERCASE,ETF,ETF / Index Fund,,ETF / Index Product — excluded from sector an
 SILVERIETF,ETF,ETF / Index Fund,,ETF / Index Product — excluded from sector analysis
 SMALLCAP,ETF,ETF / Index Fund,,ETF / Index Product — excluded from sector analysis
 TATSILV,ETF,ETF / Index Fund,,ETF / Index Product — excluded from sector analysis
+TATAGOLD,ETF,ETF / Index Fund,,Gold ETF — excluded from sector analysis
+METALIETF,ETF,ETF / Index Fund,,Metal ETF — excluded from sector analysis
+DECNGOLD,ETF,ETF / Index Fund,,Gold ETF — excluded from sector analysis
+MOSILVER,ETF,ETF / Index Fund,,Silver ETF — excluded from sector analysis
+GROWWGOLD,ETF,ETF / Index Fund,,Gold ETF — excluded from sector analysis
+HDFCSILVER,ETF,ETF / Index Fund,,Silver ETF — excluded from sector analysis
+HDFCGOLD,ETF,ETF / Index Fund,,Gold ETF — excluded from sector analysis
+SUVEN,Healthcare,Pharmaceuticals,Pharma — CDMO / Specialty,Large turnover unmapped
+DHANUKA,Chemicals,Agrochemicals,Crop Protection Chemicals,Large turnover unmapped
+SEAMECLTD,Capital Goods,Shipbuilding & Repair,Ship Repair & Maintenance,Large turnover unmapped
+PURVA,Real Estate,Residential Real Estate,Residential Developer,Large turnover unmapped
+ARIHANTSUP,Capital Goods,Construction Materials,AAC Blocks,Large turnover unmapped
+SOMANYCERA,Capital Goods,Building Materials,Ceramic Tiles,Large turnover unmapped
+ASTEC,Chemicals,Agrochemicals,Herbicides & Fungicides,Large turnover unmapped
+PCJEWELLER,Consumer Goods,Jewellery & Accessories,Retail Jewellery,Large turnover unmapped
+RISHABH,Capital Goods,Electrical Equipment,Measuring Instruments,Large turnover unmapped
+EASEMYTRIP,E-Commerce,Travel & Booking Platforms,Online Travel Agency,Large turnover unmapped
+SOLEX,Energy,Renewable Energy,Solar EPC,Large turnover unmapped
+CCAVENUE,Financial,Payment Gateway & Fintech,Payment Processing,Large turnover unmapped
+KOPRAN,Healthcare,Pharmaceuticals,Generic APIs & Formulations,Large turnover unmapped
+EUREKAFORB,Consumer Goods,Home Appliances,Water Purifiers & Vacuums,Large turnover unmapped
+SANSTAR,FMCG,Starch & Derivatives,Modified Starch,Large turnover unmapped
+RESPONIND,Capital Goods,Electrical Equipment,Cables & Wires,Large turnover unmapped
+SAKSOFT,IT Industry,IT Services,Niche IT Services,Large turnover unmapped
+KPL,Capital Goods,Industrial Products,Plywood & Boards,Large turnover unmapped
+MUKANDLTD,Metals & Mining,Steel,Specialty Steel & Engineering,Large turnover unmapped
+GTLINFRA,Tele-Communication,Telecom Infrastructure,Tower Infrastructure,Large turnover unmapped
+ASIANENE,Energy,Renewable Energy,Solar Power,Large turnover unmapped
+RTNPOWER,Energy,Power Generation,Power Generation,Large turnover unmapped
+GREENLAM,Capital Goods,Building Materials,Laminates & Surfaces,Large turnover unmapped
+BUILDPRO,Capital Goods,Building Materials,Construction Chemicals,Large turnover unmapped
+MPSLTD,IT Industry,IT Services,Publishing & Content Tech,Large turnover unmapped
+KIRLOSIND,Capital Goods,Industrial Products,Industrial Conglomerate,Large turnover unmapped
+YASHO,Chemicals,Specialty Chemicals,Specialty Chemicals & Fragrances,Large turnover unmapped
+MASTEK,IT Industry,IT Services,Enterprise IT / ERP,Large turnover unmapped
+MONTECARLO,Consumer Goods,Apparel & Accessories,Ready-made Garments,Large turnover unmapped
+ASIANTILES,Capital Goods,Building Materials,Ceramic Tiles & Sanitaryware,Large turnover unmapped
+PRINCEPIPE,Capital Goods,Building Materials,Plastic Pipes & Fittings,Large turnover unmapped
+63MOONS,IT Industry,Financial Technology,Trading & Market Infra Tech,Large turnover unmapped
+MOREALTY,Real Estate,Residential Real Estate,Residential Developer,Large turnover unmapped
+AXISTECETF,ETF,ETF / Index Fund,,Technology ETF — excluded from sector analysis
+ITIETF,ETF,ETF / Index Fund,,Technology ETF — excluded from sector analysis
