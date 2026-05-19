@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from datetime import datetime
 
 # Ensure project root is on sys.path when run directly
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -20,6 +21,17 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 import streamlit as st
+
+_LAST_UPDATED_FILE = PROJECT_ROOT / "logs" / "last_updated.txt"
+
+
+def _read_last_updated() -> str | None:
+    """Return formatted fetch time from the marker file, or None if absent."""
+    try:
+        ts = datetime.fromisoformat(_LAST_UPDATED_FILE.read_text().strip())
+        return ts.strftime("%d %b %Y %I:%M %p")
+    except Exception:
+        return None
 
 
 def main() -> None:
@@ -70,7 +82,17 @@ def main() -> None:
         )
 
         st.divider()
-        st.caption(f"Data: {len(available_dates)} trading days")
+
+        # Data freshness info
+        last_updated = _read_last_updated()
+        if last_updated:
+            st.caption(f"Last fetched: {last_updated}")
+        st.caption(f"History: {len(available_dates)} trading days")
+
+        # One-click cache clear so user sees fresh data immediately after 7:30 PM job
+        if st.button("Refresh Data", help="Clear cached queries and reload latest data from DB"):
+            st.cache_data.clear()
+            st.rerun()
 
     from src.dashboard.views import sector_overview, sector_performance, stock_detail, signals
 

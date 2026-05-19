@@ -18,3 +18,8 @@ REM ── Apply sector overrides so new symbols get classified immediately ─�
 echo [%date% %time%] Applying sector overrides... >> logs\scheduler.log
 python -m src.cli reload-overrides >> logs\scheduler.log 2>&1
 echo [%date% %time%] Sector overrides applied. >> logs\scheduler.log
+
+REM ── Write fetch timestamp so dashboard can detect new data ────────────────
+echo [%date% %time%] Writing last_updated marker... >> logs\scheduler.log
+python -c "from datetime import datetime; open('logs/last_updated.txt','w').write(datetime.now().isoformat())"
+echo [%date% %time%] Done. >> logs\scheduler.log
