@@ -341,24 +341,56 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> No
                 hide_index=True,
                 use_container_width=True,
                 column_config={
-                    "symbol":        st.column_config.TextColumn("Symbol", width="small"),
-                    "company_name":  st.column_config.TextColumn("Company"),
-                    "industry":      st.column_config.TextColumn("Sub-Sector"),
+                    "symbol":        st.column_config.TextColumn("Symbol", width="small",
+                        help="NSE ticker symbol"),
+                    "company_name":  st.column_config.TextColumn("Company",
+                        help="Company full name from NSE sector master"),
+                    "industry":      st.column_config.TextColumn("Sub-Sector",
+                        help="Industry classification within the sector"),
                     "ltp":           st.column_config.NumberColumn(
                         "LTP (₹)", format="₹%.2f",
-                        help="Last traded price (most recent close in the period)"),
+                        help="Last Traded Price\n"
+                             "Formula: most recent close_price in the 7-day window\n"
+                             "= ARGMAX(close_price, trade_date)"),
                     "conviction":    st.column_config.TextColumn("Conviction",
-                        help="Strong/Buying = top-third delivery % (institutional accumulation)\n"
-                             "Watch = mid-third delivery %\n"
-                             "Weak = bottom-third delivery % (relative to sector peers)"),
+                        help="Sector-relative signal — compares each stock against its sector peers\n\n"
+                             "Thresholds: top-33% and bottom-33% of Wtd Deliv % in this sector\n\n"
+                             "🔥 Strong  = Wtd Deliv % ≥ top-33% AND price falling  (smart money buying the dip)\n"
+                             "✅ Buying  = Wtd Deliv % ≥ top-33% AND price rising\n"
+                             "👀 Watch   = Wtd Deliv % in middle-33%\n"
+                             "⚪ Weak    = Wtd Deliv % ≤ bottom-33%  (low institutional interest)\n\n"
+                             "For AVOID sectors:\n"
+                             "❌ Exit Now  = Wtd Deliv % ≤ bottom-33% AND price rising  (most dangerous)\n"
+                             "⚠️ Reducing  = Wtd Deliv % ≤ bottom-33%\n"
+                             "📉 Fading    = price rising but delivery not low\n"
+                             "⚪ Neutral   = no clear signal"),
                     "wtd_deliv_per": st.column_config.NumberColumn(
                         "Wtd Deliv %", format="%.1f%%",
-                        help="Turnover-weighted delivery % — last 7 days"),
+                        help="Turnover-Weighted Delivery %  (last 7 trading days)\n\n"
+                             "Formula: Σ(deliv_per × turnover_lacs) / Σ(turnover_lacs)\n\n"
+                             "Why weighted: a ₹500 Cr stock at 60% delivery counts more\n"
+                             "than a ₹5 Cr stock at 80% delivery.\n"
+                             "High % = institutions are taking delivery (holding, not squaring off)"),
                     "deliv_value_cr":st.column_config.NumberColumn(
                         "Deliv Value (₹ Cr)", format="₹%.1f",
-                        help="₹ value of shares delivered — absolute institutional conviction"),
-                    "turnover_cr":   st.column_config.NumberColumn("Turnover (₹ Cr)", format="₹%.1f"),
-                    "price_chg_pct": st.column_config.NumberColumn("Price Chg %", format="%+.2f%%"),
+                        help="Delivery Value in ₹ Crores  (last 7 trading days)\n\n"
+                             "Formula: Σ(deliv_per / 100 × turnover_lacs) / 100\n\n"
+                             "= actual ₹ worth of shares taken home (not squared off intraday)\n"
+                             "This is the absolute measure of institutional conviction —\n"
+                             "retail traders square off intraday, institutions take delivery"),
+                    "turnover_cr":   st.column_config.NumberColumn(
+                        "Turnover (₹ Cr)", format="₹%.1f",
+                        help="Total Traded Value in ₹ Crores  (last 7 trading days)\n\n"
+                             "Formula: Σ(turnover_lacs) / 100\n\n"
+                             "= total buy + sell value traded\n"
+                             "High turnover with low delivery % = speculative / intraday activity\n"
+                             "High turnover with high delivery % = institutional accumulation"),
+                    "price_chg_pct": st.column_config.NumberColumn(
+                        "Price Chg %", format="%+.2f%%",
+                        help="Average Daily Price Change %  (last 7 trading days)\n\n"
+                             "Formula: AVG((close_price − prev_close) / prev_close × 100)\n\n"
+                             "Simple average across all trading days in the window\n"
+                             "+ = price rising on average   − = price falling on average"),
                 },
             )
 
