@@ -261,7 +261,9 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> No
         f"<span>3M avg: <b>{d3m_str}</b></span>"
         f"</div>"
         f"<div style='margin-top:4px;font-size:11px;color:rgba(255,255,255,0.5)'>"
-        f"Horizon: {row['horizon']} &nbsp;|&nbsp; Delivery Value 1W: {dv1w_str}</div>"
+        f"Coverage: <b style='color:rgba(255,255,255,0.75)'>{row.get('coverage','—')}</b>"
+        f" &nbsp;|&nbsp; Horizon: {row['horizon']}"
+        f" &nbsp;|&nbsp; Delivery Value 1W: {dv1w_str}</div>"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -403,20 +405,21 @@ The first stock has *far* more real institutional commitment — which is why we
 
     # ── Sector reference table — identify every bubble ────────────────────────
     with st.expander("🗂️ Sector Reference — full list ranked by score", expanded=False):
-        ref_cols = ["sector", "signal", "accum_score", "deliv_momentum",
-                    "price_1m", "deliv_1w", "deliv_3m", "horizon", "action"]
+        ref_cols = ["sector", "signal", "accum_score", "coverage",
+                    "deliv_momentum", "price_1w", "deliv_1w", "deliv_3m", "action"]
         ref_df = rot[[c for c in ref_cols if c in rot.columns]].copy()
-        ref_df.columns = ["Sector", "Signal", "Score", "Deliv Momentum %",
-                          "Price 1M %", "Wtd Deliv 1W %", "Wtd Deliv 3M %",
-                          "Horizon", "Action"][: len(ref_df.columns)]
+        ref_df.columns = ["Sector", "Signal", "Score", "Coverage",
+                          "Deliv Momentum %", "Price 1W %",
+                          "Wtd Deliv 1W %", "Wtd Deliv 3M %", "Action"][: len(ref_df.columns)]
         st.dataframe(
             ref_df,
             hide_index=True,
             use_container_width=True,
             column_config={
                 "Score":           st.column_config.ProgressColumn("Score", min_value=0, max_value=100, format="%.0f"),
+                "Coverage":        st.column_config.TextColumn("Coverage", help="Swing=3–15d · Positional=1–2M · Mid Term=3–4M"),
                 "Deliv Momentum %":st.column_config.NumberColumn(format="%.1f%%"),
-                "Price 1M %":      st.column_config.NumberColumn(format="%+.2f%%"),
+                "Price 1W %":      st.column_config.NumberColumn(format="%+.2f%%"),
                 "Wtd Deliv 1W %":  st.column_config.NumberColumn(format="%.1f%%"),
                 "Wtd Deliv 3M %":  st.column_config.NumberColumn(format="%.1f%%"),
             },
@@ -498,12 +501,10 @@ The first stock has *far* more real institutional commitment — which is why we
             "All sectors ranked by accumulation score. "
             "Delivery Momentum = (1W delivery − 3M baseline) ÷ 3M baseline × 100"
         )
-        display = rot[[
-            "sector", "signal", "accum_score", "horizon",
-            "deliv_momentum", "deliv_1w", "deliv_1m", "deliv_3m",
-            "price_1w", "price_1m", "price_3m",
-            "deliv_val_1w_cr",
-        ]].copy()
+        display_cols = ["sector", "signal", "accum_score", "coverage", "horizon",
+                        "deliv_momentum", "deliv_1w", "deliv_1m", "deliv_3m",
+                        "price_1w", "price_1m", "price_3m", "deliv_val_1w_cr"]
+        display = rot[[c for c in display_cols if c in rot.columns]].copy()
 
         st.dataframe(
             display,
@@ -512,10 +513,16 @@ The first stock has *far* more real institutional commitment — which is why we
                 "signal":         st.column_config.TextColumn("Signal"),
                 "accum_score":    st.column_config.ProgressColumn(
                     "Score", max_value=100, format="%.0f"),
+                "coverage":       st.column_config.TextColumn(
+                    "Coverage",
+                    help="Swing = 3–15 days (Elder impulse + Weinstein Stage 1→2)\n"
+                         "Positional = 1–2 months (Weinstein Stage 2 + Pring weekly KST)\n"
+                         "Mid Term = 3–4 months (Murphy sector leadership + steep 100-day slope)\n"
+                         "BTST = not shown here — use Signals page for single-day delivery spikes"),
                 "horizon":        st.column_config.TextColumn("Horizon"),
                 "deliv_momentum": st.column_config.NumberColumn(
                     "Deliv Momentum %", format="%+.1f%%",
-                    help="(1W delivery − 3M avg) ÷ 3M avg × 100. Positive = institutions increasing conviction"),
+                    help="(1W delivery − 3M avg) ÷ 3M avg × 100"),
                 "deliv_1w":       st.column_config.NumberColumn("1W Deliv%",  format="%.1f%%"),
                 "deliv_1m":       st.column_config.NumberColumn("1M Deliv%",  format="%.1f%%"),
                 "deliv_3m":       st.column_config.NumberColumn("3M Deliv%",  format="%.1f%%"),
@@ -524,7 +531,7 @@ The first stock has *far* more real institutional commitment — which is why we
                 "price_3m":       st.column_config.NumberColumn("3M Price%",  format="%+.2f%%"),
                 "deliv_val_1w_cr":st.column_config.NumberColumn(
                     "1W Deliv Val (Cr)", format="₹%.1f",
-                    help="₹ value of shares delivered in last 1 week — the absolute conviction measure"),
+                    help="₹ value of shares delivered in last 1 week — absolute conviction"),
             },
             use_container_width=True,
             hide_index=True,

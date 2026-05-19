@@ -209,6 +209,84 @@ def get_sector_rotation(
         else:
             horizon = "—"
 
+        # ── Trading timeframe coverage ────────────────────────────────────────
+        # Grounded in:
+        #   Weinstein (4-stage volume/price model — Stage 1→2 breakout criteria)
+        #   Elder     (Triple Screen — weekly trend + daily impulse confirmation)
+        #   Murphy    (Sector rotation leadership phases, typically 4–12 weeks)
+        #   Pring     (KST multi-period Rate-of-Change: daily/weekly/monthly alignment)
+        #   O'Neil    (CANSLIM "I" — ≥40% volume surge signals institutional entry)
+        #
+        # BTST (1-2 days) is NOT computed here — sector-level 7-day windows are too
+        # coarse. Use the Signals page (single-day delivery spikes) for BTST setups.
+
+        _buy_signals = {"🔥 Secret Accumulation", "✅ Confirmed Accumulation",
+                        "👀 Early Accumulation"}
+        cov = []
+
+        if signal in _buy_signals:
+            # Swing (3–15 days)
+            # Weinstein: volume 2-3× avg at Stage 1→2 breakout.
+            # Elder: short-term impulse (Force Index > 0 on daily screen) aligns with
+            #        weekly trend already up.
+            # Condition: delivery acceleration this week + momentum shift > 10%
+            swing_buy = (short_term and deliv_momentum > 10)
+            if swing_buy:
+                cov.append("Swing")
+
+            # Positional (1–2 months)
+            # Weinstein Stage 2: price above rising 30-week SMA, sustained volume.
+            # Elder: weekly MACD above zero, medium-term Force Index positive.
+            # Pring KST weekly: ROC alignment across 10/13/15/20-day periods.
+            # Condition: 1-month delivery above 3-month baseline + modest 100-day upslope
+            #            + delivery momentum still meaningful (>5%)
+            positional_buy = (
+                not pd.isna(d1m) and not pd.isna(d3m)
+                and d1m > d3m
+                and trend_slope > 0.03
+                and deliv_momentum > 5
+            )
+            if positional_buy:
+                cov.append("Positional")
+
+            # Mid Term (3–4 months)
+            # Murphy: confirmed sector leadership phase (4–12 weeks per phase).
+            # Weinstein: Stage 2 mature — 30-week SMA steeply sloped upward.
+            # Pring long-term KST: 9/12/18/24-month ROC all aligned.
+            # O'Neil: dominant institutional sponsorship, multi-month accumulation.
+            # Condition: steep 100-day slope + 1-month delivery still above 3-month
+            #            + momentum confirms ongoing conviction (>10%)
+            mid_term_buy = (
+                trend_slope > 0.12
+                and not pd.isna(d1m) and not pd.isna(d3m)
+                and d1m > d3m
+                and deliv_momentum > 10
+            )
+            if mid_term_buy:
+                cov.append("Mid Term")
+
+        else:
+            # Avoid/exit signals — coverage = how long the weakness is likely to persist
+            # Same framework applied in reverse (delivery contracting, slope falling)
+            weak_accel = (not pd.isna(d1w) and not pd.isna(d2w) and d1w < d2w)
+
+            # Swing exit: fast delivery deterioration this week
+            if weak_accel and deliv_momentum < -10:
+                cov.append("Swing")
+
+            # Positional exit: 1-month delivery below 3-month + negative 100-day slope
+            if (not pd.isna(d1m) and not pd.isna(d3m)
+                    and d1m < d3m and trend_slope < -0.03):
+                cov.append("Positional")
+
+            # Mid Term exit: steep downward slope + sustained multi-month weakness
+            if (trend_slope < -0.12
+                    and not pd.isna(d1m) and not pd.isna(d3m)
+                    and d1m < d3m and deliv_momentum < -10):
+                cov.append("Mid Term")
+
+        coverage = " + ".join(cov) if cov else "—"
+
         # ── Accumulation score (0–100) ────────────────────────────────────────
         # Components: momentum (40%) + trend slope (30%) + acceleration (20%)
         # + bonus/penalty for signal type (10%)
@@ -231,6 +309,7 @@ def get_sector_rotation(
             "signal":            signal,
             "action":            action,
             "horizon":           horizon,
+            "coverage":          coverage,
             "accum_score":       accum_score,
             "deliv_momentum":    round(deliv_momentum, 1) if not pd.isna(deliv_momentum) else None,
             "trend_slope":       round(trend_slope,    3),
