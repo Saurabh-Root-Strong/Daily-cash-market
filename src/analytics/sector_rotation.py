@@ -360,6 +360,7 @@ def get_sector_stocks_rotation(
             b.symbol,
             s.company_name,
             s.industry,
+            ARGMAX(b.close_price, b.trade_date)                AS ltp,
             SUM(b.deliv_per * b.turnover_lacs)
                 / NULLIF(SUM(b.turnover_lacs), 0)              AS wtd_deliv_per,
             SUM(b.deliv_per / 100.0 * b.turnover_lacs) / 100  AS deliv_value_cr,

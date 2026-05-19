@@ -314,7 +314,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> No
             stocks = stocks.sort_values(sort_col, ascending=False)
 
             st.dataframe(
-                stocks[["symbol", "company_name", "industry", "conviction",
+                stocks[["symbol", "company_name", "industry", "ltp", "conviction",
                          "wtd_deliv_per", "deliv_value_cr", "turnover_cr", "price_chg_pct"]],
                 hide_index=True,
                 use_container_width=True,
@@ -322,6 +322,9 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> No
                     "symbol":        st.column_config.TextColumn("Symbol", width="small"),
                     "company_name":  st.column_config.TextColumn("Company"),
                     "industry":      st.column_config.TextColumn("Sub-Sector"),
+                    "ltp":           st.column_config.NumberColumn(
+                        "LTP (₹)", format="₹%.2f",
+                        help="Last traded price (most recent close in the period)"),
                     "conviction":    st.column_config.TextColumn("Conviction"),
                     "wtd_deliv_per": st.column_config.NumberColumn(
                         "Wtd Deliv %", format="%.1f%%",
