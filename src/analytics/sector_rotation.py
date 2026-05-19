@@ -79,7 +79,10 @@ def get_sector_rotation(
 
     start = as_of_date - timedelta(days=lookback_days)
 
-    # One row per sector per trading day — turnover-weighted aggregation
+    # One row per sector per trading day.
+    # Delivery %  → turnover-weighted: ₹ value delivered is the right conviction measure.
+    # Price change → simple average across stocks: prevents a single momentum stock
+    #   dominating on its high-volume news day and creating fake sector signals.
     sql = """
         SELECT
             s.sector,
@@ -88,12 +91,11 @@ def get_sector_rotation(
                 / NULLIF(SUM(b.turnover_lacs), 0)              AS wtd_deliv_per,
             SUM(b.deliv_per / 100.0 * b.turnover_lacs) / 100  AS deliv_value_cr,
             SUM(b.turnover_lacs) / 100                         AS turnover_cr,
-            SUM(
+            AVG(
                 CASE WHEN b.prev_close > 0
                 THEN (b.close_price - b.prev_close) / b.prev_close * 100
-                     * b.turnover_lacs END
-            ) / NULLIF(SUM(CASE WHEN b.prev_close > 0 THEN b.turnover_lacs END), 0)
-                AS wtd_price_chg
+                END
+            )                                                  AS avg_price_chg
         FROM daily_data b
         INNER JOIN sector_master s ON b.symbol = s.symbol
         WHERE b.series IN ('EQ', 'SM', 'ST')
@@ -144,9 +146,9 @@ def get_sector_rotation(
         d3m = _wavg(90, "wtd_deliv_per")
 
         # ── Period price returns — turnover-weighted across days
-        p1w = _wavg(7,  "wtd_price_chg")
-        p1m = _wavg(30, "wtd_price_chg")
-        p3m = _wavg(90, "wtd_price_chg")
+        p1w = _wavg(7,  "avg_price_chg")
+        p1m = _wavg(30, "avg_price_chg")
+        p3m = _wavg(90, "avg_price_chg")
 
         # ── Delivery value (₹ Cr) — total delivered ₹ over the period
         dv1w = _sum(7,  "deliv_value_cr")
@@ -402,12 +404,11 @@ def get_sector_rotation_history(
                 / NULLIF(SUM(b.turnover_lacs), 0)              AS wtd_deliv_per,
             SUM(b.deliv_per / 100.0 * b.turnover_lacs) / 100  AS deliv_value_cr,
             SUM(b.turnover_lacs) / 100                         AS turnover_cr,
-            SUM(
+            AVG(
                 CASE WHEN b.prev_close > 0
                 THEN (b.close_price - b.prev_close) / b.prev_close * 100
-                     * b.turnover_lacs END
-            ) / NULLIF(SUM(CASE WHEN b.prev_close > 0 THEN b.turnover_lacs END), 0)
-                AS wtd_price_chg
+                END
+            )                                                  AS avg_price_chg
         FROM daily_data b
         INNER JOIN sector_master s ON b.symbol = s.symbol
         WHERE b.series IN ('EQ', 'SM', 'ST')
