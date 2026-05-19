@@ -98,6 +98,34 @@ def get_sector_drilldown(trade_date: date, sector_name: str, top_n: int = 10) ->
     top_by_turnover = sector_df.nlargest(top_n, "turnover_lacs")
     contribution_table = sector_df.nlargest(top_n, "turnover_lacs")
 
+    # Sub-sector summary — turnover-weighted delivery % across ALL stocks
+    # Simple avg(deliv_per) is misleading: a ₹5000 stock with 60% delivery
+    # delivers far more real money than a ₹50 stock with 70% delivery.
+    # Weighting by turnover (price × qty) gives the true conviction signal.
+    def _agg_subsector(g: pd.DataFrame) -> pd.Series:
+        total_to = g["turnover_lacs"].sum()
+        wtd_deliv = (
+            (g["deliv_per"] * g["turnover_lacs"]).sum() / total_to
+            if total_to > 0 else g["deliv_per"].mean()
+        )
+        return pd.Series({
+            "wtd_deliv_per":         wtd_deliv,
+            "simple_deliv_per":      g["deliv_per"].mean(),
+            "avg_price_chg":         g["price_change_pct"].mean(),
+            "stock_count":           len(g),
+            "total_turnover_lacs":   total_to,
+            "total_deliv_value_lacs": g["deliv_value_lacs"].sum(),
+        })
+
+    subsector_summary = (
+        sector_df.dropna(subset=["industry"])
+        .groupby("industry")
+        .apply(_agg_subsector)
+        .reset_index()
+        .sort_values("wtd_deliv_per", ascending=False)
+        .reset_index(drop=True)
+    )
+
     sector_summary = {
         "stock_count": len(sector_df),
         "total_turnover_lacs": total_turnover,
@@ -111,6 +139,7 @@ def get_sector_drilldown(trade_date: date, sector_name: str, top_n: int = 10) ->
         "top_by_delivery_value": top_by_delivery_value,
         "top_by_turnover": top_by_turnover,
         "contribution_table": contribution_table,
+        "subsector_summary": subsector_summary,
         "sector_summary": sector_summary,
     }
 

@@ -13,6 +13,9 @@ from src.dashboard.cache.queries import (
     cached_all_stocks,
     cached_stock_suggestions,
     cached_search_stocks,
+    cached_sector_rotation,
+    cached_sector_rotation_history,
+    cached_sector_stocks_rotation,
 )
 
 __all__ = [
@@ -29,4 +32,7 @@ __all__ = [
     "cached_all_stocks",
     "cached_stock_suggestions",
     "cached_search_stocks",
+    "cached_sector_rotation",
+    "cached_sector_rotation_history",
+    "cached_sector_stocks_rotation",
 ]

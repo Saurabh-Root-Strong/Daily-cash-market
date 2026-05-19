@@ -85,6 +85,28 @@ def cached_top_distribution(
     return get_top_distribution(trade_date, limit=limit)
 
 
+@st.cache_data(ttl=_TTL)
+def cached_sector_rotation(trade_date: date, min_turnover_lacs: float) -> pd.DataFrame:
+    from src.analytics.sector_rotation import get_sector_rotation
+    return get_sector_rotation(trade_date, min_turnover_lacs=min_turnover_lacs)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_sector_rotation_history(
+    sector: str, trade_date: date, min_turnover_lacs: float
+) -> pd.DataFrame:
+    from src.analytics.sector_rotation import get_sector_rotation_history
+    return get_sector_rotation_history(sector, trade_date, min_turnover_lacs=min_turnover_lacs)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_sector_stocks_rotation(
+    sector: str, trade_date: date, min_turnover_lacs: float
+) -> pd.DataFrame:
+    from src.analytics.sector_rotation import get_sector_stocks_rotation
+    return get_sector_stocks_rotation(sector, trade_date, min_turnover_lacs=min_turnover_lacs)
+
+
 @st.cache_data(ttl=1800)  # 30 min — stock list rarely changes
 def cached_all_stocks() -> pd.DataFrame:
     from src.analytics.sector_aggregator import get_all_stocks

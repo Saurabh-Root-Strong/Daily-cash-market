@@ -84,33 +84,44 @@ def sector_overview_chart(sector_df: pd.DataFrame) -> go.Figure:
 
 
 def sub_sector_chart(drilldown: dict, sector_name: str) -> go.Figure:
-    """Bar chart of sub-sector avg delivery % inside a sector drilldown."""
-    stocks = drilldown.get("top_by_delivery_pct", pd.DataFrame())
-    if stocks.empty:
+    """Sub-sector bar chart using turnover-weighted delivery % (the correct conviction metric).
+
+    Simple avg(deliv%) is misleading — a ₹5000 stock at 60% delivery delivers
+    far more real money than a ₹50 stock at 70%. Weighting by turnover (price×qty)
+    gives the true picture of where institutional money is actually being committed.
+    """
+    sub = drilldown.get("subsector_summary", pd.DataFrame())
+    if sub.empty:
         return go.Figure()
 
-    sub = (
-        stocks.groupby("industry", as_index=False)
-        .agg(avg_deliv_per=("deliv_per", "mean"),
-             avg_price_chg=("price_change_pct", "mean"),
-             stock_count=("symbol", "count"))
-        .sort_values("avg_deliv_per", ascending=False)
+    deliv_val_cr = sub["total_deliv_value_lacs"] / 100
+    hover = (
+        "<b>%{x}</b><br>"
+        "Wtd Delivery %: <b>%{y:.1f}%</b><br>"
+        "Delivery Value: ₹" + deliv_val_cr.round(1).astype(str) + " Cr<br>"
+        "Stocks: " + sub["stock_count"].astype(str) +
+        " &nbsp;|&nbsp; Simple Avg: " + sub["simple_deliv_per"].round(1).astype(str) + "%"
+        "<extra></extra>"
     )
 
     fig = go.Figure(go.Bar(
         x=sub["industry"],
-        y=sub["avg_deliv_per"],
+        y=sub["wtd_deliv_per"],
         marker_color=_sign_colors(sub["avg_price_chg"]),
-        hovertemplate="<b>%{x}</b><br>Avg Delivery %: %{y:.1f}%<extra></extra>",
-        text=sub["stock_count"].apply(lambda n: f"{n} stocks"),
+        hovertemplate=hover,
+        text=sub.apply(
+            lambda r: f"₹{r['total_deliv_value_lacs']/100:.0f} Cr  |  {int(r['stock_count'])} stocks",
+            axis=1,
+        ),
         textposition="outside",
+        textfont=dict(size=10),
     ))
     fig.update_layout(
-        title=f"{sector_name} — Sub-Sector Delivery %",
+        title=f"{sector_name} — Sub-Sector Wtd Delivery % (by ₹ Traded Value)",
         xaxis=dict(tickangle=-25, tickfont=dict(size=11)),
-        yaxis=dict(title="Avg Delivery %"),
+        yaxis=dict(title="Turnover-Weighted Delivery %"),
         plot_bgcolor=PLOT_BG, paper_bgcolor=PAPER_BG,
-        height=340, margin=dict(b=120, t=50), bargap=0.4,
+        height=380, margin=dict(b=120, t=50), bargap=0.4,
     )
     return fig
 
