@@ -229,7 +229,10 @@ def _rotation_clock_chart(df: pd.DataFrame, period_name: str) -> go.Figure:
     fig.add_hline(y= 0.25, line_dash="dot", line_width=1.0, line_color="rgba(0,200,83,0.30)")
     fig.add_hline(y=-0.25, line_dash="dot", line_width=1.0, line_color="rgba(213,0,0,0.30)")
 
-    max_dv = max(df["deliv_value_cr"].max(), 1.0)
+    # Log-scale sizes: compress the 100x delivery-value range so Banking/IT
+    # don't dwarf smaller sectors. sqrt gives a gentler compression than log.
+    max_dv    = max(df["deliv_value_cr"].max(), 1.0)
+    _sqrt_max = max_dv ** 0.5
 
     phase_order = ["Leading", "Improving", "Neutral", "Weakening", "Lagging"]
     for phase in phase_order:
@@ -238,11 +241,11 @@ def _rotation_clock_chart(df: pd.DataFrame, period_name: str) -> go.Figure:
             continue
         meta  = _PHASE_META[phase]
         color = meta["color"]
-        sizes = (grp["deliv_value_cr"] / max_dv * 44 + 14).clip(14, 58)
+        sizes = ((grp["deliv_value_cr"].clip(lower=0) ** 0.5) / _sqrt_max * 28 + 10).clip(10, 38)
 
-        chg_str  = grp["deliv_chg_pct"].apply(lambda v: f"{v:+.1f}%" if pd.notna(v) else "N/A").values
-        dv_str   = grp["deliv_value_cr"].apply(lambda v: f"₹{v:,.0f} Cr").values
-        to_str   = grp["turnover_cr"].apply(lambda v: f"₹{v:,.0f} Cr").values
+        chg_str = grp["deliv_chg_pct"].apply(lambda v: f"{v:+.1f}%" if pd.notna(v) else "N/A").values
+        dv_str  = grp["deliv_value_cr"].apply(lambda v: f"₹{v:,.0f} Cr").values
+        to_str  = grp["turnover_cr"].apply(lambda v: f"₹{v:,.0f} Cr").values
 
         customdata = list(zip(
             grp["sector"].values,
@@ -257,13 +260,10 @@ def _rotation_clock_chart(df: pd.DataFrame, period_name: str) -> go.Figure:
         fig.add_trace(go.Scatter(
             x=grp["cum_price_ret_pct"],
             y=grp["slope_z"],
-            mode="markers+text",
+            mode="markers",
             name=meta["label"],
-            text=grp["sector"].apply(lambda s: s[:12]),
-            textposition="top center",
-            textfont=dict(size=9, color="rgba(255,255,255,0.60)"),
             marker=dict(
-                color=color, size=sizes, opacity=0.88,
+                color=color, size=sizes, opacity=0.85,
                 line=dict(width=1.5, color="rgba(255,255,255,0.35)"),
             ),
             customdata=customdata,
@@ -719,6 +719,54 @@ def _render_cross_period(selected_date: date, min_turnover: float) -> None:
 
 # ── Rotation Clock Tab ────────────────────────────────────────────────────────
 
+def _render_clock_legend(df: pd.DataFrame) -> None:
+    """Compact sector-reference grid below the bubble chart — replaces inline text labels."""
+    phase_order  = ["Leading", "Improving", "Neutral", "Weakening", "Lagging"]
+    cells_html   = ""
+
+    for phase in phase_order:
+        grp = df[df["phase"] == phase].sort_values("deliv_value_cr", ascending=False)
+        if grp.empty:
+            continue
+        meta  = _PHASE_META[phase]
+        color = meta["color"]
+        label = meta["label"]
+
+        sector_pills = ""
+        for _, row in grp.iterrows():
+            pr     = row["cum_price_ret_pct"]
+            pr_c   = POSITIVE_COLOR if pr > 0 else NEGATIVE_COLOR
+            chg    = row.get("deliv_chg_pct")
+            chg_s  = f"{chg:+.0f}%" if pd.notna(chg) else "—"
+            chg_c  = POSITIVE_COLOR if (pd.notna(chg) and chg > 0) else NEGATIVE_COLOR
+            sector_pills += (
+                f"<div style='display:inline-flex;align-items:center;gap:5px;"
+                f"background:rgba(255,255,255,0.04);border-left:3px solid {color};"
+                f"border-radius:0 4px 4px 0;padding:3px 8px;margin:2px;white-space:nowrap'>"
+                f"<span style='font-size:12px;font-weight:600'>{row['sector']}</span>"
+                f"<span style='font-size:10px;color:{pr_c}'>{pr:+.1f}%</span>"
+                f"<span style='font-size:10px;color:{chg_c}'>DV{chg_s}</span>"
+                f"</div>"
+            )
+
+        cells_html += (
+            f"<div style='margin-bottom:6px'>"
+            f"<div style='font-size:11px;font-weight:600;color:{color};margin-bottom:3px'>{label}</div>"
+            f"<div style='display:flex;flex-wrap:wrap'>{sector_pills}</div>"
+            f"</div>"
+        )
+
+    st.markdown(
+        f"<div style='background:rgba(255,255,255,0.02);border-radius:6px;"
+        f"padding:8px 12px;margin-bottom:12px'>"
+        f"<div style='font-size:11px;color:rgba(255,255,255,0.4);margin-bottom:6px'>"
+        f"SECTOR REFERENCE — hover chart bubbles for detail &nbsp;·&nbsp; "
+        f"% = price return &nbsp;·&nbsp; DV% = delivery value change vs prior period</div>"
+        f"{cells_html}</div>",
+        unsafe_allow_html=True,
+    )
+
+
 def _render_rotation_clock(selected_date: date, min_turnover: float) -> None:
     st.caption(
         "Where is institutional money flowing across different time horizons? "
@@ -786,6 +834,9 @@ Catching a sector moving from Improving to Leading (rising delivery + turning po
         use_container_width=True,
         key=f"rot_clock_chart_{window}",
     )
+
+    # Sector reference legend — all sectors in a compact color-coded grid
+    _render_clock_legend(df)
 
     # Two-column phase cards
     leading   = df[df["phase"] == "Leading"].reset_index(drop=True)
