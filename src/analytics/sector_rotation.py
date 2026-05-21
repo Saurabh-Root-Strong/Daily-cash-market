@@ -521,3 +521,98 @@ def get_sector_rotation_timeframe(
     })
 
     return df.sort_values("slope_z", ascending=False).reset_index(drop=True)
+
+
+def get_rotation_clock_backtest(
+    as_of_date: date,
+    window_trading_days: int = 22,
+    min_turnover_lacs: Optional[float] = None,
+) -> pd.DataFrame:
+    """
+    Signal validation: what did the rotation clock signal N trading days ago
+    and how did those sectors actually perform since then?
+
+    signal_date = the trading day exactly window_trading_days before as_of_date
+    signals     = rotation phases computed AS OF signal_date (no look-ahead)
+    forward_ret = cumulative turnover-weighted sector return from signal_date → as_of_date
+
+    Returns signals enriched with:
+      signal_date (date), forward_ret_pct (%), signal_correct (bool|None)
+
+    signal_correct:
+      Leading / Improving (inflow) → correct if forward_ret > 0%
+      Weakening / Lagging (outflow) → correct if forward_ret < 0%
+      Neutral → None (no prediction made)
+    """
+    if min_turnover_lacs is None:
+        min_turnover_lacs = get_min_turnover_filter()
+
+    # Find the Nth trading day before as_of_date
+    dates_df = query_dataframe(
+        "SELECT DISTINCT trade_date FROM daily_data "
+        "WHERE trade_date < ? ORDER BY trade_date DESC LIMIT ?",
+        [as_of_date, window_trading_days + 1],
+    )
+    if len(dates_df) < window_trading_days:
+        return pd.DataFrame()
+
+    signal_date = pd.to_datetime(dates_df["trade_date"].iloc[window_trading_days - 1]).date()
+
+    # Rotation signals AS OF signal_date (pure past — no future data used)
+    signals = get_sector_rotation_timeframe(signal_date, window_trading_days, min_turnover_lacs)
+    if signals.empty:
+        return pd.DataFrame()
+
+    # Actual forward returns: signal_date → as_of_date
+    fwd_sql = """
+        SELECT
+            s.sector,
+            b.trade_date,
+            SUM(b.turnover_lacs * (b.close_price - b.prev_close)
+                    / NULLIF(b.prev_close, 0) * 100)
+                / NULLIF(SUM(CASE WHEN b.prev_close > 0 THEN b.turnover_lacs END), 0)
+                                                        AS wtd_daily_ret_pct
+        FROM daily_data b
+        INNER JOIN sector_master s ON b.symbol = s.symbol
+        WHERE s.sector NOT IN ('ETF', 'Others')
+          AND b.series IN ('EQ', 'SM', 'ST')
+          AND b.turnover_lacs >= ?
+          AND b.trade_date >  ?
+          AND b.trade_date <= ?
+        GROUP BY s.sector, b.trade_date
+        ORDER BY s.sector, b.trade_date
+    """
+    fwd = query_dataframe(fwd_sql, [min_turnover_lacs, signal_date, as_of_date])
+    if fwd.empty:
+        return pd.DataFrame()
+
+    fwd["trade_date"] = pd.to_datetime(fwd["trade_date"]).dt.date
+
+    forward_rets: dict[str, float] = {}
+    for sector, grp in fwd.groupby("sector"):
+        daily = grp.sort_values("trade_date")["wtd_daily_ret_pct"].fillna(0) / 100
+        forward_rets[sector] = float((1 + daily).prod() - 1) * 100
+
+    signals = signals.copy()
+    signals["signal_date"]     = signal_date
+    signals["forward_ret_pct"] = signals["sector"].map(forward_rets)
+
+    def _correct(row) -> Optional[bool]:
+        phase = row["phase"]
+        fwd_r = row.get("forward_ret_pct")
+        if fwd_r is None or pd.isna(fwd_r) or phase == "Neutral":
+            return None
+        if phase in ("Leading", "Improving"):
+            return bool(fwd_r > 0)
+        return bool(fwd_r < 0)   # Weakening, Lagging
+
+    signals["signal_correct"] = signals.apply(_correct, axis=1)
+
+    # Sort: phase rank first, then forward return descending within each phase
+    _rank = {"Leading": 0, "Improving": 1, "Neutral": 2, "Weakening": 3, "Lagging": 4}
+    signals["_pr"] = signals["phase"].map(_rank).fillna(5)
+    return (
+        signals.sort_values(["_pr", "forward_ret_pct"], ascending=[True, False])
+        .drop(columns="_pr")
+        .reset_index(drop=True)
+    )

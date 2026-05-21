@@ -19,6 +19,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from src.dashboard.cache.queries import (
+    cached_rotation_clock_backtest,
     cached_sector_rotation,
     cached_sector_rotation_history,
     cached_sector_rotation_timeframe,
@@ -719,6 +720,123 @@ def _render_cross_period(selected_date: date, min_turnover: float) -> None:
 
 # ── Rotation Clock Tab ────────────────────────────────────────────────────────
 
+def _render_signal_validation(
+    selected_date: date,
+    window: int,
+    min_turnover: float,
+    period_name: str,
+) -> None:
+    """Show how the rotation clock signals from N days ago actually performed."""
+    with st.spinner("Computing signal validation…"):
+        bt = cached_rotation_clock_backtest(selected_date, window, float(min_turnover))
+
+    if bt.empty:
+        st.info(f"Not enough history to backtest {period_name} signals. Need at least {window * 2} trading days.")
+        return
+
+    signal_date = bt["signal_date"].iloc[0]
+    n_fwd_days  = bt["forward_ret_pct"].dropna().shape[0]
+
+    st.caption(
+        f"Signals computed **as of {signal_date.strftime('%d %b %Y')}** "
+        f"({window} trading days before {selected_date.strftime('%d %b %Y')}). "
+        f"Forward returns measured from that date to today."
+    )
+
+    # ── Phase-level accuracy summary ──────────────────────────────────────────
+    inflow_phases  = ["Leading", "Improving"]
+    outflow_phases = ["Weakening", "Lagging"]
+    active_phases  = [p for p in ["Leading", "Improving", "Weakening", "Lagging"]
+                      if not bt[bt["phase"] == p].empty]
+
+    total_correct    = 0
+    total_predicted  = 0
+
+    cols = st.columns(len(active_phases) + 1)
+
+    for i, phase in enumerate(active_phases):
+        grp  = bt[(bt["phase"] == phase) & bt["forward_ret_pct"].notna()]
+        meta = _PHASE_META[phase]
+        if grp.empty:
+            cols[i].metric(meta["label"], "—")
+            continue
+
+        avg_ret   = grp["forward_ret_pct"].mean()
+        n_correct = int(grp["signal_correct"].fillna(False).sum())
+        n_total   = len(grp)
+        hit_rate  = n_correct / n_total * 100
+
+        total_correct   += n_correct
+        total_predicted += n_total
+
+        # Color logic: inflow phases want positive avg_ret, outflow want negative
+        expected_positive = phase in inflow_phases
+        ret_ok = (avg_ret > 0) if expected_positive else (avg_ret < 0)
+
+        cols[i].metric(
+            label=f"{meta['label']} ({n_total})",
+            value=f"{avg_ret:+.1f}% avg",
+            delta=f"{hit_rate:.0f}% hit  {n_correct}/{n_total}",
+            delta_color="normal" if ret_ok else "inverse",
+            help=(
+                f"{'Inflow' if expected_positive else 'Outflow'} signal.\n"
+                f"Correct = forward return {'> 0%' if expected_positive else '< 0%'}."
+            ),
+        )
+
+    overall_pct = total_correct / total_predicted * 100 if total_predicted else 0
+    if   overall_pct >= 65: verdict = "✅ High"
+    elif overall_pct >= 50: verdict = "⚖️ Mixed"
+    else:                   verdict = "❌ Low"
+
+    cols[-1].metric(
+        label="Overall Accuracy",
+        value=f"{overall_pct:.0f}%",
+        delta=f"{total_correct}/{total_predicted}  {verdict}",
+        delta_color="normal" if overall_pct >= 55 else "inverse",
+        help="Correct calls ÷ total predicted (excludes Neutral sectors).",
+    )
+
+    st.markdown("---")
+
+    # ── Sector detail table ───────────────────────────────────────────────────
+    disp = bt[[
+        "sector", "phase", "forward_ret_pct", "signal_correct",
+        "cum_price_ret_pct", "slope_z", "deliv_chg_pct",
+    ]].copy()
+
+    disp["signal_correct"] = disp["signal_correct"].map(
+        lambda v: "✅ Correct" if v is True else ("❌ Wrong" if v is False else "—")
+    )
+
+    st.dataframe(
+        disp,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "sector":          st.column_config.TextColumn("Sector"),
+            "phase":           st.column_config.TextColumn("Phase on Signal Date",
+                help=f"Rotation phase as of {signal_date.strftime('%d %b %Y')}"),
+            "forward_ret_pct": st.column_config.NumberColumn(
+                "Actual Forward Return", format="%+.2f%%",
+                help=f"Cumulative sector return from {signal_date.strftime('%d %b')} → {selected_date.strftime('%d %b')}"),
+            "signal_correct":  st.column_config.TextColumn("Correct?",
+                help="✅ = signal direction matched actual return\n"
+                     "❌ = signal was wrong\n"
+                     "— = Neutral (no directional prediction)"),
+            "cum_price_ret_pct": st.column_config.NumberColumn(
+                "Price Ret on Signal Date", format="%+.2f%%",
+                help=f"Sector price return as of {signal_date.strftime('%d %b')} — what triggered the phase classification"),
+            "slope_z":         st.column_config.NumberColumn(
+                "Delivery Slope Z", format="%+.2f",
+                help="Delivery momentum Z-score on the signal date"),
+            "deliv_chg_pct":   st.column_config.NumberColumn(
+                "Del Chg% on Signal Date", format="%+.1f%%",
+                help="Delivery value change vs prior period on the signal date"),
+        },
+    )
+
+
 def _render_clock_legend(df: pd.DataFrame) -> None:
     """Compact sector-reference grid below the bubble chart — replaces inline text labels."""
     phase_order  = ["Leading", "Improving", "Neutral", "Weakening", "Lagging"]
@@ -900,6 +1018,17 @@ Catching a sector moving from Improving to Leading (rising delivery + turning po
     with st.expander("📊 Cross-Period Comparison — All 4 Timeframes at Once", expanded=False):
         st.caption("See each sector's rotation phase simultaneously across 1W / 2W / 1M / 3M.")
         _render_cross_period(selected_date, min_turnover)
+
+    # ── Signal Validation ─────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown(f"### 📊 Signal Validation — Did the {sel} Rotation Clock Call It Right?")
+    st.caption(
+        f"The rotation clock computed signals **{window} trading days ago**. "
+        f"This section shows whether those signals actually predicted what happened since then. "
+        f"Inflow signals (Leading/Improving) should have produced positive returns. "
+        f"Outflow signals (Weakening/Lagging) should have produced negative returns."
+    )
+    _render_signal_validation(selected_date, window, min_turnover, sel)
 
     # Summary table
     st.markdown("---")

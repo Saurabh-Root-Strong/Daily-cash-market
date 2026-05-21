@@ -235,3 +235,11 @@ def cached_sector_rotation_timeframe(
 ) -> pd.DataFrame:
     from src.analytics.sector_rotation import get_sector_rotation_timeframe
     return get_sector_rotation_timeframe(trade_date, window_trading_days, min_turnover_lacs)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_rotation_clock_backtest(
+    trade_date: date, window_trading_days: int, min_turnover_lacs: float
+) -> pd.DataFrame:
+    from src.analytics.sector_rotation import get_rotation_clock_backtest
+    return get_rotation_clock_backtest(trade_date, window_trading_days, min_turnover_lacs)
