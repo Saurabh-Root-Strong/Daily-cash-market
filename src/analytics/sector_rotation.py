@@ -386,3 +386,138 @@ def get_sector_rotation_history(
         ORDER BY b.trade_date
     """
     return query_dataframe(sql, [sector, start, as_of_date, min_turnover_lacs])
+
+
+def get_sector_rotation_timeframe(
+    as_of_date: date,
+    window_trading_days: int = 5,
+    min_turnover_lacs: Optional[float] = None,
+) -> pd.DataFrame:
+    """
+    Multi-period sector rotation clock — where is money flowing in vs out?
+
+    Compares two consecutive N-trading-day windows:
+      current  = last N trading days up to as_of_date
+      prior    = N trading days before that
+
+    Returns one row per sector with:
+      phase             — Leading / Improving / Weakening / Lagging / Neutral
+      flow_signal       — human-readable label
+      delivery_slope    — linear slope of daily wtd delivery % (positive = rising conviction)
+      slope_z           — cross-sectional z-score of delivery_slope across all sectors
+      cum_price_ret_pct — cumulative turnover-weighted price return over current window (%)
+      deliv_value_cr    — total delivery value ₹ Cr (current window)
+      deliv_chg_pct     — delivery value change % vs prior equal-length window
+    """
+    if min_turnover_lacs is None:
+        min_turnover_lacs = get_min_turnover_filter()
+
+    lookback_cal = max(window_trading_days * 3 + 45, 200)
+    start_date   = as_of_date - timedelta(days=lookback_cal)
+
+    hist_sql = """
+        SELECT
+            s.sector,
+            b.trade_date,
+            SUM(b.deliv_per * b.turnover_lacs)
+                / NULLIF(SUM(b.turnover_lacs), 0)              AS wtd_deliv_pct,
+            SUM(b.deliv_per / 100.0 * b.turnover_lacs) / 100  AS deliv_value_cr,
+            SUM(b.turnover_lacs) / 100                         AS turnover_cr,
+            SUM(b.turnover_lacs * (b.close_price - b.prev_close) / NULLIF(b.prev_close, 0) * 100)
+                / NULLIF(SUM(CASE WHEN b.prev_close > 0 THEN b.turnover_lacs END), 0)
+                                                               AS wtd_daily_ret_pct
+        FROM daily_data b
+        INNER JOIN sector_master s ON b.symbol = s.symbol
+        WHERE s.sector NOT IN ('ETF', 'Others')
+          AND b.series IN ('EQ', 'SM', 'ST')
+          AND b.turnover_lacs >= ?
+          AND b.trade_date > ?
+          AND b.trade_date <= ?
+        GROUP BY s.sector, b.trade_date
+        ORDER BY s.sector, b.trade_date
+    """
+    hist = query_dataframe(hist_sql, [min_turnover_lacs, start_date, as_of_date])
+    if hist.empty:
+        return pd.DataFrame()
+
+    hist["trade_date"] = pd.to_datetime(hist["trade_date"]).dt.date
+    all_dates          = sorted(hist["trade_date"].unique())
+
+    if len(all_dates) < window_trading_days + 3:
+        return pd.DataFrame()
+
+    curr_dates = set(all_dates[-window_trading_days:])
+    prev_dates = (
+        set(all_dates[-(window_trading_days * 2):-window_trading_days])
+        if len(all_dates) >= window_trading_days * 2
+        else set()
+    )
+
+    records = []
+    for sector, grp in hist.groupby("sector"):
+        grp  = grp.sort_values("trade_date")
+        curr = grp[grp["trade_date"].isin(curr_dates)].reset_index(drop=True)
+        prev = grp[grp["trade_date"].isin(prev_dates)].reset_index(drop=True)
+
+        if len(curr) < 3:
+            continue
+
+        # Delivery % linear slope — direction of institutional conviction
+        y = curr["wtd_deliv_pct"].ffill().bfill().values
+        x = np.arange(len(y), dtype=float)
+        delivery_slope = float(np.polyfit(x, y, 1)[0]) if len(y) >= 3 else 0.0
+
+        # Cumulative price return (compound daily turnover-weighted returns)
+        daily_rets    = curr["wtd_daily_ret_pct"].fillna(0) / 100
+        cum_price_pct = float((1 + daily_rets).prod() - 1) * 100
+
+        # Delivery value: current vs prior period
+        curr_dv = float(curr["deliv_value_cr"].sum())
+        if not prev.empty:
+            prev_dv     = float(prev["deliv_value_cr"].sum())
+            deliv_chg   = (curr_dv - prev_dv) / max(abs(prev_dv), 0.1) * 100 if prev_dv != 0 else None
+        else:
+            prev_dv   = None
+            deliv_chg = None
+
+        records.append({
+            "sector":              sector,
+            "delivery_slope":      round(delivery_slope, 4),
+            "cum_price_ret_pct":   round(cum_price_pct, 2),
+            "deliv_value_cr":      round(curr_dv, 1),
+            "deliv_value_prev_cr": round(prev_dv, 1) if prev_dv is not None else None,
+            "deliv_chg_pct":       round(deliv_chg, 1) if deliv_chg is not None else None,
+            "turnover_cr":         round(float(curr["turnover_cr"].sum()), 1),
+            "avg_deliv_pct":       round(float(curr["wtd_deliv_pct"].mean()), 1),
+            "num_days":            int(len(curr)),
+        })
+
+    if not records:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(records)
+
+    # Cross-sectional z-score of delivery slope
+    s_mean = df["delivery_slope"].mean()
+    s_std  = df["delivery_slope"].std()
+    df["slope_z"] = ((df["delivery_slope"] - s_mean) / max(s_std, 1e-9)).round(2)
+
+    def _phase(row) -> str:
+        sz = row["slope_z"]
+        pr = row["cum_price_ret_pct"]
+        if   sz >  0.25 and pr >  0.5:  return "Leading"
+        elif sz >  0.25 and pr < -0.5:  return "Improving"
+        elif sz < -0.25 and pr >  0.5:  return "Weakening"
+        elif sz < -0.25 and pr < -0.5:  return "Lagging"
+        else:                            return "Neutral"
+
+    df["phase"] = df.apply(_phase, axis=1)
+    df["flow_signal"] = df["phase"].map({
+        "Leading":   "💰 MONEY ENTERING",
+        "Improving": "🔍 CONTRARIAN INFLOW",
+        "Weakening": "⚠️ TOPPING",
+        "Lagging":   "📤 MONEY EXITING",
+        "Neutral":   "⚖️ SIDEWAYS",
+    })
+
+    return df.sort_values("slope_z", ascending=False).reset_index(drop=True)

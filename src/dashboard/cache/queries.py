@@ -227,3 +227,11 @@ def cached_options_chain(
 ) -> pd.DataFrame:
     from src.analytics.fno_expiry import get_options_chain
     return get_options_chain(trade_date, symbol, expiry_date, instrument)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_sector_rotation_timeframe(
+    trade_date: date, window_trading_days: int, min_turnover_lacs: float
+) -> pd.DataFrame:
+    from src.analytics.sector_rotation import get_sector_rotation_timeframe
+    return get_sector_rotation_timeframe(trade_date, window_trading_days, min_turnover_lacs)

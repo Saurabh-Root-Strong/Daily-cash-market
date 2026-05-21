@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from datetime import date
 
+import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
@@ -20,6 +21,7 @@ import streamlit as st
 from src.dashboard.cache.queries import (
     cached_sector_rotation,
     cached_sector_rotation_history,
+    cached_sector_rotation_timeframe,
     cached_sector_stocks_rotation,
 )
 from src.dashboard.constants import NEGATIVE_COLOR, POSITIVE_COLOR, PLOT_BG, PAPER_BG, GRID_COLOR
@@ -42,19 +44,23 @@ _SIGNAL_META = {
     "❌ Active Selling":        {"color": "#d50000", "rank": 7, "invest": False},
 }
 
+_PHASE_META = {
+    "Leading":   {"color": "#00c853", "label": "💰 Leading",   "desc": "Delivery rising + price rising — institutions & price aligned"},
+    "Improving": {"color": "#40c4ff", "label": "🔍 Improving", "desc": "Delivery rising + price falling — contrarian accumulation zone"},
+    "Neutral":   {"color": "#888888", "label": "⚖️ Neutral",   "desc": "No clear directional momentum"},
+    "Weakening": {"color": "#ff9100", "label": "⚠️ Weakening", "desc": "Delivery falling + price rising — distributing into rally"},
+    "Lagging":   {"color": "#d50000", "label": "📤 Lagging",   "desc": "Delivery falling + price falling — institutional exit"},
+}
+
+
+# ── Smart Money Quadrant Chart ────────────────────────────────────────────────
 
 def _quadrant_chart(df: pd.DataFrame) -> go.Figure:
-    """Smart Money Quadrant: X = 1W cumulative price return, Y = Z-Score vs 100D norm.
-
-    Y-axis is Z-Score (σ above 100D daily-DV mean) — statistically grounded.
-    Z ≥ 1.0 = delivery surge (top ~16% of days) = institutions entering.
-    Z ≤ -0.5 = delivery below normal = institutions reducing exposure.
-    """
+    """Smart Money Quadrant: X = 1W cumulative price return, Y = Z-Score vs 100D norm."""
     plot_df = df.dropna(subset=["price_1w", "z_score"]).copy()
     if plot_df.empty:
         return go.Figure()
 
-    # ── Axis ranges: natural padding ─────────────────────────────────────────
     x_vals = plot_df["price_1w"]
     y_vals = plot_df["z_score"]
     x_pad = max((x_vals.max() - x_vals.min()) * 0.25, 0.5)
@@ -66,7 +72,6 @@ def _quadrant_chart(df: pd.DataFrame) -> go.Figure:
 
     fig = go.Figure()
 
-    # ── Quadrant shading (split at X=0, Y=0) ─────────────────────────────────
     fig.add_shape(type="rect", x0=x0, x1=0, y0=0,  y1=y1,
                   fillcolor="rgba(0,200,83,0.10)",  line_width=0, layer="below")
     fig.add_shape(type="rect", x0=0,  x1=x1, y0=0, y1=y1,
@@ -76,7 +81,6 @@ def _quadrant_chart(df: pd.DataFrame) -> go.Figure:
     fig.add_shape(type="rect", x0=0,  x1=x1, y0=y0, y1=0,
                   fillcolor="rgba(213,0,0,0.10)",   line_width=0, layer="below")
 
-    # ── Quadrant labels ───────────────────────────────────────────────────────
     corner_labels = [
         ("🔥 Secret Accum",    x0 + x_pad * 0.3, y1 - y_pad * 0.3, "left",  "top",    "rgba(0,200,83,0.18)"),
         ("✅ Confirmed Buy",     x1 - x_pad * 0.3, y1 - y_pad * 0.3, "right", "top",    "rgba(30,144,255,0.18)"),
@@ -93,11 +97,9 @@ def _quadrant_chart(df: pd.DataFrame) -> go.Figure:
             borderpad=5,
         )
 
-    # ── Crosshairs at Z=0 and price=0 ────────────────────────────────────────
     fig.add_hline(y=0, line_color="rgba(255,255,255,0.35)", line_width=1.5)
     fig.add_vline(x=0, line_color="rgba(255,255,255,0.35)", line_width=1.5)
 
-    # ── Reference line at Z=1.0 (delivery surge threshold) ───────────────────
     if y1 > 1.0:
         fig.add_hline(
             y=1.0,
@@ -107,7 +109,6 @@ def _quadrant_chart(df: pd.DataFrame) -> go.Figure:
             annotation_position="top right",
             annotation_font=dict(size=10, color="rgba(0,200,83,0.7)"),
         )
-    # ── Reference line at Z=-0.5 (weakness threshold) ────────────────────────
     if y0 < -0.5:
         fig.add_hline(
             y=-0.5,
@@ -118,7 +119,6 @@ def _quadrant_chart(df: pd.DataFrame) -> go.Figure:
             annotation_font=dict(size=10, color="rgba(255,80,0,0.7)"),
         )
 
-    # ── One trace per signal so legend shows signal names ────────────────────
     signal_order = [
         "🔥 Secret Accumulation",
         "✅ Confirmed Accumulation",
@@ -189,6 +189,127 @@ def _quadrant_chart(df: pd.DataFrame) -> go.Figure:
     return fig
 
 
+# ── Rotation Clock Chart ──────────────────────────────────────────────────────
+
+def _rotation_clock_chart(df: pd.DataFrame, period_name: str) -> go.Figure:
+    """RRG-style bubble chart: X = price return, Y = delivery slope z-score."""
+    if df.empty:
+        return go.Figure()
+
+    x_vals = df["cum_price_ret_pct"]
+    y_vals = df["slope_z"]
+    x_pad  = max((x_vals.max() - x_vals.min()) * 0.30, 1.0)
+    y_pad  = max((y_vals.max() - y_vals.min()) * 0.30, 0.4)
+    x0, x1 = x_vals.min() - x_pad, x_vals.max() + x_pad
+    y0, y1 = y_vals.min() - y_pad, y_vals.max() + y_pad
+
+    fig = go.Figure()
+
+    # Quadrant shading — top-left=Improving, top-right=Leading, bottom-left=Lagging, bottom-right=Weakening
+    fig.add_shape(type="rect", x0=x0, x1=0,  y0=0,  y1=y1, fillcolor="rgba(64,196,255,0.09)", line_width=0, layer="below")
+    fig.add_shape(type="rect", x0=0,  x1=x1, y0=0,  y1=y1, fillcolor="rgba(0,200,83,0.09)",  line_width=0, layer="below")
+    fig.add_shape(type="rect", x0=x0, x1=0,  y0=y0, y1=0,  fillcolor="rgba(213,0,0,0.09)",   line_width=0, layer="below")
+    fig.add_shape(type="rect", x0=0,  x1=x1, y0=y0, y1=0,  fillcolor="rgba(255,109,0,0.07)", line_width=0, layer="below")
+
+    corner_labels = [
+        ("🔍 CONTRARIAN INFLOW",  x0 + x_pad * 0.35, y1 - y_pad * 0.35, "left",  "top",    "rgba(64,196,255,0.18)"),
+        ("💰 MONEY ENTERING",     x1 - x_pad * 0.35, y1 - y_pad * 0.35, "right", "top",    "rgba(0,200,83,0.18)"),
+        ("📤 MONEY EXITING",      x0 + x_pad * 0.35, y0 + y_pad * 0.35, "left",  "bottom", "rgba(213,0,0,0.18)"),
+        ("⚠️ TOPPING / DIST",    x1 - x_pad * 0.35, y0 + y_pad * 0.35, "right", "bottom", "rgba(255,109,0,0.18)"),
+    ]
+    for label, lx, ly, xanchor, yanchor, bgcolor in corner_labels:
+        fig.add_annotation(
+            x=lx, y=ly, text=f"<b>{label}</b>",
+            showarrow=False, font=dict(size=12, color="rgba(255,255,255,0.75)"),
+            xanchor=xanchor, yanchor=yanchor, bgcolor=bgcolor, borderpad=5,
+        )
+
+    fig.add_hline(y=0, line_color="rgba(255,255,255,0.35)", line_width=1.5)
+    fig.add_vline(x=0, line_color="rgba(255,255,255,0.35)", line_width=1.5)
+    fig.add_hline(y= 0.25, line_dash="dot", line_width=1.0, line_color="rgba(0,200,83,0.30)")
+    fig.add_hline(y=-0.25, line_dash="dot", line_width=1.0, line_color="rgba(213,0,0,0.30)")
+
+    max_dv = max(df["deliv_value_cr"].max(), 1.0)
+
+    phase_order = ["Leading", "Improving", "Neutral", "Weakening", "Lagging"]
+    for phase in phase_order:
+        grp = df[df["phase"] == phase]
+        if grp.empty:
+            continue
+        meta  = _PHASE_META[phase]
+        color = meta["color"]
+        sizes = (grp["deliv_value_cr"] / max_dv * 44 + 14).clip(14, 58)
+
+        chg_str  = grp["deliv_chg_pct"].apply(lambda v: f"{v:+.1f}%" if pd.notna(v) else "N/A").values
+        dv_str   = grp["deliv_value_cr"].apply(lambda v: f"₹{v:,.0f} Cr").values
+        to_str   = grp["turnover_cr"].apply(lambda v: f"₹{v:,.0f} Cr").values
+
+        customdata = list(zip(
+            grp["sector"].values,
+            grp["flow_signal"].values,
+            dv_str,
+            grp["slope_z"].round(2).values,
+            chg_str,
+            to_str,
+            grp["avg_deliv_pct"].round(1).values,
+        ))
+
+        fig.add_trace(go.Scatter(
+            x=grp["cum_price_ret_pct"],
+            y=grp["slope_z"],
+            mode="markers+text",
+            name=meta["label"],
+            text=grp["sector"].apply(lambda s: s[:12]),
+            textposition="top center",
+            textfont=dict(size=9, color="rgba(255,255,255,0.60)"),
+            marker=dict(
+                color=color, size=sizes, opacity=0.88,
+                line=dict(width=1.5, color="rgba(255,255,255,0.35)"),
+            ),
+            customdata=customdata,
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                f"<span style='color:{color}'>%{{customdata[1]}}</span><br>"
+                "─────────────────────────<br>"
+                "Price Return: <b>%{x:+.2f}%</b><br>"
+                "Delivery Slope Z: <b>%{y:+.2f}σ</b><br>"
+                "Delivery Value: <b>%{customdata[2]}</b><br>"
+                "Del Chg vs Prior: <b>%{customdata[4]}</b><br>"
+                "Avg Delivery %: %{customdata[6]:.1f}%<br>"
+                "Turnover: %{customdata[5]}"
+                "<extra></extra>"
+            ),
+        ))
+
+    fig.update_layout(
+        title=dict(
+            text=f"Sector Rotation Clock — {period_name}",
+            font=dict(size=16), x=0.5,
+        ),
+        plot_bgcolor=PLOT_BG, paper_bgcolor=PAPER_BG,
+        xaxis=dict(
+            title="← Price Falling  |  Cumulative Price Return (%)  |  Price Rising →",
+            showgrid=True, gridcolor=GRID_COLOR, zeroline=False,
+            range=[x0, x1], ticksuffix="%", tickfont=dict(size=11),
+        ),
+        yaxis=dict(
+            title="← Delivery Momentum Falling  |  Slope Z-Score  |  Delivery Momentum Rising →",
+            showgrid=True, gridcolor=GRID_COLOR, zeroline=False,
+            range=[y0, y1], tickfont=dict(size=11),
+        ),
+        legend=dict(
+            orientation="h", y=-0.15, x=0.5, xanchor="center",
+            font=dict(size=12), bgcolor="rgba(0,0,0,0)", itemsizing="constant",
+        ),
+        height=620,
+        margin=dict(t=60, b=90, l=90, r=40),
+        hoverlabel=dict(bgcolor="#1a1a2e", font_size=13, bordercolor="rgba(255,255,255,0.2)"),
+    )
+    return fig
+
+
+# ── Trend Chart ───────────────────────────────────────────────────────────────
+
 def _trend_chart(hist: pd.DataFrame, sector: str, signal: str) -> go.Figure:
     """100-day delivery % and delivery value trend for a single sector."""
     if hist.empty:
@@ -241,6 +362,8 @@ def _trend_chart(hist: pd.DataFrame, sector: str, signal: str) -> go.Figure:
     return fig
 
 
+# ── Sector Cards ──────────────────────────────────────────────────────────────
+
 _AVOID_SIGNAL_SET = {"⚠️ Distribution Trap", "❌ Active Selling", "📉 Weakening"}
 
 
@@ -279,7 +402,6 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> No
                  else "#888888"))
     p1w_color = POSITIVE_COLOR if (p1w is not None and not pd.isna(p1w) and p1w > 0) else NEGATIVE_COLOR
 
-    # Bottom row: context-aware labels
     if is_avoid:
         bottom_row = (
             f"<b style='color:rgba(255,100,80,0.85)'>Avoid for:</b> "
@@ -294,7 +416,6 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> No
             + f" &nbsp;|&nbsp; Delivery Value 1W: {dv1w_str}"
         )
 
-    # Split action into prefix (BUY/AVOID/WATCH etc.) and description
     if "—" in action_text:
         action_prefix, action_desc = action_text.split("—", 1)
         action_html = (
@@ -324,7 +445,6 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> No
         unsafe_allow_html=True,
     )
 
-    # ── Click to expand: per-stock breakdown (collapsed by default) ───────────
     with st.expander(f"📋  View stocks in {row['sector']}", expanded=False):
         stocks = cached_sector_stocks_rotation(row["sector"], selected_date, min_turnover)
         if stocks.empty:
@@ -343,7 +463,6 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> No
                        and pd.notna(r.get("avg_deliv_per_100d")) else None)
 
                 if avg is not None:
-                    # Own-history: compare 7D wtd delivery % against stock's own 100D baseline
                     if invest_signal:
                         if d > avg and p < 0:
                             return "🔥 Strong"
@@ -363,7 +482,6 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> No
                         else:
                             return "⚪ Neutral"
                 else:
-                    # Fallback: sector-relative percentile (new stocks without 100D history)
                     if invest_signal:
                         if d >= hi_thresh and p < 0:
                             return "🔥 Strong"
@@ -403,7 +521,6 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> No
                 dom = dominant.iloc[0]
                 dom_pct = dom["turnover_cr"] / total_turnover * 100
                 dom_conv = stocks.loc[stocks["symbol"] == dom["symbol"], "conviction"].values[0]
-                # Prominent warning — gray caption was easy to miss
                 warn_color = "#ff9100" if invest_signal else "#d50000"
                 st.markdown(
                     f"<div style='background:rgba(255,145,0,0.12);border-left:3px solid {warn_color};"
@@ -485,8 +602,306 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> No
             )
 
 
-def render(selected_date: date, min_turnover: float) -> None:
-    st.subheader("🔄 Sector Rotation — Smart Money Tracker")
+# ── Phase Card (Rotation Clock) ───────────────────────────────────────────────
+
+def _phase_card(row: pd.Series, color: str) -> None:
+    sector  = row["sector"]
+    price   = row["cum_price_ret_pct"]
+    dv_cr   = row["deliv_value_cr"]
+    dv_chg  = row.get("deliv_chg_pct")
+    slope_z = row["slope_z"]
+    avg_del = row["avg_deliv_pct"]
+
+    price_c = POSITIVE_COLOR if price > 0 else NEGATIVE_COLOR
+    chg_str = f"{dv_chg:+.1f}%" if pd.notna(dv_chg) else "—"
+    chg_c   = POSITIVE_COLOR if (pd.notna(dv_chg) and dv_chg > 0) else NEGATIVE_COLOR
+
+    st.markdown(
+        f"<div style='border-left:3px solid {color};padding:6px 10px;margin:3px 0;"
+        f"background:rgba(255,255,255,0.025);border-radius:0 5px 5px 0'>"
+        f"<div style='display:flex;justify-content:space-between;align-items:center'>"
+        f"<b style='font-size:13px'>{sector}</b>"
+        f"<span style='font-size:12px;font-weight:600;color:{price_c}'>{price:+.2f}%</span></div>"
+        f"<div style='display:flex;gap:14px;margin-top:3px;font-size:11px;color:rgba(255,255,255,0.55)'>"
+        f"<span>Del Chg: <b style='color:{chg_c}'>{chg_str}</b></span>"
+        f"<span>Slope Z: <b style='color:{color}'>{slope_z:+.2f}σ</b></span>"
+        f"<span>DV: <b>₹{dv_cr:,.0f} Cr</b></span>"
+        f"<span>Avg Del%: {avg_del:.1f}%</span>"
+        f"</div></div>",
+        unsafe_allow_html=True,
+    )
+
+
+# ── Cross-Period Comparison ───────────────────────────────────────────────────
+
+def _render_cross_period(selected_date: date, min_turnover: float) -> None:
+    _WINDOWS = [(5, "1W"), (10, "2W"), (22, "1M"), (65, "3M")]
+    _PHASE_ICON = {
+        "Leading":   "💰 Lead",
+        "Improving": "🔍 Impr",
+        "Neutral":   "⚖️ Neut",
+        "Weakening": "⚠️ Weak",
+        "Lagging":   "📤 Lag",
+    }
+    _PHASE_COLOR = {
+        "Leading":   "#00c853",
+        "Improving": "#40c4ff",
+        "Neutral":   "#888888",
+        "Weakening": "#ff9100",
+        "Lagging":   "#d50000",
+    }
+
+    period_data: dict[str, pd.DataFrame] = {}
+    all_sectors: list[str] = []
+
+    with st.spinner("Loading all 4 time periods…"):
+        for w, label in _WINDOWS:
+            d = cached_sector_rotation_timeframe(selected_date, w, float(min_turnover))
+            if not d.empty:
+                period_data[label] = d.set_index("sector")
+                if not all_sectors:
+                    all_sectors = d["sector"].tolist()
+
+    if not all_sectors:
+        st.warning("Insufficient data for cross-period comparison.")
+        return
+
+    # Build HTML matrix table
+    header_cells = "".join(
+        f"<th style='padding:6px 14px;text-align:center;font-size:12px;"
+        f"color:rgba(255,255,255,0.5);font-weight:600;letter-spacing:0.5px'>{lbl}</th>"
+        for _, lbl in _WINDOWS
+    )
+    header = (
+        f"<tr style='border-bottom:2px solid rgba(255,255,255,0.12)'>"
+        f"<th style='padding:6px 10px;text-align:left;font-size:12px;"
+        f"color:rgba(255,255,255,0.5);font-weight:600'>SECTOR</th>"
+        f"{header_cells}</tr>"
+    )
+
+    rows_html = ""
+    for sector in all_sectors:
+        cells = ""
+        for _, lbl in _WINDOWS:
+            if lbl in period_data and sector in period_data[lbl].index:
+                phase = period_data[lbl].loc[sector, "phase"]
+                icon  = _PHASE_ICON.get(phase, "—")
+                c     = _PHASE_COLOR.get(phase, "#888")
+                pr    = period_data[lbl].loc[sector, "cum_price_ret_pct"]
+                pr_c  = POSITIVE_COLOR if pr > 0 else NEGATIVE_COLOR
+                cells += (
+                    f"<td style='padding:6px 14px;text-align:center'>"
+                    f"<div style='font-size:12px;color:{c};font-weight:600'>{icon}</div>"
+                    f"<div style='font-size:10px;color:{pr_c}'>{pr:+.1f}%</div>"
+                    f"</td>"
+                )
+            else:
+                cells += "<td style='padding:6px 14px;text-align:center;color:#555'>—</td>"
+
+        rows_html += (
+            f"<tr style='border-bottom:1px solid rgba(255,255,255,0.05)'>"
+            f"<td style='padding:6px 10px;font-size:13px;font-weight:500'>{sector}</td>"
+            f"{cells}</tr>"
+        )
+
+    st.markdown(
+        f"<div style='overflow-x:auto'>"
+        f"<table style='width:100%;border-collapse:collapse'>"
+        f"<thead>{header}</thead>"
+        f"<tbody>{rows_html}</tbody>"
+        f"</table></div>",
+        unsafe_allow_html=True,
+    )
+    st.caption("Phase icons: 💰 Leading = money entering · 🔍 Improving = contrarian inflow · "
+               "⚖️ Neutral = sideways · ⚠️ Weakening = topping · 📤 Lagging = money exiting. "
+               "% = cumulative price return for that period.")
+
+
+# ── Rotation Clock Tab ────────────────────────────────────────────────────────
+
+def _render_rotation_clock(selected_date: date, min_turnover: float) -> None:
+    st.caption(
+        "Where is institutional money flowing across different time horizons? "
+        "Based on **delivery momentum** (slope of daily delivery %) vs **price return** — "
+        "like an institutional research firm's sector rotation framework."
+    )
+
+    with st.expander("📖 How to read the Rotation Clock", expanded=False):
+        st.markdown("""
+**RRG-Inspired Framework — 4 Rotation Phases:**
+
+| Phase | Delivery Slope | Price Return | Interpretation | Action |
+|-------|---------------|--------------|----------------|--------|
+| 💰 **Leading** | Rising ↑ | Rising ↑ | Institutions buying + price confirming | **BUY / HOLD** |
+| 🔍 **Improving** | Rising ↑ | Falling ↓ | Institutions accumulating while retail exits | **ACCUMULATE** |
+| ⚠️ **Weakening** | Falling ↓ | Rising ↑ | Institutions distributing into retail FOMO | **EXIT / REDUCE** |
+| 📤 **Lagging** | Falling ↓ | Falling ↓ | Institutions exiting, price confirming | **AVOID** |
+
+**Delivery Slope** = Linear regression of daily turnover-weighted delivery % over the period.
+Positive slope = institutions are INCREASINGLY committed (building positions).
+Negative slope = conviction is FADING (reducing exposure).
+
+**Slope Z-Score** = Cross-sectional z-score across all sectors for the selected period.
+Tells you which sectors are gaining or losing institutional interest *relative to each other*.
+
+**Delivery Change %** = Current period delivery value vs the prior equal-length period.
+Positive = more institutional money this period than the last one (INFLOW).
+Negative = less institutional money (OUTFLOW).
+
+**Bubble Size** = Total delivery value ₹ Cr — larger bubbles = more absolute institutional activity.
+
+**Key insight:** Sectors typically rotate: Improving → Leading → Weakening → Lagging → Improving.
+Catching a sector moving from Improving to Leading (rising delivery + turning positive price) is the ideal entry.
+        """)
+
+    _PERIODS = {
+        "1 Week (~5 days)":    5,
+        "2 Weeks (~10 days)":  10,
+        "1 Month (~22 days)":  22,
+        "3 Months (~65 days)": 65,
+    }
+
+    sel    = st.radio("Analysis Period", options=list(_PERIODS.keys()), horizontal=True, key="rot_clock_period")
+    window = _PERIODS[sel]
+
+    with st.spinner(f"Computing {sel} sector rotation…"):
+        df = cached_sector_rotation_timeframe(selected_date, window, float(min_turnover))
+
+    if df.empty:
+        st.warning(f"Insufficient data for {sel} analysis. Need at least {window + 3} trading days of history.")
+        return
+
+    # KPI pills
+    pc = df["phase"].value_counts()
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("💰 Leading",   pc.get("Leading",   0), help="Delivery rising + price rising — institutions and price aligned")
+    k2.metric("🔍 Improving", pc.get("Improving", 0), help="Delivery rising + price falling — contrarian accumulation zone")
+    k3.metric("⚖️ Neutral",   pc.get("Neutral",   0), help="No clear directional bias in delivery momentum")
+    k4.metric("⚠️ Weakening", pc.get("Weakening", 0), help="Delivery falling + price rising — institutions distributing into rally")
+    k5.metric("📤 Lagging",   pc.get("Lagging",   0), help="Delivery falling + price falling — institutional exit confirmed")
+
+    # Bubble chart
+    st.plotly_chart(
+        _rotation_clock_chart(df, sel),
+        use_container_width=True,
+        key=f"rot_clock_chart_{window}",
+    )
+
+    # Two-column phase cards
+    leading   = df[df["phase"] == "Leading"].reset_index(drop=True)
+    improving = df[df["phase"] == "Improving"].reset_index(drop=True)
+    weakening = df[df["phase"] == "Weakening"].reset_index(drop=True)
+    lagging   = df[df["phase"] == "Lagging"].reset_index(drop=True)
+    neutral   = df[df["phase"] == "Neutral"].reset_index(drop=True)
+
+    col_in, col_out = st.columns(2)
+
+    with col_in:
+        st.markdown("#### 🟢 MONEY FLOWING IN")
+        if leading.empty and improving.empty:
+            st.info("No sectors with strong inflow signal this period.")
+        else:
+            if not leading.empty:
+                st.markdown(
+                    f"<div style='font-size:12px;color:#00c853;font-weight:600;margin-bottom:4px'>"
+                    f"💰 LEADING — Money Entering ({len(leading)})</div>",
+                    unsafe_allow_html=True,
+                )
+                for _, row in leading.iterrows():
+                    _phase_card(row, "#00c853")
+            if not improving.empty:
+                st.markdown(
+                    f"<div style='font-size:12px;color:#40c4ff;font-weight:600;margin:10px 0 4px 0'>"
+                    f"🔍 IMPROVING — Contrarian Inflow ({len(improving)})</div>",
+                    unsafe_allow_html=True,
+                )
+                for _, row in improving.iterrows():
+                    _phase_card(row, "#40c4ff")
+
+    with col_out:
+        st.markdown("#### 🔴 MONEY FLOWING OUT")
+        if weakening.empty and lagging.empty:
+            st.info("No sectors with strong outflow signal this period.")
+        else:
+            if not weakening.empty:
+                st.markdown(
+                    f"<div style='font-size:12px;color:#ff9100;font-weight:600;margin-bottom:4px'>"
+                    f"⚠️ WEAKENING — Distribution ({len(weakening)})</div>",
+                    unsafe_allow_html=True,
+                )
+                for _, row in weakening.iterrows():
+                    _phase_card(row, "#ff9100")
+            if not lagging.empty:
+                st.markdown(
+                    f"<div style='font-size:12px;color:#d50000;font-weight:600;margin:10px 0 4px 0'>"
+                    f"📤 LAGGING — Money Exiting ({len(lagging)})</div>",
+                    unsafe_allow_html=True,
+                )
+                for _, row in lagging.iterrows():
+                    _phase_card(row, "#d50000")
+
+    if not neutral.empty:
+        with st.expander(f"⚖️ Neutral Sectors — {len(neutral)} with no clear bias", expanded=False):
+            for _, row in neutral.iterrows():
+                _phase_card(row, "#888888")
+
+    # Cross-period comparison
+    with st.expander("📊 Cross-Period Comparison — All 4 Timeframes at Once", expanded=False):
+        st.caption("See each sector's rotation phase simultaneously across 1W / 2W / 1M / 3M.")
+        _render_cross_period(selected_date, min_turnover)
+
+    # Summary table
+    st.markdown("---")
+    st.markdown(f"#### 📋 All Sectors — {sel} Rotation Summary")
+
+    disp_cols = [
+        "sector", "phase", "flow_signal",
+        "cum_price_ret_pct", "slope_z", "delivery_slope",
+        "deliv_value_cr", "deliv_chg_pct", "avg_deliv_pct", "num_days",
+    ]
+    disp = df[[c for c in disp_cols if c in df.columns]].copy()
+
+    st.dataframe(
+        disp,
+        hide_index=True,
+        use_container_width=True,
+        column_config={
+            "sector":            st.column_config.TextColumn("Sector"),
+            "phase":             st.column_config.TextColumn("Phase"),
+            "flow_signal":       st.column_config.TextColumn("Flow Signal"),
+            "cum_price_ret_pct": st.column_config.NumberColumn(
+                "Price Return %", format="%+.2f%%",
+                help="Cumulative turnover-weighted price return over the selected period\n"
+                     "= compound product of daily sector returns"),
+            "slope_z":           st.column_config.NumberColumn(
+                "Slope Z-Score", format="%+.2f",
+                help="Cross-sectional z-score of delivery slope across all sectors\n"
+                     "Tells you which sectors are gaining vs losing institutional interest relative to each other\n"
+                     "> 0.25σ = rising momentum   < -0.25σ = falling momentum"),
+            "delivery_slope":    st.column_config.NumberColumn(
+                "Delivery Slope", format="%+.4f",
+                help="Linear regression slope of daily weighted delivery %\n"
+                     "Positive = institutions increasingly committed over the period\n"
+                     "Units: delivery % points per trading day"),
+            "deliv_value_cr":    st.column_config.NumberColumn(
+                "Deliv Value (₹ Cr)", format="₹%.1f",
+                help="Total delivery value over the period in ₹ Crores"),
+            "deliv_chg_pct":     st.column_config.NumberColumn(
+                "Deliv Chg vs Prior %", format="%+.1f%%",
+                help="% change in delivery value vs the prior equal-length period\n"
+                     "Positive = more institutional money flowing in this period\n"
+                     "Negative = less institutional money (outflow vs prior period)"),
+            "avg_deliv_pct":     st.column_config.NumberColumn(
+                "Avg Delivery %", format="%.1f%%",
+                help="Average turnover-weighted delivery % over the current period"),
+            "num_days":          st.column_config.NumberColumn("Trading Days", format="%d"),
+        },
+    )
+
+
+# ── Smart Money Tab (existing content) ───────────────────────────────────────
+
+def _render_smart_money(selected_date: date, min_turnover: float) -> None:
     st.caption(
         f"Where are institutions entering and exiting? "
         f"Based on **100 days** of turnover-weighted delivery data "
@@ -534,8 +949,6 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         st.warning("Insufficient data. Need at least 10 trading days of history.")
         return
 
-    # Guard: if z_score column is missing the cache has stale pre-rewrite data.
-    # Clear it and rerun so the fresh analytics result is used.
     if "z_score" not in rot.columns:
         st.cache_data.clear()
         st.rerun()
@@ -544,7 +957,6 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
     _CAUTION_SIGNALS  = {"📊 Volume Spike"}
     _AVOID_SIGNALS    = {"⚠️ Distribution Trap", "❌ Active Selling", "📉 Weakening"}
 
-    # Show ALL sectors with each signal type — sorted by score (no hidden sectors)
     entering  = rot[rot["signal"].isin(_INVEST_SIGNALS)].copy()
     caution   = rot[rot["signal"].isin(_CAUTION_SIGNALS)].copy()
     exiting   = rot[rot["signal"].isin(_AVOID_SIGNALS)].sort_values("accum_score", ascending=True).copy()
@@ -563,7 +975,6 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
 
     st.markdown("---")
 
-    # ── Smart Money Quadrant Chart ────────────────────────────────────────────
     st.markdown("### 📊 Smart Money Quadrant")
     st.caption(
         "X = 1-week cumulative price return (%).  "
@@ -572,7 +983,6 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
     )
     st.plotly_chart(_quadrant_chart(rot), use_container_width=True)
 
-    # ── Sector reference table — identify every bubble ────────────────────────
     with st.expander("🗂️ Sector Reference — full list ranked by score", expanded=False):
         ref_cols = ["sector", "signal", "accum_score", "coverage",
                     "dv_ratio", "z_score", "breadth", "price_1w", "action"]
@@ -677,12 +1087,12 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             f"</table></div>",
             unsafe_allow_html=True,
         )
+
     st.markdown("---")
 
-    # ── Enter / Avoid columns ─────────────────────────────────────────────────
     col_enter, col_avoid = st.columns(2)
 
-    _HIGH_CONV = 70   # visual separator threshold only — nothing is hidden
+    _HIGH_CONV = 70
 
     with col_enter:
         st.markdown("### 🟢 SECTORS TO INVEST")
@@ -692,7 +1102,6 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         else:
             shown_divider = False
             for _, row in entering.iterrows():
-                # Visual separator between high and moderate conviction
                 if not shown_divider and row["accum_score"] < _HIGH_CONV:
                     st.markdown(
                         "<div style='margin:10px 0 6px 0;border-top:1px solid rgba(255,255,255,0.08);"
@@ -721,7 +1130,6 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                     shown_divider = True
                 _sector_card(row, selected_date, min_turnover)
 
-    # ── Volume Spike caution section ──────────────────────────────────────────
     if not caution.empty:
         st.markdown("---")
         st.markdown("### 📊 VOLUME SPIKE — DO NOT CONFUSE WITH ACCUMULATION")
@@ -735,7 +1143,6 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
 
     st.markdown("---")
 
-    # ── Sector drill-down trend ───────────────────────────────────────────────
     st.markdown("### 📈 100-Day Delivery Trend — Drill Into a Sector")
     st.caption("See exactly how delivery % and delivery value evolved — the trend tells the story")
 
@@ -779,7 +1186,6 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
 
     st.markdown("---")
 
-    # ── Full rotation table ───────────────────────────────────────────────────
     with st.expander("📋 Full Rotation Table — All Sectors", expanded=False):
         st.caption(
             "All sectors ranked by accumulation score.  "
@@ -855,3 +1261,17 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             use_container_width=True,
             hide_index=True,
         )
+
+
+# ── Entry Point ───────────────────────────────────────────────────────────────
+
+def render(selected_date: date, min_turnover: float) -> None:
+    st.subheader("🔄 Sector Rotation — Smart Money Tracker")
+
+    tab_smart, tab_clock = st.tabs(["🎯 Smart Money (Daily Signal)", "📅 Rotation Clock"])
+
+    with tab_smart:
+        _render_smart_money(selected_date, min_turnover)
+
+    with tab_clock:
+        _render_rotation_clock(selected_date, min_turnover)
