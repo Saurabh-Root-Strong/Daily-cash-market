@@ -22,7 +22,9 @@ from src.dashboard.cache.queries import (
     cached_rotation_clock_backtest,
     cached_sector_rotation,
     cached_sector_rotation_history,
+    cached_sector_rotation_custom_range,
     cached_sector_rotation_timeframe,
+    cached_sector_stocks_custom_range,
     cached_sector_stocks_rotation,
 )
 from src.dashboard.constants import NEGATIVE_COLOR, POSITIVE_COLOR, PLOT_BG, PAPER_BG, GRID_COLOR
@@ -720,6 +722,190 @@ def _render_cross_period(selected_date: date, min_turnover: float) -> None:
 
 # ── Rotation Clock Tab ────────────────────────────────────────────────────────
 
+def _render_custom_range(all_dates: list, min_turnover: float) -> None:
+    """Custom date range: sector rotation + per-sector stock drill-down."""
+    if not all_dates:
+        st.warning("No trading dates available.")
+        return
+
+    min_avail = all_dates[-1]   # oldest
+    max_avail = all_dates[0]    # most recent
+
+    col_from, col_to = st.columns(2)
+    # Default from_date = 1 month before most recent available date
+    default_from = all_dates[min(21, len(all_dates) - 1)] if len(all_dates) > 1 else min_avail
+
+    with col_from:
+        from_date = st.date_input(
+            "From Date",
+            value=default_from,
+            min_value=min_avail,
+            max_value=max_avail,
+            key="cr_from_date",
+            help="Start of the analysis period",
+        )
+    with col_to:
+        to_date = st.date_input(
+            "To Date",
+            value=max_avail,
+            min_value=min_avail,
+            max_value=max_avail,
+            key="cr_to_date",
+            help="End of the analysis period",
+        )
+
+    if from_date >= to_date:
+        st.warning("From Date must be before To Date.")
+        return
+
+    # Snap to nearest available trading days
+    avail_set  = set(all_dates)
+    # Find nearest available date >= from_date
+    from_snap = next((d for d in sorted(avail_set) if d >= from_date), None)
+    # Find nearest available date <= to_date
+    to_snap   = next((d for d in sorted(avail_set, reverse=True) if d <= to_date), None)
+
+    if from_snap is None or to_snap is None or from_snap >= to_snap:
+        st.warning("No trading data found in the selected range.")
+        return
+
+    n_calendar = (to_snap - from_snap).days
+    n_trading  = sum(1 for d in avail_set if from_snap <= d <= to_snap)
+
+    st.caption(
+        f"**{from_snap.strftime('%d %b %Y')}** → **{to_snap.strftime('%d %b %Y')}**  "
+        f"({n_calendar} calendar days · {n_trading} trading days)"
+    )
+
+    with st.spinner("Computing sector rotation for custom range…"):
+        df = cached_sector_rotation_custom_range(from_snap, to_snap, float(min_turnover))
+
+    if df.empty:
+        st.warning("No data found for this date range. The range may be too short or pre-date available history.")
+        return
+
+    # KPI pills
+    pc = df["phase"].value_counts()
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("💰 Leading",   pc.get("Leading",   0))
+    k2.metric("🔍 Improving", pc.get("Improving", 0))
+    k3.metric("⚖️ Neutral",   pc.get("Neutral",   0))
+    k4.metric("⚠️ Weakening", pc.get("Weakening", 0))
+    k5.metric("📤 Lagging",   pc.get("Lagging",   0))
+
+    # Bubble chart
+    period_label = f"{from_snap.strftime('%d %b')} → {to_snap.strftime('%d %b %Y')}"
+    st.plotly_chart(
+        _rotation_clock_chart(df, period_label),
+        use_container_width=True,
+        key="cr_clock_chart",
+    )
+    _render_clock_legend(df)
+
+    # ── Phase cards with stock drill-down ─────────────────────────────────────
+    st.markdown("---")
+    st.markdown("#### 📋 Sector & Stock Breakdown")
+    st.caption(
+        "Expand any sector to see how individual stocks performed during this period. "
+        "Sorted by delivery value (highest institutional activity first)."
+    )
+
+    phase_order = ["Leading", "Improving", "Neutral", "Weakening", "Lagging"]
+    for phase in phase_order:
+        grp = df[df["phase"] == phase].reset_index(drop=True)
+        if grp.empty:
+            continue
+        meta  = _PHASE_META[phase]
+        color = meta["color"]
+
+        st.markdown(
+            f"<div style='font-size:13px;font-weight:700;color:{color};"
+            f"margin:14px 0 4px 0;letter-spacing:0.3px'>"
+            f"{meta['label']} — {meta['desc']} ({len(grp)})</div>",
+            unsafe_allow_html=True,
+        )
+
+        for _, row in grp.iterrows():
+            _phase_card(row, color)
+
+            with st.expander(f"📋 Stocks in {row['sector']} — {from_snap.strftime('%d %b')} to {to_snap.strftime('%d %b %Y')}", expanded=False):
+                with st.spinner(f"Loading {row['sector']} stocks…"):
+                    stocks = cached_sector_stocks_custom_range(
+                        row["sector"], from_snap, to_snap, float(min_turnover)
+                    )
+
+                if stocks.empty:
+                    st.caption("No stock data for this period.")
+                    continue
+
+                # Top/bottom performers summary
+                valid = stocks.dropna(subset=["period_ret_pct"])
+                if not valid.empty:
+                    top3    = valid.nlargest(3, "period_ret_pct")
+                    bottom3 = valid.nsmallest(3, "period_ret_pct")
+
+                    c1, c2 = st.columns(2)
+                    with c1:
+                        st.markdown(
+                            "<div style='font-size:11px;color:#00c853;font-weight:600;margin-bottom:3px'>🏆 Top Performers</div>",
+                            unsafe_allow_html=True,
+                        )
+                        for _, s in top3.iterrows():
+                            ret = s["period_ret_pct"]
+                            st.markdown(
+                                f"<span style='font-size:12px'><b>{s['symbol']}</b> "
+                                f"<span style='color:#00c853'>{ret:+.1f}%</span> "
+                                f"<span style='color:rgba(255,255,255,0.45);font-size:10px'>"
+                                f"₹{s['price_start']:.0f}→₹{s['price_end']:.0f}</span></span>",
+                                unsafe_allow_html=True,
+                            )
+                    with c2:
+                        st.markdown(
+                            "<div style='font-size:11px;color:#d50000;font-weight:600;margin-bottom:3px'>📉 Laggards</div>",
+                            unsafe_allow_html=True,
+                        )
+                        for _, s in bottom3.iterrows():
+                            ret = s["period_ret_pct"]
+                            st.markdown(
+                                f"<span style='font-size:12px'><b>{s['symbol']}</b> "
+                                f"<span style='color:#d50000'>{ret:+.1f}%</span> "
+                                f"<span style='color:rgba(255,255,255,0.45);font-size:10px'>"
+                                f"₹{s['price_start']:.0f}→₹{s['price_end']:.0f}</span></span>",
+                                unsafe_allow_html=True,
+                            )
+
+                st.dataframe(
+                    stocks,
+                    hide_index=True,
+                    use_container_width=True,
+                    column_config={
+                        "symbol":       st.column_config.TextColumn("Symbol", width="small"),
+                        "company_name": st.column_config.TextColumn("Company"),
+                        "industry":     st.column_config.TextColumn("Sub-Sector"),
+                        "price_start":  st.column_config.NumberColumn(
+                            f"Price on {from_snap.strftime('%d %b')}", format="₹%.2f",
+                            help="Price at the start of the period (prev_close of first trading day)"),
+                        "price_end":    st.column_config.NumberColumn(
+                            f"Price on {to_snap.strftime('%d %b')}", format="₹%.2f",
+                            help="Price at the end of the period (close of last trading day)"),
+                        "period_ret_pct": st.column_config.NumberColumn(
+                            "Period Return %", format="%+.2f%%",
+                            help=f"(Price End − Price Start) / Price Start × 100\n"
+                                 f"Period: {from_snap.strftime('%d %b')} → {to_snap.strftime('%d %b %Y')}"),
+                        "wtd_deliv_per": st.column_config.NumberColumn(
+                            "Avg Delivery %", format="%.1f%%",
+                            help="Turnover-weighted average delivery % over the period"),
+                        "deliv_value_cr": st.column_config.NumberColumn(
+                            "Delivery Value (₹ Cr)", format="₹%.1f",
+                            help="Total delivery value in ₹ Crores over the period"),
+                        "turnover_cr": st.column_config.NumberColumn(
+                            "Turnover (₹ Cr)", format="₹%.1f"),
+                        "trading_days": st.column_config.NumberColumn(
+                            "Trading Days", format="%d"),
+                    },
+                )
+
+
 def _render_signal_validation(
     selected_date: date,
     window: int,
@@ -885,7 +1071,7 @@ def _render_clock_legend(df: pd.DataFrame) -> None:
     )
 
 
-def _render_rotation_clock(selected_date: date, min_turnover: float) -> None:
+def _render_rotation_clock(selected_date: date, min_turnover: float, all_dates: list | None = None) -> None:
     st.caption(
         "Where is institutional money flowing across different time horizons? "
         "Based on **delivery momentum** (slope of daily delivery %) vs **price return** — "
@@ -925,10 +1111,16 @@ Catching a sector moving from Improving to Leading (rising delivery + turning po
         "2 Weeks (~10 days)":  10,
         "1 Month (~22 days)":  22,
         "3 Months (~65 days)": 65,
+        "📅 Custom Range":     0,
     }
 
     sel    = st.radio("Analysis Period", options=list(_PERIODS.keys()), horizontal=True, key="rot_clock_period")
     window = _PERIODS[sel]
+
+    # Custom date range — separate renderer with stock drill-down
+    if window == 0:
+        _render_custom_range(all_dates or [], min_turnover)
+        return
 
     with st.spinner(f"Computing {sel} sector rotation…"):
         df = cached_sector_rotation_timeframe(selected_date, window, float(min_turnover))
@@ -1445,7 +1637,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
 
-def render(selected_date: date, min_turnover: float) -> None:
+def render(selected_date: date, min_turnover: float, all_dates: list | None = None) -> None:
     st.subheader("🔄 Sector Rotation — Smart Money Tracker")
 
     tab_smart, tab_clock = st.tabs(["🎯 Smart Money (Daily Signal)", "📅 Rotation Clock"])
@@ -1454,4 +1646,4 @@ def render(selected_date: date, min_turnover: float) -> None:
         _render_smart_money(selected_date, min_turnover)
 
     with tab_clock:
-        _render_rotation_clock(selected_date, min_turnover)
+        _render_rotation_clock(selected_date, min_turnover, all_dates=all_dates)

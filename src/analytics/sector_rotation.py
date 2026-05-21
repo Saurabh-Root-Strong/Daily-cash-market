@@ -616,3 +616,154 @@ def get_rotation_clock_backtest(
         .drop(columns="_pr")
         .reset_index(drop=True)
     )
+
+
+def get_sector_rotation_custom_range(
+    from_date: date,
+    to_date: date,
+    min_turnover_lacs: Optional[float] = None,
+) -> pd.DataFrame:
+    """
+    Rotation clock for an arbitrary date range [from_date, to_date].
+
+    Same metrics as get_sector_rotation_timeframe but uses explicit calendar dates.
+    Prior period for delivery change% = equal-length calendar window before from_date.
+    """
+    if min_turnover_lacs is None:
+        min_turnover_lacs = get_min_turnover_filter()
+
+    period_days = max((to_date - from_date).days, 1)
+    prior_from  = from_date - timedelta(days=period_days)
+
+    hist_sql = """
+        SELECT
+            s.sector,
+            b.trade_date,
+            SUM(b.deliv_per * b.turnover_lacs)
+                / NULLIF(SUM(b.turnover_lacs), 0)              AS wtd_deliv_pct,
+            SUM(b.deliv_per / 100.0 * b.turnover_lacs) / 100  AS deliv_value_cr,
+            SUM(b.turnover_lacs) / 100                         AS turnover_cr,
+            SUM(b.turnover_lacs * (b.close_price - b.prev_close)
+                    / NULLIF(b.prev_close, 0) * 100)
+                / NULLIF(SUM(CASE WHEN b.prev_close > 0
+                             THEN b.turnover_lacs END), 0)     AS wtd_daily_ret_pct
+        FROM daily_data b
+        INNER JOIN sector_master s ON b.symbol = s.symbol
+        WHERE s.sector NOT IN ('ETF', 'Others')
+          AND b.series IN ('EQ', 'SM', 'ST')
+          AND b.turnover_lacs >= ?
+          AND b.trade_date >= ?
+          AND b.trade_date <= ?
+        GROUP BY s.sector, b.trade_date
+        ORDER BY s.sector, b.trade_date
+    """
+    hist = query_dataframe(hist_sql, [min_turnover_lacs, prior_from, to_date])
+    if hist.empty:
+        return pd.DataFrame()
+
+    hist["trade_date"] = pd.to_datetime(hist["trade_date"]).dt.date
+    curr_hist = hist[(hist["trade_date"] >= from_date) & (hist["trade_date"] <= to_date)]
+    prev_hist = hist[(hist["trade_date"] >= prior_from) & (hist["trade_date"] < from_date)]
+
+    records = []
+    for sector, curr in curr_hist.groupby("sector"):
+        curr = curr.sort_values("trade_date").reset_index(drop=True)
+        prev = prev_hist[prev_hist["sector"] == sector].sort_values("trade_date").reset_index(drop=True)
+
+        if len(curr) < 2:
+            continue
+
+        y = curr["wtd_deliv_pct"].ffill().bfill().values
+        x = np.arange(len(y), dtype=float)
+        delivery_slope = float(np.polyfit(x, y, 1)[0]) if len(y) >= 3 else 0.0
+
+        daily_rets    = curr["wtd_daily_ret_pct"].fillna(0) / 100
+        cum_price_pct = float((1 + daily_rets).prod() - 1) * 100
+
+        curr_dv = float(curr["deliv_value_cr"].sum())
+        prev_dv = float(prev["deliv_value_cr"].sum()) if not prev.empty else None
+        deliv_chg = (curr_dv - prev_dv) / max(abs(prev_dv), 0.1) * 100 if prev_dv else None
+
+        records.append({
+            "sector":              sector,
+            "delivery_slope":      round(delivery_slope, 4),
+            "cum_price_ret_pct":   round(cum_price_pct, 2),
+            "deliv_value_cr":      round(curr_dv, 1),
+            "deliv_value_prev_cr": round(prev_dv, 1) if prev_dv is not None else None,
+            "deliv_chg_pct":       round(deliv_chg, 1) if deliv_chg is not None else None,
+            "turnover_cr":         round(float(curr["turnover_cr"].sum()), 1),
+            "avg_deliv_pct":       round(float(curr["wtd_deliv_pct"].mean()), 1),
+            "num_days":            int(len(curr)),
+        })
+
+    if not records:
+        return pd.DataFrame()
+
+    df = pd.DataFrame(records)
+    s_mean = df["delivery_slope"].mean()
+    s_std  = df["delivery_slope"].std()
+    df["slope_z"] = ((df["delivery_slope"] - s_mean) / max(s_std, 1e-9)).round(2)
+
+    def _phase(row) -> str:
+        sz, pr = row["slope_z"], row["cum_price_ret_pct"]
+        if   sz >  0.25 and pr >  0.5:  return "Leading"
+        elif sz >  0.25 and pr < -0.5:  return "Improving"
+        elif sz < -0.25 and pr >  0.5:  return "Weakening"
+        elif sz < -0.25 and pr < -0.5:  return "Lagging"
+        else:                            return "Neutral"
+
+    df["phase"] = df.apply(_phase, axis=1)
+    df["flow_signal"] = df["phase"].map({
+        "Leading":   "💰 MONEY ENTERING",
+        "Improving": "🔍 CONTRARIAN INFLOW",
+        "Weakening": "⚠️ TOPPING",
+        "Lagging":   "📤 MONEY EXITING",
+        "Neutral":   "⚖️ SIDEWAYS",
+    })
+
+    return df.sort_values("slope_z", ascending=False).reset_index(drop=True)
+
+
+def get_sector_stocks_custom_range(
+    sector: str,
+    from_date: date,
+    to_date: date,
+    min_turnover_lacs: Optional[float] = None,
+) -> pd.DataFrame:
+    """
+    Per-stock performance for a sector over a custom date range.
+
+    Returns: symbol, company_name, industry, price_start, price_end,
+             period_ret_pct, wtd_deliv_per, deliv_value_cr, turnover_cr
+    """
+    if min_turnover_lacs is None:
+        min_turnover_lacs = get_min_turnover_filter()
+
+    sql = """
+        SELECT
+            b.symbol,
+            s.company_name,
+            s.industry,
+            ARGMIN(b.prev_close,   b.trade_date)                AS price_start,
+            ARGMAX(b.close_price,  b.trade_date)                AS price_end,
+            (ARGMAX(b.close_price, b.trade_date)
+                - ARGMIN(b.prev_close, b.trade_date))
+                / NULLIF(ARGMIN(b.prev_close, b.trade_date), 0) * 100
+                                                                AS period_ret_pct,
+            SUM(b.deliv_per * b.turnover_lacs)
+                / NULLIF(SUM(b.turnover_lacs), 0)               AS wtd_deliv_per,
+            SUM(b.deliv_per / 100.0 * b.turnover_lacs) / 100   AS deliv_value_cr,
+            SUM(b.turnover_lacs) / 100                          AS turnover_cr,
+            COUNT(DISTINCT b.trade_date)                        AS trading_days
+        FROM daily_data b
+        INNER JOIN sector_master s ON b.symbol = s.symbol
+        WHERE b.series IN ('EQ', 'SM', 'ST')
+          AND s.sector = ?
+          AND b.trade_date >= ?
+          AND b.trade_date <= ?
+          AND b.turnover_lacs >= ?
+        GROUP BY b.symbol, s.company_name, s.industry
+        HAVING COUNT(DISTINCT b.trade_date) >= 2
+        ORDER BY deliv_value_cr DESC
+    """
+    return query_dataframe(sql, [sector, from_date, to_date, min_turnover_lacs])

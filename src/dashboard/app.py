@@ -99,7 +99,7 @@ def main() -> None:
         sector_performance.render(selected_date, float(min_turnover))
     elif page == "🔄 Sector Rotation":
         from src.dashboard.views import sector_rotation
-        sector_rotation.render(selected_date, float(min_turnover))
+        sector_rotation.render(selected_date, float(min_turnover), all_dates=available_dates)
     elif page == "🎯 Big Players (F&O)":
         from src.dashboard.views import fao_tracker
         fao_tracker.render(selected_date)
