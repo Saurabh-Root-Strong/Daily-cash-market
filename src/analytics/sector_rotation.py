@@ -55,7 +55,7 @@ def _get_nifty50_period_returns(as_of_date: date) -> dict:
         [as_of_date, as_of_date],
     )
     if df.empty:
-        return {"1w": None, "1m": None, "3m": None}
+        return {"1w": None, "2w": None, "1m": None, "3m": None}
 
     df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
     latest_close = float(df.iloc[-1]["close_val"])
@@ -68,7 +68,7 @@ def _get_nifty50_period_returns(as_of_date: date) -> dict:
         start = float(past.iloc[-1]["close_val"])
         return round((latest_close - start) / start * 100, 2) if start > 0 else None
 
-    return {"1w": _ret(7), "1m": _ret(30), "3m": _ret(90)}
+    return {"1w": _ret(7), "2w": _ret(14), "1m": _ret(30), "3m": _ret(90)}
 
 
 def _slope(series: pd.Series) -> float:
@@ -124,7 +124,11 @@ def get_sector_rotation(
             b.trade_date,
             SUM(b.deliv_per * b.turnover_lacs)
                 / NULLIF(SUM(b.turnover_lacs), 0)             AS wtd_deliv_per,
-            SUM(b.deliv_per / 100.0 * b.turnover_lacs) / 100 AS deliv_value_cr
+            SUM(b.deliv_per / 100.0 * b.turnover_lacs) / 100 AS deliv_value_cr,
+            SUM(b.turnover_lacs * (b.close_price - b.prev_close)
+                    / NULLIF(b.prev_close, 0) * 100)
+                / NULLIF(SUM(CASE WHEN b.prev_close > 0 THEN b.turnover_lacs END), 0)
+                                                              AS wtd_daily_ret_pct
         FROM daily_data b
         INNER JOIN sector_master s ON b.symbol = s.symbol
         WHERE b.series IN ('EQ', 'SM', 'ST')
@@ -137,8 +141,9 @@ def get_sector_rotation(
     """
     hist = query_dataframe(hist_sql, [start, as_of_date, min_turnover_lacs])
 
-    slope_map   = {}
-    dv1w_cr_map = {}
+    slope_map    = {}
+    dv1w_cr_map  = {}
+    price_2w_map = {}
 
     for sector, grp in hist.groupby("sector"):
         grp = grp.sort_values("trade_date").reset_index(drop=True)
@@ -146,6 +151,13 @@ def get_sector_rotation(
         cutoff_1w = pd.Timestamp(as_of_date - timedelta(days=7))
         sub_1w    = grp[grp["trade_date"] > cutoff_1w]
         dv1w_cr_map[sector] = float(sub_1w["deliv_value_cr"].sum()) if len(sub_1w) >= 1 else float("nan")
+        cutoff_2w = pd.Timestamp(as_of_date - timedelta(days=14))
+        sub_2w    = grp[grp["trade_date"] > cutoff_2w]
+        if "wtd_daily_ret_pct" in sub_2w.columns and len(sub_2w) >= 1:
+            daily_2w = sub_2w["wtd_daily_ret_pct"].fillna(0) / 100
+            price_2w_map[sector] = round(float((1 + daily_2w).prod() - 1) * 100, 2)
+        else:
+            price_2w_map[sector] = float("nan")
 
     # ── Build one record per sector ────────────────────────────────────────────
     records = []
@@ -279,6 +291,7 @@ def get_sector_rotation(
             "breadth":              round(breadth,   3) if not pd.isna(breadth)  else None,
             "trend_slope":          round(trend_slope, 3),
             "price_1w":             round(p1w, 2)  if not pd.isna(p1w)  else None,
+            "price_2w":             price_2w_map.get(sector, float("nan")),
             "price_1m":             round(p1m, 2)  if not pd.isna(p1m)  else None,
             "price_3m":             round(p3m, 2)  if not pd.isna(p3m)  else None,
             "today_dv_cr":          round(today_dv, 1) if not pd.isna(today_dv) else None,
@@ -303,15 +316,17 @@ def get_sector_rotation(
     n50 = _get_nifty50_period_returns(as_of_date)
     for period, col_price, col_rs in [
         ("1w", "price_1w", "rs_1w"),
+        ("2w", "price_2w", "rs_2w"),
         ("1m", "price_1m", "rs_1m"),
         ("3m", "price_3m", "rs_3m"),
     ]:
         n_ret = n50[period]
-        if n_ret is not None:
+        if n_ret is not None and col_price in result.columns:
             result[col_rs] = (result[col_price] - n_ret).round(2)
         else:
             result[col_rs] = float("nan")
     result["nifty_1w"] = n50["1w"]
+    result["nifty_2w"] = n50["2w"]
     result["nifty_1m"] = n50["1m"]
     result["nifty_3m"] = n50["3m"]
 
@@ -777,6 +792,55 @@ def get_sector_rotation_custom_range(
     })
 
     return df.sort_values("slope_z", ascending=False).reset_index(drop=True)
+
+
+def get_nifty50_custom_return(from_date: date, to_date: date) -> Optional[float]:
+    """Nifty50 return from from_date to to_date using index_data table."""
+    df = query_dataframe(
+        """
+        SELECT trade_date, close_val
+        FROM index_data
+        WHERE index_name = 'Nifty 50'
+          AND trade_date >= ?
+          AND trade_date <= ?
+        ORDER BY trade_date
+        """,
+        [from_date - timedelta(days=7), to_date],
+    )
+    if df.empty:
+        return None
+    df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
+    start_rows = df[df["trade_date"] <= from_date]
+    end_rows   = df[df["trade_date"] <= to_date]
+    if start_rows.empty or end_rows.empty:
+        return None
+    start = float(start_rows.iloc[-1]["close_val"])
+    end   = float(end_rows.iloc[-1]["close_val"])
+    return round((end - start) / start * 100, 2) if start > 0 else None
+
+
+def get_sector_rs_custom_range(
+    from_date: date,
+    to_date: date,
+    min_turnover_lacs: Optional[float] = None,
+) -> pd.DataFrame:
+    """
+    Sector RS vs Nifty50 over an arbitrary date range.
+
+    Returns: sector, cum_price_ret_pct (sector return), rs_custom (excess vs Nifty50), nifty_custom.
+    Designed to be merged with get_sector_rotation() output on 'sector' for scatter charts.
+    """
+    rotation_df = get_sector_rotation_custom_range(from_date, to_date, min_turnover_lacs)
+    if rotation_df.empty:
+        return pd.DataFrame()
+    nifty_ret = get_nifty50_custom_return(from_date, to_date)
+    result = rotation_df[["sector", "cum_price_ret_pct"]].copy()
+    if nifty_ret is not None:
+        result["rs_custom"] = (result["cum_price_ret_pct"] - nifty_ret).round(2)
+    else:
+        result["rs_custom"] = float("nan")
+    result["nifty_custom"] = nifty_ret
+    return result
 
 
 def get_sector_stocks_custom_range(

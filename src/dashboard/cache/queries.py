@@ -268,6 +268,14 @@ def cached_sector_rotation_custom_range(
 
 
 @st.cache_data(ttl=_TTL)
+def cached_sector_rs_custom_range(
+    from_date: date, to_date: date, min_turnover_lacs: float
+) -> pd.DataFrame:
+    from src.analytics.sector_rotation import get_sector_rs_custom_range
+    return get_sector_rs_custom_range(from_date, to_date, min_turnover_lacs)
+
+
+@st.cache_data(ttl=_TTL)
 def cached_sector_stocks_custom_range(
     sector: str, from_date: date, to_date: date, min_turnover_lacs: float
 ) -> pd.DataFrame:
