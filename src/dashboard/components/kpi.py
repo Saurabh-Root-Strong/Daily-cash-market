@@ -56,9 +56,19 @@ def performance_kpi_strip(sector_df: pd.DataFrame) -> None:
         return r["sector"], float(r[col])
 
     c1, c2, c3, c4, c5 = st.columns(5)
-    s, v = _top("1W_deliv_pct");      c1.metric("Top Deliv (1W)",  s, f"{v:.1f}%")
-    s, v = _top("1M_deliv_pct");      c2.metric("Top Deliv (1M)",  s, f"{v:.1f}%")
-    s, v = _top("3M_deliv_pct");      c3.metric("Top Deliv (3M)",  s, f"{v:.1f}%")
+    s, v = _top("dv_ratio");          c1.metric("Top DV Ratio",    s, f"{v:.2f}x vs 100D avg",
+                                                  help="Highest relative flow strength — sector surging vs its own 100-day baseline")
+    if "breadth" in sector_df.columns:
+        s, v = _top("breadth")
+        c2.metric("Top Breadth", s, f"{v*100:.0f}% stocks above norm",
+                  help="Most stocks surging above their own 100D delivery baseline — broad vs narrow rally")
+    else:
+        s, v = _top("1W_deliv_cr")
+        c2.metric("Top Deliv (1W)", s, f"₹{v:.0f} Cr")
+    if "z_score" in sector_df.columns:
+        s, v = _top("z_score")
+        c3.metric("Top Z-Score", s, f"{v:+.1f}σ",
+                  help="Most statistically abnormal delivery today — how many std-devs above its own 100-day norm")
     s, v = _top("1W_price_chg_pct");  c4.metric("Best Price (1W)", s, f"{v:+.2f}%")
     if "2W_price_chg_pct" in sector_df.columns:
         s, v = _top("2W_price_chg_pct")

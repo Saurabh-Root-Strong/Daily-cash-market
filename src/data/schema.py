@@ -71,7 +71,103 @@ def initialize_schema() -> None:
             )
         """)
 
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS index_data (
+                trade_date   DATE    NOT NULL,
+                index_name   VARCHAR NOT NULL,
+                open_val     DOUBLE,
+                high_val     DOUBLE,
+                low_val      DOUBLE,
+                close_val    DOUBLE,
+                prev_close   DOUBLE,
+                points_chg   DOUBLE,
+                pct_chg      DOUBLE,
+                volume       BIGINT,
+                turnover_cr  DOUBLE,
+                pe_ratio     DOUBLE,
+                pb_ratio     DOUBLE,
+                div_yield    DOUBLE,
+                PRIMARY KEY (trade_date, index_name)
+            )
+        """)
+
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS fao_participant (
+                trade_date         DATE    NOT NULL,
+                client_type        VARCHAR NOT NULL,
+                data_type          VARCHAR NOT NULL,
+                fut_idx_long       BIGINT  DEFAULT 0,
+                fut_idx_short      BIGINT  DEFAULT 0,
+                fut_stk_long       BIGINT  DEFAULT 0,
+                fut_stk_short      BIGINT  DEFAULT 0,
+                opt_idx_call_long  BIGINT  DEFAULT 0,
+                opt_idx_call_short BIGINT  DEFAULT 0,
+                opt_idx_put_long   BIGINT  DEFAULT 0,
+                opt_idx_put_short  BIGINT  DEFAULT 0,
+                opt_stk_call_long  BIGINT  DEFAULT 0,
+                opt_stk_call_short BIGINT  DEFAULT 0,
+                opt_stk_put_long   BIGINT  DEFAULT 0,
+                opt_stk_put_short  BIGINT  DEFAULT 0,
+                total_long         BIGINT  DEFAULT 0,
+                total_short        BIGINT  DEFAULT 0,
+                PRIMARY KEY (trade_date, client_type, data_type)
+            )
+        """)
+
         conn.execute("CREATE INDEX IF NOT EXISTS idx_dd_date        ON daily_data(trade_date)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_dd_symbol      ON daily_data(symbol)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_dd_date_symbol ON daily_data(trade_date, symbol)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_sm_sector      ON sector_master(sector)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_id_date        ON index_data(trade_date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_id_name        ON index_data(index_name)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_fao_date       ON fao_participant(trade_date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_fao_type       ON fao_participant(client_type)")
+
+        # FII Derivatives Statistics — buy/sell value by contract type (Index/Stock F&O)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS fii_derivatives_stats (
+                trade_date      DATE    NOT NULL,
+                category        VARCHAR NOT NULL,
+                buy_contracts   BIGINT  DEFAULT 0,
+                sell_contracts  BIGINT  DEFAULT 0,
+                buy_value_cr    DOUBLE  DEFAULT 0,
+                sell_value_cr   DOUBLE  DEFAULT 0,
+                oi_contracts    BIGINT  DEFAULT 0,
+                oi_value_cr     DOUBLE  DEFAULT 0,
+                PRIMARY KEY (trade_date, category)
+            )
+        """)
+        # Non-destructive migration: add oi_value_cr if table pre-existed
+        try:
+            conn.execute(
+                "ALTER TABLE fii_derivatives_stats ADD COLUMN IF NOT EXISTS oi_value_cr DOUBLE DEFAULT 0"
+            )
+        except Exception:
+            pass
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_fiis_date ON fii_derivatives_stats(trade_date)")
+
+        # F&O Bhavcopy — per-instrument snapshot (futures + options, index + stock)
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS fno_bhavcopy (
+                trade_date    DATE    NOT NULL,
+                instrument    VARCHAR NOT NULL,
+                symbol        VARCHAR NOT NULL,
+                expiry_date   DATE    NOT NULL,
+                strike_price  DOUBLE  DEFAULT 0,
+                option_type   VARCHAR DEFAULT 'XX',
+                open_price    DOUBLE,
+                high_price    DOUBLE,
+                low_price     DOUBLE,
+                close_price   DOUBLE,
+                settle_price  DOUBLE,
+                contracts     BIGINT  DEFAULT 0,
+                value_lacs    DOUBLE  DEFAULT 0,
+                open_interest BIGINT  DEFAULT 0,
+                chg_in_oi     BIGINT  DEFAULT 0,
+                PRIMARY KEY (trade_date, instrument, symbol, expiry_date, strike_price, option_type)
+            )
+        """)
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_fnob_date       ON fno_bhavcopy(trade_date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_fnob_symbol     ON fno_bhavcopy(symbol)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_fnob_expiry     ON fno_bhavcopy(expiry_date)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_fnob_instrument ON fno_bhavcopy(instrument)")

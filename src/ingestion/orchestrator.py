@@ -19,9 +19,17 @@ from src.core.logging import get_logger
 from src.data.repository import MarketDataRepository, get_repository
 from src.ingestion.bhavcopy_fetcher import BhavCopyFetcher
 from src.ingestion.delivery_fetcher import DeliveryFetcher
+from src.ingestion.fao_fetcher import FAOParticipantFetcher
+from src.ingestion.fii_stats_fetcher import FIIStatsFetcher
+from src.ingestion.fno_bhavcopy_fetcher import FNOBhavCopyFetcher
 from src.ingestion.http_client import NSEHttpClient
+from src.ingestion.index_fetcher import IndexFetcher
 
-__all__ = ["fetch_one_date", "run_daily_job", "run_backfill", "seed_sectors"]
+__all__ = [
+    "fetch_one_date", "run_daily_job", "run_backfill",
+    "run_index_backfill", "run_fao_backfill", "run_fii_stats_backfill",
+    "run_fno_backfill", "seed_sectors",
+]
 
 log = get_logger(__name__)
 
@@ -69,6 +77,44 @@ def fetch_one_date(
         if not delivery_df.empty:
             repo.update_delivery_data(delivery_df)
             log.info("Updated delivery data for %s", trade_date)
+
+        # Fetch index data (niftyindices.com — independent of NSE bhavcopy)
+        try:
+            idx_df = IndexFetcher().fetch(trade_date)
+            if not idx_df.empty:
+                repo.upsert_index_data(idx_df)
+                log.info("Inserted %d index rows for %s", len(idx_df), trade_date)
+        except Exception as idx_exc:
+            log.warning("Index fetch failed for %s: %s", trade_date, idx_exc)
+
+        # Fetch F&O participant-wise OI + Volume (non-fatal — separate data source)
+        try:
+            fao_df = FAOParticipantFetcher(client).fetch(trade_date)
+            if not fao_df.empty:
+                repo.upsert_fao_data(fao_df)
+                log.info("Inserted %d F&O participant rows for %s", len(fao_df), trade_date)
+        except Exception as fao_exc:
+            log.warning("F&O participant fetch failed for %s: %s", trade_date, fao_exc)
+
+        # Fetch FII Derivatives Statistics (non-fatal — buy/sell value by contract type)
+        try:
+            fii_stats_df = FIIStatsFetcher(client).fetch(trade_date)
+            if not fii_stats_df.empty:
+                repo.upsert_fii_stats(fii_stats_df)
+                log.info("Inserted %d FII stats rows for %s", len(fii_stats_df), trade_date)
+        except Exception as fii_exc:
+            log.warning("FII stats fetch failed for %s: %s", trade_date, fii_exc)
+
+        # Fetch FNO Bhavcopy (non-fatal; NSE API returns today's file regardless of date)
+        try:
+            from datetime import date as _date
+            if trade_date == _date.today():
+                fno_df = FNOBhavCopyFetcher(client).fetch(trade_date)
+                if not fno_df.empty:
+                    repo.upsert_fno_bhavcopy(fno_df)
+                    log.info("Inserted %d FNO bhavcopy rows for %s", len(fno_df), trade_date)
+        except Exception as fno_exc:
+            log.warning("FNO bhavcopy fetch failed for %s: %s", trade_date, fno_exc)
 
         duration = time.perf_counter() - t0
         repo.log_run("daily", trade_date, "success", rows, None, duration)
@@ -138,6 +184,164 @@ def run_backfill(
         time.sleep(1.0)
 
     log.info("Backfill complete: processed %d dates", len(to_fetch))
+
+
+def run_index_backfill(
+    days: int = 120,
+    repo: Optional[MarketDataRepository] = None,
+) -> None:
+    """Backfill NiftyIndices daily snapshots for the last `days` weekdays."""
+    from src.data.schema import initialize_schema
+
+    initialize_schema()
+    repo = repo or get_repository()
+    fetcher = IndexFetcher()
+    target_dates = _weekdays_back(days)
+
+    # Skip dates already present
+    with repo._cm.connect() as conn:
+        existing = {
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT trade_date FROM index_data"
+            ).fetchall()
+        }
+
+    to_fetch = [d for d in sorted(target_dates) if d not in existing]
+    log.info("Index backfill: %d dates needed, %d already present",
+             len(to_fetch), len(existing))
+
+    for i, d in enumerate(to_fetch):
+        log.info("Index backfill [%d/%d]: %s", i + 1, len(to_fetch), d)
+        df = fetcher.fetch(d)
+        if not df.empty:
+            repo.upsert_index_data(df)
+        time.sleep(0.5)
+
+    log.info("Index backfill complete: %d dates processed", len(to_fetch))
+
+
+def run_fao_backfill(
+    days: int = 365,
+    client: Optional[NSEHttpClient] = None,
+    repo: Optional[MarketDataRepository] = None,
+) -> None:
+    """Backfill F&O participant-wise OI + Volume for the last `days` weekdays."""
+    from src.data.schema import initialize_schema
+
+    initialize_schema()
+    client = client or NSEHttpClient()
+    repo   = repo   or get_repository()
+
+    target_dates = _weekdays_back(days)
+
+    # Skip dates already in the fao_participant table
+    with repo._cm.connect() as conn:
+        existing = {
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT trade_date FROM fao_participant"
+            ).fetchall()
+        }
+
+    to_fetch = [d for d in sorted(target_dates) if d not in existing]
+    log.info("F&O backfill: %d dates needed, %d already present",
+             len(to_fetch), len(existing))
+
+    for i, d in enumerate(to_fetch):
+        log.info("F&O backfill [%d/%d]: %s", i + 1, len(to_fetch), d)
+        try:
+            fao_df = FAOParticipantFetcher(client).fetch(d)
+            if not fao_df.empty:
+                repo.upsert_fao_data(fao_df)
+                log.info("  [OK] %d rows inserted", len(fao_df))
+            else:
+                log.info("  [--] No data (holiday/weekend)")
+        except Exception as exc:
+            log.warning("  [!!] Failed: %s", exc)
+        time.sleep(1.5)
+
+    log.info("F&O backfill complete: %d dates processed", len(to_fetch))
+
+
+def run_fii_stats_backfill(
+    days: int = 365,
+    client: Optional[NSEHttpClient] = None,
+    repo: Optional[MarketDataRepository] = None,
+) -> None:
+    """Backfill FII Derivatives Statistics for the last `days` weekdays."""
+    from src.data.schema import initialize_schema
+
+    initialize_schema()
+    client = client or NSEHttpClient()
+    repo   = repo   or get_repository()
+
+    target_dates = _weekdays_back(days)
+
+    with repo._cm.connect() as conn:
+        existing = {
+            r[0] for r in conn.execute(
+                "SELECT DISTINCT trade_date FROM fii_derivatives_stats"
+            ).fetchall()
+        }
+
+    to_fetch = [d for d in sorted(target_dates) if d not in existing]
+    log.info("FII Stats backfill: %d dates needed, %d already present",
+             len(to_fetch), len(existing))
+
+    for i, d in enumerate(to_fetch):
+        log.info("FII Stats backfill [%d/%d]: %s", i + 1, len(to_fetch), d)
+        try:
+            df = FIIStatsFetcher(client).fetch(d)
+            if not df.empty:
+                repo.upsert_fii_stats(df)
+                log.info("  [OK] %d rows inserted", len(df))
+            else:
+                log.info("  [--] No data (holiday/weekend)")
+        except Exception as exc:
+            log.warning("  [!!] Failed: %s", exc)
+        time.sleep(1.5)
+
+    log.info("FII Stats backfill complete: %d dates processed", len(to_fetch))
+
+
+def run_fno_backfill(
+    days: int = 1,
+    client: Optional[NSEHttpClient] = None,
+    repo: Optional[MarketDataRepository] = None,
+) -> None:
+    """
+    Fetch the latest available F&O Bhavcopy from NSE.
+
+    Note: the NSE Archives API for the FNO bhavcopy only returns the CURRENT
+    day's file reliably (no-date request).  Date-specific historical requests
+    are broken (they map all months to January).  This function therefore
+    fetches today's file regardless of the `days` parameter, and is designed
+    to be called once per trading day via the daily job.
+    """
+    from src.data.schema import initialize_schema
+    from datetime import date as _date
+
+    initialize_schema()
+    client = client or NSEHttpClient()
+    repo   = repo   or get_repository()
+
+    today = _date.today()
+    if today.weekday() >= 5:
+        log.info("FNO backfill: today is weekend — skipping")
+        return
+
+    log.info("FNO backfill: fetching latest F&O bhavcopy (NSE serves current file)")
+    try:
+        df = FNOBhavCopyFetcher(client).fetch(today)
+        if not df.empty:
+            actual_date = df["trade_date"].iloc[0]
+            repo.upsert_fno_bhavcopy(df)
+            log.info("FNO backfill: %d rows stored for %s", len(df), actual_date)
+        else:
+            log.info("FNO backfill: no data returned (market holiday or after hours?)")
+    except Exception as exc:
+        log.warning("FNO backfill failed: %s", exc)
+
+    log.info("FNO backfill complete")
 
 
 def seed_sectors(

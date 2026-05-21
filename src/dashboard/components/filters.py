@@ -56,7 +56,7 @@ def render_filter_builder() -> list[dict]:
     _, fh2, fh3, fh4, _ = st.columns([0.12, 2.5, 1.5, 1.8, 0.5])
     fh2.markdown("<small style='color:#888'>Metric</small>",    unsafe_allow_html=True)
     fh3.markdown("<small style='color:#888'>Condition</small>", unsafe_allow_html=True)
-    fh4.markdown("<small style='color:#888'>Value (%)</small>", unsafe_allow_html=True)
+    fh4.markdown("<small style='color:#888'>Value (% or Cr)</small>", unsafe_allow_html=True)
 
     # ── One row per active filter ─────────────────────────────────────────────
     delete_idx = None
@@ -83,7 +83,7 @@ def render_filter_builder() -> list[dict]:
         with fc3:
             st.number_input(
                 "val", value=float(flt.get("value", 0.0)),
-                min_value=-100.0, max_value=100.0, step=0.5, format="%.1f",
+                min_value=-50000.0, max_value=50000.0, step=1.0, format="%.1f",
                 key=f"fv_{i}", label_visibility="collapsed",
             )
         with fc4:
@@ -129,7 +129,10 @@ def render_filter_summary(active_filters: list[dict], match_count: int) -> None:
     """Show 'Active filters (n): ... → N sector(s) match' caption."""
     if not active_filters:
         return
-    parts = [f"**{f['label']}** {f['op']} {f['value']:.1f}%" for f in active_filters]
+    parts = []
+    for f in active_filters:
+        unit = " Cr" if "Deliv Cr" in f["label"] else "%"
+        parts.append(f"**{f['label']}** {f['op']} {f['value']:.1f}{unit}")
     st.caption(
         f"Active filters ({len(parts)}): " + " &nbsp;AND&nbsp; ".join(parts)
         + f" → **{match_count} sector(s)** match"

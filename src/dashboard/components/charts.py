@@ -234,27 +234,90 @@ def outlook_bar_chart(scored_df: pd.DataFrame) -> go.Figure:
     return fig
 
 
+def signal_bar_chart(
+    df: pd.DataFrame,
+    col: str,
+    x_title: str,
+    fmt: str,
+    ref_val: float | None,
+    thresholds: list[tuple[float, str]],
+) -> go.Figure:
+    """Single-metric horizontal bar — sorted by signal strength, colored by threshold.
+
+    thresholds: list of (min_value, color) sorted descending — first match wins.
+    """
+    sdf = df.dropna(subset=[col]).sort_values(col, ascending=True).copy()
+
+    sorted_t = sorted(thresholds, key=lambda t: t[0], reverse=True)
+
+    def _color(v: float) -> str:
+        for threshold, color in sorted_t:
+            if v >= threshold:
+                return color
+        return sorted_t[-1][1]
+
+    colors = [_color(float(v)) for v in sdf[col]]
+    texts  = [fmt.format(v) for v in sdf[col]]
+
+    fig = go.Figure(go.Bar(
+        y=sdf["sector"], x=sdf[col], orientation="h",
+        marker_color=colors, opacity=0.9,
+        text=texts, textposition="outside", textfont=dict(size=10),
+        hovertemplate=f"<b>%{{y}}</b><br>{x_title}: %{{text}}<extra></extra>",
+    ))
+
+    if ref_val is not None:
+        fig.add_vline(
+            x=ref_val,
+            line_dash="dash", line_width=1.5,
+            line_color="rgba(255,255,255,0.35)",
+            annotation_text=f"avg ({fmt.format(ref_val)})",
+            annotation_position="top right",
+            annotation_font=dict(size=10, color="rgba(255,255,255,0.5)"),
+        )
+
+    fig.update_layout(
+        xaxis=dict(title=x_title, zeroline=True,
+                   zerolinecolor="rgba(255,255,255,0.25)"),
+        yaxis=dict(tickfont=dict(size=11)),
+        plot_bgcolor=PLOT_BG, paper_bgcolor=PAPER_BG,
+        margin=dict(l=185, r=110, t=20, b=50),
+        height=max(460, len(sdf) * 22 + 110),
+    )
+    return fig
+
+
 def period_comparison_chart(df: pd.DataFrame, metric: str) -> go.Figure:
-    """Grouped horizontal bar chart comparing 1W / 2W / 1M / 3M for all sectors."""
+    """Grouped horizontal bar chart comparing 1W / 2W / 1M / 3M for all sectors.
+    Sorted by 1W (most recent period) so the freshest signal drives ordering.
+    """
     col_map = {
-        "Delivery %":     tuple(DELIV_KEYS),
-        "Price Change %": tuple(PRICE_KEYS),
+        "Delivered Value (Cr)": tuple(DELIV_KEYS),
+        "Price Change %":       tuple(PRICE_KEYS),
     }
     cols   = [c for c in col_map[metric] if c in df.columns]
     labels = PERIOD_LABELS[: len(cols)]
-    sdf    = df.sort_values(cols[-1], ascending=True).fillna(0)
+    # Sort by 1W (cols[0]) — most recent period, not 3M which always favours large sectors
+    sdf    = df.sort_values(cols[0], ascending=True).fillna(0)
+    is_cr  = metric == "Delivered Value (Cr)"
 
     fig = go.Figure()
     for col, name, color in zip(cols, labels, PERIOD_COLORS):
+        hover = (
+            f"<b>%{{y}}</b><br>{name}: ₹%{{x:.0f}} Cr<extra></extra>"
+            if is_cr else
+            f"<b>%{{y}}</b><br>{name}: %{{x:.2f}}%<extra></extra>"
+        )
         fig.add_trace(go.Bar(
             y=sdf["sector"], x=sdf[col], name=name, orientation="h",
             marker_color=color, opacity=0.85,
-            hovertemplate=f"<b>%{{y}}</b><br>{name}: %{{x:.2f}}%<extra></extra>",
+            hovertemplate=hover,
         ))
     fig.update_layout(
         barmode="group",
         xaxis=dict(title=metric, zeroline=True,
-                   zerolinecolor="rgba(255,255,255,0.3)", ticksuffix="%"),
+                   zerolinecolor="rgba(255,255,255,0.3)",
+                   ticksuffix=" Cr" if is_cr else "%"),
         yaxis=dict(tickfont=dict(size=11)),
         legend=dict(orientation="h", y=1.04, x=0, font=dict(size=12)),
         plot_bgcolor=PLOT_BG, paper_bgcolor=PAPER_BG,

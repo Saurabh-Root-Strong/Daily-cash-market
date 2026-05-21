@@ -216,12 +216,11 @@ def get_sector_master_performance(
         GROUP BY s.sector
     """
 
-    # ── Average delivery % over the period ───────────────────────────────────
+    # ── Total delivered value (₹ Cr) over the period — real money flow ──────
     _deliv_sql = """
         SELECT
             s.sector,
-            SUM(b.deliv_per * b.turnover_lacs) / NULLIF(SUM(b.turnover_lacs), 0)
-                AS deliv_pct
+            SUM(b.turnover_lacs * b.deliv_per / 100.0) / 100.0 AS deliv_val_cr
         FROM daily_data b
         INNER JOIN sector_master s ON b.symbol = s.symbol
         WHERE s.sector IS NOT NULL
@@ -232,25 +231,190 @@ def get_sector_master_performance(
         GROUP BY s.sector
     """
 
-    def _fetch(label: str, calendar_days: int) -> pd.DataFrame:
-        start = as_of_date - timedelta(days=calendar_days)
+    def _fetch(label: str, start: date) -> pd.DataFrame:
         price_df = query_dataframe(_price_sql, [as_of_date, min_turnover_lacs, start])
         price_df.columns = ["sector", f"{label}_price_chg_pct"]
-
         deliv_df = query_dataframe(_deliv_sql, [min_turnover_lacs, start, as_of_date])
-        deliv_df.columns = ["sector", f"{label}_deliv_pct"]
-
+        deliv_df.columns = ["sector", f"{label}_deliv_cr"]
         return price_df.merge(deliv_df, on="sector", how="outer")
 
-    w  = _fetch("1W", 7)
-    tw = _fetch("2W", 14)
-    m  = _fetch("1M", 30)
-    q  = _fetch("3M", 90)
+    # ── Layer 1: 1W/2W/1M/3M delivery value ──────────────────────────────────
+    w  = _fetch("1W", as_of_date - timedelta(days=7))
+    tw = _fetch("2W", as_of_date - timedelta(days=14))
+    m  = _fetch("1M", as_of_date - timedelta(days=30))
+    q  = _fetch("3M", as_of_date - timedelta(days=90))
 
     result = (w.merge(tw, on="sector", how="outer")
                .merge(m,  on="sector", how="outer")
                .merge(q,  on="sector", how="outer"))
-    result = result.sort_values("3M_deliv_pct", ascending=False).reset_index(drop=True)
+
+    # ── Layer 2 & 3: Pure historical 100-trading-day baseline ────────────────────
+    # Baseline EXCLUDES today — today is the signal; history is the reference.
+    # OFFSET 100 from dates BEFORE today → 101st most-recent pre-today date.
+    # Window: > cutoff AND < as_of_date = exactly 100 trading days, none of which is today.
+    cutoff_row = query_dataframe(
+        "SELECT DISTINCT trade_date FROM daily_data "
+        "WHERE trade_date < ? ORDER BY trade_date DESC LIMIT 1 OFFSET 100",
+        [as_of_date],
+    )
+    cutoff_100d = (
+        pd.to_datetime(cutoff_row["trade_date"].iloc[0]).date()
+        if not cutoff_row.empty
+        else as_of_date - timedelta(days=200)
+    )
+
+    # 100D total DV — pure history, today excluded
+    _baseline_sql = """
+        SELECT s.sector,
+               SUM(b.turnover_lacs * b.deliv_per / 100.0) / 100.0 AS deliv_val_cr
+        FROM daily_data b
+        INNER JOIN sector_master s ON b.symbol = s.symbol
+        WHERE s.sector IS NOT NULL
+          AND b.series IN ('EQ', 'SM', 'ST')
+          AND b.turnover_lacs >= ?
+          AND b.trade_date > ?
+          AND b.trade_date < ?
+        GROUP BY s.sector
+    """
+    baseline_df = query_dataframe(_baseline_sql, [min_turnover_lacs, cutoff_100d, as_of_date])
+    baseline_df.columns = ["sector", "100D_deliv_cr"]
+    result = result.merge(baseline_df, on="sector", how="left")
+
+    # Today's single-day delivery per sector (DV_i = Turnover_i x Delivery%)
+    _today_dv_sql = """
+        SELECT s.sector,
+               SUM(b.turnover_lacs * b.deliv_per / 100.0) / 100.0 AS today_dv_cr
+        FROM daily_data b
+        INNER JOIN sector_master s ON b.symbol = s.symbol
+        WHERE s.sector IS NOT NULL
+          AND b.series IN ('EQ', 'SM', 'ST')
+          AND b.turnover_lacs >= ?
+          AND b.trade_date = ?
+        GROUP BY s.sector
+    """
+    today_df = query_dataframe(_today_dv_sql, [min_turnover_lacs, as_of_date])
+    today_df.columns = ["sector", "today_dv_cr"]
+    result = result.merge(today_df, on="sector", how="left")
+
+    # ── Layer 3: exact mean/stddev over the same pure historical 100D window ──────
+    # Must run BEFORE dv_ratio so we can use mean_100d_dv as the denominator.
+    # Using total/100 is wrong when actual trading days N ≠ 100 (weekends, holidays).
+    _stats_sql = """
+        SELECT sector,
+               AVG(daily_dv)         AS mean_100d_dv,
+               STDDEV_SAMP(daily_dv) AS std_100d_dv
+        FROM (
+            SELECT s.sector,
+                   b.trade_date,
+                   SUM(b.turnover_lacs * b.deliv_per / 100.0) / 100.0 AS daily_dv
+            FROM daily_data b
+            INNER JOIN sector_master s ON b.symbol = s.symbol
+            WHERE s.sector IS NOT NULL
+              AND b.series IN ('EQ', 'SM', 'ST')
+              AND b.turnover_lacs >= ?
+              AND b.trade_date > ?
+              AND b.trade_date < ?
+            GROUP BY s.sector, b.trade_date
+        ) daily_stats
+        GROUP BY sector
+    """
+    stats_df = query_dataframe(_stats_sql, [min_turnover_lacs, cutoff_100d, as_of_date])
+    stats_df.columns = ["sector", "mean_100d_dv", "std_100d_dv"]
+    result = result.merge(stats_df, on="sector", how="left")
+
+    # Today's sector turnover-weighted delivery % — conviction quality check.
+    # If delivery VALUE (₹) is high but delivery % fell below its 100D avg, it's a
+    # speculative volume spike, not institutional accumulation. Both metrics together
+    # distinguish genuine institutional conviction from "heavy trading, low holding."
+    _today_pct_sql = """
+        SELECT s.sector,
+               SUM(b.deliv_per * b.turnover_lacs) / NULLIF(SUM(b.turnover_lacs), 0)
+                   AS today_wtd_deliv_pct
+        FROM daily_data b
+        INNER JOIN sector_master s ON b.symbol = s.symbol
+        WHERE s.sector IS NOT NULL
+          AND b.series IN ('EQ', 'SM', 'ST')
+          AND b.turnover_lacs >= ?
+          AND b.trade_date = ?
+        GROUP BY s.sector
+    """
+    today_pct_df = query_dataframe(_today_pct_sql, [min_turnover_lacs, as_of_date])
+    today_pct_df.columns = ["sector", "today_wtd_deliv_pct"]
+    result = result.merge(today_pct_df, on="sector", how="left")
+
+    # 100D average sector turnover-weighted delivery % (pure history, today excluded)
+    _avg_pct_sql = """
+        SELECT sector, AVG(daily_wtd_deliv_pct) AS avg_wtd_deliv_pct_100d
+        FROM (
+            SELECT s.sector, b.trade_date,
+                   SUM(b.deliv_per * b.turnover_lacs) / NULLIF(SUM(b.turnover_lacs), 0)
+                       AS daily_wtd_deliv_pct
+            FROM daily_data b
+            INNER JOIN sector_master s ON b.symbol = s.symbol
+            WHERE s.sector IS NOT NULL
+              AND b.series IN ('EQ', 'SM', 'ST')
+              AND b.turnover_lacs >= ?
+              AND b.trade_date > ?
+              AND b.trade_date < ?
+            GROUP BY s.sector, b.trade_date
+        ) daily_pct
+        GROUP BY sector
+    """
+    avg_pct_df = query_dataframe(_avg_pct_sql, [min_turnover_lacs, cutoff_100d, as_of_date])
+    avg_pct_df.columns = ["sector", "avg_wtd_deliv_pct_100d"]
+    result = result.merge(avg_pct_df, on="sector", how="left")
+
+    # DV Ratio = today_dv / mean_100d_dv (exact daily mean, not total/100 approximation)
+    result["dv_ratio"] = (
+        result["today_dv_cr"] /
+        result["mean_100d_dv"].replace(0, float("nan"))
+    ).replace([float("inf"), -float("inf")], float("nan"))
+
+    result["z_score"] = (
+        (result["today_dv_cr"] - result["mean_100d_dv"]) /
+        result["std_100d_dv"].replace(0, float("nan"))
+    ).replace([float("inf"), -float("inf")], float("nan"))
+
+    # ── Breadth: fraction of stocks where today DV_i > stock's own 100D avg daily DV ──
+    # Stocks without history excluded from denominator (not penalised for having no baseline).
+    _breadth_sql = """
+        WITH today_dv AS (
+            SELECT b.symbol,
+                   b.turnover_lacs * b.deliv_per / 100.0 / 100.0 AS today_dv_cr
+            FROM daily_data b
+            WHERE b.series IN ('EQ', 'SM', 'ST')
+              AND b.turnover_lacs >= ?
+              AND b.trade_date = ?
+        ),
+        hist_avg AS (
+            SELECT b.symbol,
+                   AVG(b.turnover_lacs * b.deliv_per / 100.0 / 100.0) AS avg_dv_cr
+            FROM daily_data b
+            WHERE b.series IN ('EQ', 'SM', 'ST')
+              AND b.turnover_lacs >= ?
+              AND b.trade_date > ?
+              AND b.trade_date < ?
+            GROUP BY b.symbol
+        )
+        SELECT s.sector,
+               CAST(SUM(CASE WHEN h.avg_dv_cr IS NOT NULL AND t.today_dv_cr > h.avg_dv_cr
+                             THEN 1 ELSE 0 END) AS DOUBLE)
+                   / NULLIF(SUM(CASE WHEN h.avg_dv_cr IS NOT NULL THEN 1 ELSE 0 END), 0)
+                   AS breadth
+        FROM today_dv t
+        INNER JOIN sector_master s ON t.symbol = s.symbol
+        LEFT JOIN hist_avg h ON t.symbol = h.symbol
+        WHERE s.sector IS NOT NULL
+        GROUP BY s.sector
+    """
+    breadth_df = query_dataframe(
+        _breadth_sql,
+        [min_turnover_lacs, as_of_date, min_turnover_lacs, cutoff_100d, as_of_date],
+    )
+    breadth_df.columns = ["sector", "breadth"]
+    result = result.merge(breadth_df, on="sector", how="left")
+
+    result = result.sort_values("dv_ratio", ascending=False).reset_index(drop=True)
     return result
 
 
@@ -298,12 +462,12 @@ def get_subsector_master_performance(
         GROUP BY s.sector, COALESCE(s.industry, 'Others')
     """
 
+    # Two separate delivery queries: one with stock_count, one without
     _deliv_sql = """
         SELECT
             s.sector,
             COALESCE(s.industry, 'Others') AS industry,
-            SUM(b.deliv_per * b.turnover_lacs) / NULLIF(SUM(b.turnover_lacs), 0)
-                AS deliv_pct,
+            SUM(b.turnover_lacs * b.deliv_per / 100.0) / 100.0 AS deliv_val_cr,
             COUNT(DISTINCT b.symbol) AS stock_count
         FROM daily_data b
         INNER JOIN sector_master s ON b.symbol = s.symbol
@@ -314,31 +478,166 @@ def get_subsector_master_performance(
           AND b.trade_date <= ?
         GROUP BY s.sector, COALESCE(s.industry, 'Others')
     """
+    _deliv_sql_no_count = """
+        SELECT
+            s.sector,
+            COALESCE(s.industry, 'Others') AS industry,
+            SUM(b.turnover_lacs * b.deliv_per / 100.0) / 100.0 AS deliv_val_cr
+        FROM daily_data b
+        INNER JOIN sector_master s ON b.symbol = s.symbol
+        WHERE s.sector IS NOT NULL
+          AND b.series IN ('EQ', 'SM', 'ST')
+          AND b.turnover_lacs >= ?
+          AND b.trade_date > ?
+          AND b.trade_date <= ?
+        GROUP BY s.sector, COALESCE(s.industry, 'Others')
+    """
 
-    def _fetch(label: str, calendar_days: int) -> pd.DataFrame:
-        start = as_of_date - timedelta(days=calendar_days)
+    def _fetch(label: str, start: date) -> pd.DataFrame:
         price_df = query_dataframe(_price_sql, [as_of_date, min_turnover_lacs, start])
         price_df.columns = ["sector", "industry", f"{label}_price_chg_pct"]
-        deliv_df = query_dataframe(_deliv_sql, [min_turnover_lacs, start, as_of_date])
-        deliv_df.columns = ["sector", "industry", f"{label}_deliv_pct", "stock_count"]
-        # keep stock_count only from the shortest period (most current)
         if label == "1W":
-            merged = price_df.merge(deliv_df, on=["sector", "industry"], how="outer")
+            deliv_df = query_dataframe(_deliv_sql, [min_turnover_lacs, start, as_of_date])
+            deliv_df.columns = ["sector", "industry", f"{label}_deliv_cr", "stock_count"]
         else:
-            merged = price_df.merge(
-                deliv_df.drop(columns=["stock_count"]), on=["sector", "industry"], how="outer"
-            )
-        return merged
+            deliv_df = query_dataframe(_deliv_sql_no_count, [min_turnover_lacs, start, as_of_date])
+            deliv_df.columns = ["sector", "industry", f"{label}_deliv_cr"]
+        return price_df.merge(deliv_df, on=["sector", "industry"], how="outer")
 
-    w  = _fetch("1W", 7)
-    tw = _fetch("2W", 14)
-    m  = _fetch("1M", 30)
-    q  = _fetch("3M", 90)
+    w  = _fetch("1W", as_of_date - timedelta(days=7))
+    tw = _fetch("2W", as_of_date - timedelta(days=14))
+    m  = _fetch("1M", as_of_date - timedelta(days=30))
+    q  = _fetch("3M", as_of_date - timedelta(days=90))
 
     result = (w.merge(tw, on=["sector", "industry"], how="outer")
                .merge(m,  on=["sector", "industry"], how="outer")
                .merge(q,  on=["sector", "industry"], how="outer"))
-    result = result.sort_values(["sector", "3M_deliv_pct"], ascending=[True, False])
+
+    # ── Layer 2 & 3: Pure historical 100-trading-day baseline per sub-sector ───
+    # Baseline EXCLUDES today — same logic as sector function.
+    cutoff_row = query_dataframe(
+        "SELECT DISTINCT trade_date FROM daily_data "
+        "WHERE trade_date < ? ORDER BY trade_date DESC LIMIT 1 OFFSET 100",
+        [as_of_date],
+    )
+    cutoff_100d = (
+        pd.to_datetime(cutoff_row["trade_date"].iloc[0]).date()
+        if not cutoff_row.empty
+        else as_of_date - timedelta(days=200)
+    )
+
+    _baseline_no_count_sql = """
+        SELECT s.sector,
+               COALESCE(s.industry, 'Others') AS industry,
+               SUM(b.turnover_lacs * b.deliv_per / 100.0) / 100.0 AS deliv_val_cr
+        FROM daily_data b
+        INNER JOIN sector_master s ON b.symbol = s.symbol
+        WHERE s.sector IS NOT NULL
+          AND b.series IN ('EQ', 'SM', 'ST')
+          AND b.turnover_lacs >= ?
+          AND b.trade_date > ?
+          AND b.trade_date < ?
+        GROUP BY s.sector, COALESCE(s.industry, 'Others')
+    """
+    baseline_df = query_dataframe(_baseline_no_count_sql,
+                                  [min_turnover_lacs, cutoff_100d, as_of_date])
+    baseline_df.columns = ["sector", "industry", "100D_deliv_cr"]
+    result = result.merge(baseline_df, on=["sector", "industry"], how="left")
+
+    # Today's single-day delivery per sub-sector
+    _today_dv_subsector_sql = """
+        SELECT s.sector,
+               COALESCE(s.industry, 'Others') AS industry,
+               SUM(b.turnover_lacs * b.deliv_per / 100.0) / 100.0 AS today_dv_cr
+        FROM daily_data b
+        INNER JOIN sector_master s ON b.symbol = s.symbol
+        WHERE s.sector IS NOT NULL
+          AND b.series IN ('EQ', 'SM', 'ST')
+          AND b.turnover_lacs >= ?
+          AND b.trade_date = ?
+        GROUP BY s.sector, COALESCE(s.industry, 'Others')
+    """
+    today_df = query_dataframe(_today_dv_subsector_sql, [min_turnover_lacs, as_of_date])
+    today_df.columns = ["sector", "industry", "today_dv_cr"]
+    result = result.merge(today_df, on=["sector", "industry"], how="left")
+
+    # Layer 3: exact mean/stddev per sub-sector — must run before dv_ratio
+    _stats_subsector_sql = """
+        SELECT sector, industry,
+               AVG(daily_dv)         AS mean_100d_dv,
+               STDDEV_SAMP(daily_dv) AS std_100d_dv
+        FROM (
+            SELECT s.sector,
+                   COALESCE(s.industry, 'Others') AS industry,
+                   b.trade_date,
+                   SUM(b.turnover_lacs * b.deliv_per / 100.0) / 100.0 AS daily_dv
+            FROM daily_data b
+            INNER JOIN sector_master s ON b.symbol = s.symbol
+            WHERE s.sector IS NOT NULL
+              AND b.series IN ('EQ', 'SM', 'ST')
+              AND b.turnover_lacs >= ?
+              AND b.trade_date > ?
+              AND b.trade_date < ?
+            GROUP BY s.sector, COALESCE(s.industry, 'Others'), b.trade_date
+        ) daily_stats
+        GROUP BY sector, industry
+    """
+    stats_df = query_dataframe(_stats_subsector_sql,
+                               [min_turnover_lacs, cutoff_100d, as_of_date])
+    stats_df.columns = ["sector", "industry", "mean_100d_dv", "std_100d_dv"]
+    result = result.merge(stats_df, on=["sector", "industry"], how="left")
+
+    # DV Ratio = today_dv / mean_100d_dv (exact daily mean, not total/100 approximation)
+    result["dv_ratio"] = (
+        result["today_dv_cr"] /
+        result["mean_100d_dv"].replace(0, float("nan"))
+    ).replace([float("inf"), -float("inf")], float("nan"))
+
+    result["z_score"] = (
+        (result["today_dv_cr"] - result["mean_100d_dv"]) /
+        result["std_100d_dv"].replace(0, float("nan"))
+    ).replace([float("inf"), -float("inf")], float("nan"))
+
+    # ── Breadth per sub-sector ────────────────────────────────────────────────
+    _breadth_subsector_sql = """
+        WITH today_dv AS (
+            SELECT b.symbol,
+                   b.turnover_lacs * b.deliv_per / 100.0 / 100.0 AS today_dv_cr
+            FROM daily_data b
+            WHERE b.series IN ('EQ', 'SM', 'ST')
+              AND b.turnover_lacs >= ?
+              AND b.trade_date = ?
+        ),
+        hist_avg AS (
+            SELECT b.symbol,
+                   AVG(b.turnover_lacs * b.deliv_per / 100.0 / 100.0) AS avg_dv_cr
+            FROM daily_data b
+            WHERE b.series IN ('EQ', 'SM', 'ST')
+              AND b.turnover_lacs >= ?
+              AND b.trade_date > ?
+              AND b.trade_date < ?
+            GROUP BY b.symbol
+        )
+        SELECT s.sector,
+               COALESCE(s.industry, 'Others') AS industry,
+               CAST(SUM(CASE WHEN h.avg_dv_cr IS NOT NULL AND t.today_dv_cr > h.avg_dv_cr
+                             THEN 1 ELSE 0 END) AS DOUBLE)
+                   / NULLIF(SUM(CASE WHEN h.avg_dv_cr IS NOT NULL THEN 1 ELSE 0 END), 0)
+                   AS breadth
+        FROM today_dv t
+        INNER JOIN sector_master s ON t.symbol = s.symbol
+        LEFT JOIN hist_avg h ON t.symbol = h.symbol
+        WHERE s.sector IS NOT NULL
+        GROUP BY s.sector, COALESCE(s.industry, 'Others')
+    """
+    breadth_sub_df = query_dataframe(
+        _breadth_subsector_sql,
+        [min_turnover_lacs, as_of_date, min_turnover_lacs, cutoff_100d, as_of_date],
+    )
+    breadth_sub_df.columns = ["sector", "industry", "breadth"]
+    result = result.merge(breadth_sub_df, on=["sector", "industry"], how="left")
+
+    result = result.sort_values(["sector", "dv_ratio"], ascending=[True, False])
     return result.reset_index(drop=True)
 
 
@@ -452,7 +751,8 @@ def search_stocks_performance(
     """
 
     deliv_hist_sql = f"""
-        SELECT b.symbol, AVG(b.deliv_per) AS deliv_pct
+        SELECT b.symbol,
+               SUM(b.turnover_lacs * b.deliv_per / 100.0) / 100.0 AS deliv_val_cr
         FROM daily_data b
         WHERE b.trade_date > ?
           AND b.trade_date <= ?
@@ -474,7 +774,7 @@ def search_stocks_performance(
         df.drop(columns=["start_price"], inplace=True)
 
         deliv_df = query_dataframe(deliv_hist_sql, [start, as_of_date] + symbols)
-        deliv_df.columns = ["symbol", f"{label}_deliv_pct"]
+        deliv_df.columns = ["symbol", f"{label}_deliv_cr"]
         df = df.merge(deliv_df, on="symbol", how="left")
 
     return df.reset_index(drop=True)
@@ -542,10 +842,10 @@ def get_subsector_stocks_performance(
           AND COALESCE(s.industry, 'Others') = ?
     """
 
-    # ── Average delivery % over period ────────────────────────────────────────
+    # ── Total delivered value (₹ Cr) over period ─────────────────────────────
     deliv_hist_sql = """
         SELECT b.symbol,
-               AVG(b.deliv_per) AS deliv_pct
+               SUM(b.turnover_lacs * b.deliv_per / 100.0) / 100.0 AS deliv_val_cr
         FROM daily_data b
         INNER JOIN sector_master s ON b.symbol = s.symbol
         WHERE b.trade_date > ?
@@ -569,9 +869,9 @@ def get_subsector_stocks_performance(
         )
         df.drop(columns=["start_price"], inplace=True)
 
-        # Avg delivery over period
+        # Delivered value over period
         dh = query_dataframe(deliv_hist_sql, [start, as_of_date, sector_name, industry_name])
-        dh.columns = ["symbol", f"{label}_deliv_pct"]
+        dh.columns = ["symbol", f"{label}_deliv_cr"]
         df = df.merge(dh, on="symbol", how="left")
 
     return df.reset_index(drop=True)

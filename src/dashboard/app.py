@@ -35,13 +35,15 @@ def main() -> None:
     )
 
     from src.core.config import get_config
-    from src.data.repository import get_available_dates
+    from src.dashboard.cache.queries import cached_available_dates
 
-    available_dates = get_available_dates(limit=90)
+    all_dates = cached_available_dates(limit=500)   # full history for backtest
 
-    if not available_dates:
+    if not all_dates:
         st.error("No data found. Run `setup.bat` or `python -m src.cli backfill 60` to load data.")
         st.stop()
+
+    available_dates = all_dates[:90]  # most recent 90 for normal date selector
 
     cfg = get_config()
     default_cr = cfg.analytics.min_turnover_lacs / 100
@@ -67,7 +69,16 @@ def main() -> None:
 
         page = st.radio(
             "Page",
-            options=["Sector Performance", "🔄 Sector Rotation"],
+            options=[
+                "Sector Performance",
+                "🔄 Sector Rotation",
+                "🎯 Big Players (F&O)",
+                "📊 F&O Activity",
+                "📋 F&O Stock Signals",
+                "🗓️ F&O Expiry Structure",
+                "📈 Index Tracker",
+                "🔬 Backtest",
+            ],
             index=0,
         )
 
@@ -76,7 +87,7 @@ def main() -> None:
         last_updated = _read_last_updated()
         if last_updated:
             st.caption(f"Last fetched: {last_updated}")
-        st.caption(f"History: {len(available_dates)} trading days")
+        st.caption(f"History: {len(all_dates)} trading days")
 
         if st.button("Refresh Data", help="Clear cached queries and reload latest data from DB"):
             st.cache_data.clear()
@@ -89,6 +100,24 @@ def main() -> None:
     elif page == "🔄 Sector Rotation":
         from src.dashboard.views import sector_rotation
         sector_rotation.render(selected_date, float(min_turnover))
+    elif page == "🎯 Big Players (F&O)":
+        from src.dashboard.views import fao_tracker
+        fao_tracker.render(selected_date)
+    elif page == "📊 F&O Activity":
+        from src.dashboard.views import fno_activity
+        fno_activity.render(selected_date)
+    elif page == "📋 F&O Stock Signals":
+        from src.dashboard.views import fno_stocks
+        fno_stocks.render(selected_date)
+    elif page == "🗓️ F&O Expiry Structure":
+        from src.dashboard.views import fno_expiry
+        fno_expiry.render(selected_date)
+    elif page == "📈 Index Tracker":
+        from src.dashboard.views import index_tracker
+        index_tracker.render(selected_date)
+    elif page == "🔬 Backtest":
+        from src.dashboard.views import backtest
+        backtest.render(all_dates)   # full history for signal/check date pickers
 
 
 if __name__ == "__main__":

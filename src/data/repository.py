@@ -19,10 +19,13 @@ __all__ = [
     "MarketDataRepository",
     "get_repository",
     "_set_repository",
-    # Module-level convenience wrappers (keep analytics layer import-compatible)
     "upsert_daily_data",
     "update_delivery_data",
     "upsert_sector_master",
+    "upsert_fao_data",
+    "upsert_fii_stats",
+    "upsert_fno_bhavcopy",
+    "upsert_index_data",
     "log_run",
     "get_latest_trade_date",
     "get_available_dates",
@@ -99,6 +102,121 @@ class MarketDataRepository:
                     last_updated        = excluded.last_updated
             """)
 
+    def upsert_fao_data(self, df: pd.DataFrame) -> int:
+        """Insert or replace F&O participant rows for the dates present in df."""
+        if df.empty:
+            return 0
+        dates = df["trade_date"].unique().tolist()
+        with self._cm.connect() as conn:
+            for d in dates:
+                conn.execute(
+                    "DELETE FROM fao_participant WHERE trade_date = ?", [d]
+                )
+            conn.register("_fao_df", df)
+            conn.execute("""
+                INSERT INTO fao_participant
+                    (trade_date, client_type, data_type,
+                     fut_idx_long, fut_idx_short, fut_stk_long, fut_stk_short,
+                     opt_idx_call_long, opt_idx_call_short,
+                     opt_idx_put_long,  opt_idx_put_short,
+                     opt_stk_call_long, opt_stk_call_short,
+                     opt_stk_put_long,  opt_stk_put_short,
+                     total_long, total_short)
+                SELECT
+                    trade_date, client_type, data_type,
+                    fut_idx_long, fut_idx_short, fut_stk_long, fut_stk_short,
+                    opt_idx_call_long, opt_idx_call_short,
+                    opt_idx_put_long,  opt_idx_put_short,
+                    opt_stk_call_long, opt_stk_call_short,
+                    opt_stk_put_long,  opt_stk_put_short,
+                    total_long, total_short
+                FROM _fao_df
+            """)
+        return len(df)
+
+    def upsert_fii_stats(self, df: pd.DataFrame) -> int:
+        """Insert or replace FII Derivatives Statistics rows for dates present in df."""
+        if df.empty:
+            return 0
+        dates = df["trade_date"].unique().tolist()
+        with self._cm.connect() as conn:
+            for d in dates:
+                conn.execute(
+                    "DELETE FROM fii_derivatives_stats WHERE trade_date = ?", [d]
+                )
+            conn.register("_fii_stats_df", df)
+            conn.execute("""
+                INSERT INTO fii_derivatives_stats
+                    (trade_date, category, buy_contracts, sell_contracts,
+                     buy_value_cr, sell_value_cr, oi_contracts, oi_value_cr)
+                SELECT
+                    trade_date, category, buy_contracts, sell_contracts,
+                    buy_value_cr, sell_value_cr, oi_contracts, oi_value_cr
+                FROM _fii_stats_df
+            """)
+        return len(df)
+
+    def upsert_fno_bhavcopy(self, df: pd.DataFrame) -> int:
+        """Insert or replace FNO Bhavcopy rows for dates present in df."""
+        if df.empty:
+            return 0
+        # NSE source file can have negative OI (roll adjustments); clip to 0
+        if "open_interest" in df.columns:
+            df = df.copy()
+            df["open_interest"] = df["open_interest"].clip(lower=0)
+        dates = df["trade_date"].unique().tolist()
+        with self._cm.connect() as conn:
+            for d in dates:
+                conn.execute(
+                    "DELETE FROM fno_bhavcopy WHERE trade_date = ?", [d]
+                )
+            conn.register("_fno_df", df)
+            conn.execute("""
+                INSERT INTO fno_bhavcopy
+                    (trade_date, instrument, symbol, expiry_date,
+                     strike_price, option_type,
+                     open_price, high_price, low_price, close_price, settle_price,
+                     contracts, value_lacs, open_interest, chg_in_oi)
+                SELECT
+                    trade_date, instrument, symbol, expiry_date,
+                    strike_price, option_type,
+                    open_price, high_price, low_price, close_price, settle_price,
+                    contracts, value_lacs, open_interest, chg_in_oi
+                FROM _fno_df
+            """)
+        return len(df)
+
+    def upsert_index_data(self, df: pd.DataFrame) -> int:
+        if df.empty:
+            return 0
+        with self._cm.connect() as conn:
+            conn.register("_idx_df", df)
+            conn.execute("""
+                INSERT INTO index_data
+                    (trade_date, index_name, open_val, high_val, low_val, close_val,
+                     prev_close, points_chg, pct_chg, volume, turnover_cr,
+                     pe_ratio, pb_ratio, div_yield)
+                SELECT
+                    trade_date, index_name, open_val, high_val, low_val, close_val,
+                    prev_close, points_chg, pct_chg, volume, turnover_cr,
+                    pe_ratio, pb_ratio, div_yield
+                FROM _idx_df
+                ON CONFLICT (trade_date, index_name) DO UPDATE SET
+                    open_val    = excluded.open_val,
+                    high_val    = excluded.high_val,
+                    low_val     = excluded.low_val,
+                    close_val   = excluded.close_val,
+                    prev_close  = excluded.prev_close,
+                    points_chg  = excluded.points_chg,
+                    pct_chg     = excluded.pct_chg,
+                    volume      = excluded.volume,
+                    turnover_cr = excluded.turnover_cr,
+                    pe_ratio    = excluded.pe_ratio,
+                    pb_ratio    = excluded.pb_ratio,
+                    div_yield   = excluded.div_yield
+            """)
+        return len(df)
+
     def log_run(
         self,
         run_type: str,
@@ -123,9 +241,10 @@ class MarketDataRepository:
         return row[0] if row else None
 
     def get_available_dates(self, limit: int = 90) -> list[datetime.date]:
+        # GROUP BY instead of DISTINCT: DuckDB DISTINCT+ORDER BY+LIMIT mis-fires
         with self._cm.connect() as conn:
             rows = conn.execute(
-                "SELECT DISTINCT trade_date FROM daily_data ORDER BY trade_date DESC LIMIT ?",
+                "SELECT trade_date FROM daily_data GROUP BY trade_date ORDER BY trade_date DESC LIMIT ?",
                 [limit],
             ).fetchall()
         return [r[0] for r in rows]
@@ -189,6 +308,22 @@ def update_delivery_data(df: pd.DataFrame) -> None:
 
 def upsert_sector_master(df: pd.DataFrame) -> None:
     return get_repository().upsert_sector_master(df)
+
+
+def upsert_fao_data(df: pd.DataFrame) -> int:
+    return get_repository().upsert_fao_data(df)
+
+
+def upsert_fii_stats(df: pd.DataFrame) -> int:
+    return get_repository().upsert_fii_stats(df)
+
+
+def upsert_fno_bhavcopy(df: pd.DataFrame) -> int:
+    return get_repository().upsert_fno_bhavcopy(df)
+
+
+def upsert_index_data(df: pd.DataFrame) -> int:
+    return get_repository().upsert_index_data(df)
 
 
 def log_run(

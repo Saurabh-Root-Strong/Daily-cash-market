@@ -3,10 +3,10 @@ venv/
 __pycache__/
 *.pyc
 *.pyo
-logs/*.log
-logs/scheduler.log
+logs/
 data/*.duckdb
 data/*.duckdb.wal
+data/*.db
 .pytest_cache/
 .idea/
 .DS_Store
