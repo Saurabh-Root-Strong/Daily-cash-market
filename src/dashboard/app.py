@@ -73,9 +73,8 @@ def main() -> None:
                 "Sector Performance",
                 "🔄 Sector Rotation",
                 "🎯 Big Players (F&O)",
-                "📊 F&O Activity",
-                "📋 F&O Stock Signals",
-                "🗓️ F&O Expiry Structure",
+                "📈 Futures Analysis",
+                "📊 Options Analysis",
                 "📈 Index Tracker",
                 "🔬 Backtest",
             ],
@@ -99,19 +98,16 @@ def main() -> None:
         sector_performance.render(selected_date, float(min_turnover))
     elif page == "🔄 Sector Rotation":
         from src.dashboard.views import sector_rotation
-        sector_rotation.render(selected_date, float(min_turnover), all_dates=available_dates)
+        sector_rotation.render(selected_date, float(min_turnover), all_dates=all_dates)
     elif page == "🎯 Big Players (F&O)":
         from src.dashboard.views import fao_tracker
         fao_tracker.render(selected_date)
-    elif page == "📊 F&O Activity":
-        from src.dashboard.views import fno_activity
-        fno_activity.render(selected_date)
-    elif page == "📋 F&O Stock Signals":
-        from src.dashboard.views import fno_stocks
-        fno_stocks.render(selected_date)
-    elif page == "🗓️ F&O Expiry Structure":
-        from src.dashboard.views import fno_expiry
-        fno_expiry.render(selected_date)
+    elif page == "📈 Futures Analysis":
+        from src.dashboard.views import futures_analysis
+        futures_analysis.render(selected_date)
+    elif page == "📊 Options Analysis":
+        from src.dashboard.views import options_analysis
+        options_analysis.render(selected_date)
     elif page == "📈 Index Tracker":
         from src.dashboard.views import index_tracker
         index_tracker.render(selected_date)

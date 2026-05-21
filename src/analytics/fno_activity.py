@@ -20,6 +20,7 @@ __all__ = [
     "get_fno_summary_stats",
     "get_expiry_calendar",
     "get_index_expiry_oi",
+    "get_index_futures_rollover",
     "get_stock_oi_leaders",
     "get_index_symbols_active",
     "get_expiry_oi_history",
@@ -209,6 +210,76 @@ def get_index_expiry_oi(trade_date: date, symbol: str = "NIFTY") -> pd.DataFrame
     df["expiry_rank"] = df["expiry_date"].apply(
         lambda d: classify_expiry_rank(d, sorted_expiries)
     )
+    return df
+
+
+def get_index_futures_rollover(trade_date: date, symbol: str) -> pd.DataFrame:
+    """
+    FUTIDX settle prices and OI per monthly expiry — for cost-of-carry / rollover analysis.
+
+    Returns only monthly expiries with open_interest > 0.
+    Added columns:
+      oi_pct         — this expiry's OI as % of total FUTIDX OI
+      carry_pts      — settle_price minus previous expiry's settle (NaN for near month)
+      carry_pct_ann  — annualised carry % vs previous expiry (NaN for near month)
+
+    Typical India fair-value carry ≈ (repo - dividend) * T ≈ 6–7% ann → ~0.5% per month.
+    Positive carry > 7%  = premium (bullish demand)
+    Positive carry 3–7%  = near fair value (neutral)
+    Positive carry 0–3%  = slight discount (mild bearish)
+    Negative carry       = backwardation (stress / bearish)
+    """
+    trade_date = _as_date(trade_date)
+    df = query_dataframe("""
+        SELECT
+            expiry_date,
+            settle_price,
+            open_interest,
+            chg_in_oi,
+            contracts
+        FROM fno_bhavcopy
+        WHERE trade_date   = ?
+          AND symbol       = ?
+          AND instrument   = 'FUTIDX'
+          AND settle_price > 0
+          AND open_interest > 0
+        ORDER BY expiry_date
+    """, [trade_date, symbol])
+
+    if df.empty:
+        return df
+
+    df["expiry_date"]    = pd.to_datetime(df["expiry_date"]).dt.date
+    df["days_to_expiry"] = df["expiry_date"].apply(lambda d: (d - trade_date).days)
+    df["is_monthly"]     = df["expiry_date"].apply(is_monthly_expiry)
+    df["expiry_type"]    = df["is_monthly"].map({True: "Monthly", False: "Weekly"})
+    df["expiry_label"]   = df["expiry_date"].apply(lambda d: d.strftime("%d %b '%y"))
+
+    # Keep only monthly expiries — index futures don't have weekly contracts
+    df = df[df["is_monthly"]].reset_index(drop=True)
+    if df.empty:
+        return df
+
+    sorted_exp = sorted(df["expiry_date"].tolist())
+    df["expiry_rank"] = df["expiry_date"].apply(
+        lambda d: classify_expiry_rank(d, sorted_exp)
+    )
+
+    total_oi = float(df["open_interest"].sum())
+    df["oi_pct"] = (df["open_interest"] / total_oi * 100).round(1) if total_oi > 0 else 0.0
+
+    # Cost of carry: each monthly expiry vs the previous one
+    df["carry_pts"]     = float("nan")
+    df["carry_pct_ann"] = float("nan")
+    for i in range(1, len(df)):
+        s_near        = float(df.loc[i - 1, "settle_price"])
+        s_far         = float(df.loc[i,     "settle_price"])
+        days_between  = (df.loc[i, "expiry_date"] - df.loc[i - 1, "expiry_date"]).days
+        carry_pts     = s_far - s_near
+        carry_ann     = (carry_pts / s_near) * (365.0 / max(days_between, 1)) * 100
+        df.loc[i, "carry_pts"]     = round(carry_pts, 2)
+        df.loc[i, "carry_pct_ann"] = round(carry_ann, 2)
+
     return df
 
 

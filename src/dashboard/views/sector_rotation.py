@@ -731,8 +731,12 @@ def _render_custom_range(all_dates: list, min_turnover: float) -> None:
     min_avail = all_dates[-1]   # oldest
     max_avail = all_dates[0]    # most recent
 
+    # Pre-sort once (all_dates is newest-first; we need both orders)
+    avail_asc = sorted(all_dates)   # ascending  — for from_snap search
+    avail_set = set(all_dates)
+
     col_from, col_to = st.columns(2)
-    # Default from_date = 1 month before most recent available date
+    # Default from_date = ~1 month before most recent (22 trading days back)
     default_from = all_dates[min(21, len(all_dates) - 1)] if len(all_dates) > 1 else min_avail
 
     with col_from:
@@ -759,11 +763,8 @@ def _render_custom_range(all_dates: list, min_turnover: float) -> None:
         return
 
     # Snap to nearest available trading days
-    avail_set  = set(all_dates)
-    # Find nearest available date >= from_date
-    from_snap = next((d for d in sorted(avail_set) if d >= from_date), None)
-    # Find nearest available date <= to_date
-    to_snap   = next((d for d in sorted(avail_set, reverse=True) if d <= to_date), None)
+    from_snap = next((d for d in avail_asc if d >= from_date), None)
+    to_snap   = next((d for d in reversed(avail_asc) if d <= to_date), None)
 
     if from_snap is None or to_snap is None or from_snap >= to_snap:
         st.warning("No trading data found in the selected range.")

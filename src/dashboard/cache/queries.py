@@ -156,6 +156,12 @@ def cached_fno_index_expiry_oi(trade_date: date, symbol: str) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=_TTL)
+def cached_index_futures_rollover(trade_date: date, symbol: str) -> pd.DataFrame:
+    from src.analytics.fno_activity import get_index_futures_rollover
+    return get_index_futures_rollover(trade_date, symbol)
+
+
+@st.cache_data(ttl=_TTL)
 def cached_fno_stock_leaders(trade_date: date, top_n: int = 25) -> pd.DataFrame:
     from src.analytics.fno_activity import get_stock_oi_leaders
     return get_stock_oi_leaders(trade_date, top_n)
@@ -227,6 +233,14 @@ def cached_options_chain(
 ) -> pd.DataFrame:
     from src.analytics.fno_expiry import get_options_chain
     return get_options_chain(trade_date, symbol, expiry_date, instrument)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_index_options_chain(
+    trade_date: date, symbol: str, expiry_date: date, n_strikes: int = 15
+) -> pd.DataFrame:
+    from src.analytics.fno_expiry import get_index_options_chain
+    return get_index_options_chain(trade_date, symbol, expiry_date, n_strikes)
 
 
 @st.cache_data(ttl=_TTL)

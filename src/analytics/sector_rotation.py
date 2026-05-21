@@ -682,7 +682,7 @@ def get_sector_rotation_custom_range(
 
         curr_dv = float(curr["deliv_value_cr"].sum())
         prev_dv = float(prev["deliv_value_cr"].sum()) if not prev.empty else None
-        deliv_chg = (curr_dv - prev_dv) / max(abs(prev_dv), 0.1) * 100 if prev_dv else None
+        deliv_chg = (curr_dv - prev_dv) / max(abs(prev_dv), 0.1) * 100 if prev_dv is not None else None
 
         records.append({
             "sector":              sector,

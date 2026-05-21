@@ -39,6 +39,7 @@ __all__ = [
     "get_stock_expiry_matrix",
     "get_index_full_structure",
     "get_options_chain",
+    "get_index_options_chain",
 ]
 
 _EXPIRY_TIER_ORDER = ["Near Month", "Next Month", "Far Month", "Quarterly", "Long Term", "Weekly"]
@@ -182,6 +183,9 @@ def get_stock_expiry_matrix(
     exp_args = expiries + [date(2099, 1, 1)] * (3 - len(expiries))
 
     # ── Futures for all 3 expiries ────────────────────────────────────────────
+    # Fetch ALL expiries without OI filter — next/far month naturally has lower OI
+    # and would be wiped out if we applied min_fut_oi here.
+    # We apply the min_fut_oi filter only to near month to decide which symbols qualify.
     fut = query_dataframe(
         """
         SELECT symbol, expiry_date,
@@ -193,14 +197,20 @@ def get_stock_expiry_matrix(
         WHERE trade_date  = ?
           AND instrument  = 'FUTSTK'
           AND expiry_date IN (?, ?, ?)
-          AND open_interest >= ?
         GROUP BY symbol, expiry_date
         """,
-        [trade_date, *exp_args, min_fut_oi],
+        [trade_date, *exp_args],
     )
     if fut.empty:
         return pd.DataFrame()
     fut["expiry_date"] = pd.to_datetime(fut["expiry_date"]).dt.date
+
+    # Filter qualifying symbols by near-month OI only
+    near_oi = fut[fut["expiry_date"] == expiries[0]]
+    qualifying = near_oi[near_oi["fut_oi"] >= min_fut_oi]["symbol"].unique()
+    fut = fut[fut["symbol"].isin(qualifying)]
+    if fut.empty:
+        return pd.DataFrame()
 
     # ── Spot prices ───────────────────────────────────────────────────────────
     cash = query_dataframe(
@@ -275,14 +285,19 @@ def get_stock_expiry_matrix(
                           "top_ce_strike", "top_pe_strike"):
                     rec[f"{label}_{k}"] = None
 
-        # Roll signal: compare near vs next OI change
-        nc = rec.get("near_chg_oi") or 0
-        nk = rec.get("next_chg_oi") or 0
-        if nc < -50_000 and nk > 50_000:
+        # Roll signal: compare near vs next OI change.
+        # Threshold = 3% of near-month OI (min 2K) — relative so it works across
+        # large-cap (multi-million OI) and mid-cap stocks alike.
+        nc       = rec.get("near_chg_oi") or 0
+        nk       = rec.get("next_chg_oi") or 0
+        near_oi  = rec.get("near_fut_oi")  or 0
+        thresh   = max(2_000, int(near_oi * 0.03))
+
+        if nc < -thresh and nk > thresh * 0.5:
             rec["roll_signal"] = "Rolling Fwd"
-        elif nc < -50_000 and nk < -50_000:
+        elif nc < -thresh and nk < -thresh * 0.5:
             rec["roll_signal"] = "Unwinding"
-        elif nc > 50_000:
+        elif nc > thresh:
             rec["roll_signal"] = "Building"
         else:
             rec["roll_signal"] = "Neutral"
@@ -472,3 +487,103 @@ def get_options_chain(
     )
 
     return chain.reset_index(drop=True)
+
+
+def get_index_options_chain(
+    trade_date: date,
+    symbol: str,
+    expiry_date: date,
+    n_strikes: int = 15,
+) -> pd.DataFrame:
+    """
+    Options chain for an index (OPTIDX), centered ATM ± n_strikes.
+
+    Spot proxied from near-month FUTIDX settle price (most reliable for indices).
+    Max Pain computed from ALL available strikes before windowing.
+
+    Returns one row per strike with columns:
+        strike_price,
+        ce_oi, ce_chg_oi, ce_vol, ce_close,
+        pe_oi, pe_chg_oi, pe_vol, pe_close,
+        total_oi, pcr_at_strike,
+        is_atm, is_max_pain,
+        spot_price, atm_strike, max_pain   (constant metadata on every row)
+    """
+    trade_date  = _as_date(trade_date)
+    expiry_date = _as_date(expiry_date)
+
+    # Spot from near-month futures settle (nearest expiry >= trade_date)
+    spot_df = query_dataframe(
+        """
+        SELECT settle_price AS spot
+        FROM fno_bhavcopy
+        WHERE trade_date = ? AND symbol = ? AND instrument = 'FUTIDX'
+          AND expiry_date >= ? AND settle_price > 0
+        ORDER BY expiry_date ASC LIMIT 1
+        """,
+        [trade_date, symbol, trade_date],
+    )
+    spot = float(spot_df["spot"].iloc[0]) if not spot_df.empty else float("nan")
+
+    # All options for max-pain (before strike windowing)
+    all_raw = query_dataframe(
+        """
+        SELECT strike_price, option_type, open_interest, chg_in_oi,
+               contracts, close_price
+        FROM fno_bhavcopy
+        WHERE trade_date = ? AND symbol = ? AND expiry_date = ?
+          AND instrument = 'OPTIDX' AND open_interest >= 0
+        ORDER BY strike_price, option_type
+        """,
+        [trade_date, symbol, expiry_date],
+    )
+    if all_raw.empty:
+        return pd.DataFrame()
+
+    # Max pain from all strikes (accurate — not limited to ATM window)
+    mp = _compute_max_pain(all_raw)
+
+    # ATM strike
+    all_strikes = sorted(all_raw["strike_price"].unique())
+    if np.isnan(spot):
+        atm_strike = float(all_strikes[len(all_strikes) // 2])
+        spot = atm_strike
+    else:
+        atm_strike = float(min(all_strikes, key=lambda k: abs(k - spot)))
+
+    # Filter to ATM ± n_strikes window
+    atm_idx    = all_strikes.index(atm_strike)
+    lo, hi     = max(0, atm_idx - n_strikes), min(len(all_strikes), atm_idx + n_strikes + 1)
+    window_set = set(all_strikes[lo:hi])
+    raw        = all_raw[all_raw["strike_price"].isin(window_set)].copy()
+
+    # Pivot to one row per strike
+    ce = (raw[raw["option_type"] == "CE"]
+          .rename(columns={"open_interest": "ce_oi", "chg_in_oi": "ce_chg_oi",
+                           "contracts": "ce_vol", "close_price": "ce_close"})
+          [["strike_price", "ce_oi", "ce_chg_oi", "ce_vol", "ce_close"]])
+
+    pe = (raw[raw["option_type"] == "PE"]
+          .rename(columns={"open_interest": "pe_oi", "chg_in_oi": "pe_chg_oi",
+                           "contracts": "pe_vol", "close_price": "pe_close"})
+          [["strike_price", "pe_oi", "pe_chg_oi", "pe_vol", "pe_close"]])
+
+    chain = (ce.merge(pe, on="strike_price", how="outer")
+               .sort_values("strike_price")
+               .fillna(0)
+               .reset_index(drop=True))
+
+    chain["total_oi"]      = (chain["ce_oi"] + chain["pe_oi"]).astype(int)
+    chain["pcr_at_strike"] = chain.apply(
+        lambda r: round(r["pe_oi"] / r["ce_oi"], 2) if r["ce_oi"] > 0 else None, axis=1
+    )
+    chain["is_atm"]      = chain["strike_price"].apply(lambda s: abs(s - atm_strike) < 0.5)
+    chain["is_max_pain"] = chain["strike_price"].apply(
+        lambda s: not np.isnan(mp) and abs(s - mp) < 0.5
+    )
+    # Metadata embedded as constant columns for easy extraction in view layer
+    chain["spot_price"] = round(spot, 2)
+    chain["atm_strike"] = atm_strike
+    chain["max_pain"]   = round(mp, 0) if not np.isnan(mp) else None
+
+    return chain
