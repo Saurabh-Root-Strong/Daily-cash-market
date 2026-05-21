@@ -35,6 +35,42 @@ log = get_logger(__name__)
 _LOOKBACK_DAYS = 100
 
 
+def _get_nifty50_period_returns(as_of_date: date) -> dict:
+    """
+    Fetch Nifty50 1W / 1M / 3M returns from the index_data table.
+
+    Uses the same calendar-day offsets as sector_aggregator so the RS
+    calculation is apples-to-apples: rs = sector_return − nifty50_return.
+    Returns {1w, 1m, 3m} as floats, or None when index data is absent.
+    """
+    df = query_dataframe(
+        """
+        SELECT trade_date, close_val
+        FROM index_data
+        WHERE index_name = 'Nifty 50'
+          AND trade_date <= ?
+          AND trade_date >= (? - INTERVAL 100 DAY)
+        ORDER BY trade_date
+        """,
+        [as_of_date, as_of_date],
+    )
+    if df.empty:
+        return {"1w": None, "1m": None, "3m": None}
+
+    df["trade_date"] = pd.to_datetime(df["trade_date"]).dt.date
+    latest_close = float(df.iloc[-1]["close_val"])
+
+    def _ret(cal_days: int) -> float | None:
+        cutoff = as_of_date - timedelta(days=cal_days)
+        past = df[df["trade_date"] <= cutoff]
+        if past.empty:
+            return None
+        start = float(past.iloc[-1]["close_val"])
+        return round((latest_close - start) / start * 100, 2) if start > 0 else None
+
+    return {"1w": _ret(7), "1m": _ret(30), "3m": _ret(90)}
+
+
 def _slope(series: pd.Series) -> float:
     """Linear regression slope normalised by series mean (% change per trading day)."""
     y = series.dropna().values
@@ -259,6 +295,25 @@ def get_sector_rotation(
     result = pd.DataFrame(records)
     if result.empty:
         return result
+
+    # ── Relative Strength vs Nifty50 ─────────────────────────────────────────
+    # rs_Xp = sector_price_return_Xp − nifty50_price_return_Xp
+    # Positive = outperforming benchmark; Negative = underperforming.
+    # Uses same calendar-day windows as sector_aggregator (7 / 30 / 90 days).
+    n50 = _get_nifty50_period_returns(as_of_date)
+    for period, col_price, col_rs in [
+        ("1w", "price_1w", "rs_1w"),
+        ("1m", "price_1m", "rs_1m"),
+        ("3m", "price_3m", "rs_3m"),
+    ]:
+        n_ret = n50[period]
+        if n_ret is not None:
+            result[col_rs] = (result[col_price] - n_ret).round(2)
+        else:
+            result[col_rs] = float("nan")
+    result["nifty_1w"] = n50["1w"]
+    result["nifty_1m"] = n50["1m"]
+    result["nifty_3m"] = n50["3m"]
 
     # ── Score: same 5-factor cross-sectional formula as Sector Performance ─────
     # 35% DV Ratio + 25% Breadth + 20% Z-Score + 10% Price 1W + 10% Trend slope

@@ -1636,15 +1636,362 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         )
 
 
+# ── Relative Strength vs Nifty50 ─────────────────────────────────────────────
+
+def _rs_bar_chart(df: pd.DataFrame, period: str) -> go.Figure:
+    """
+    Horizontal bar chart: sector RS vs Nifty50 for a selected period.
+    Green = outperforming, red = underperforming. Zero line = Nifty50.
+    """
+    col = f"rs_{period}"
+    if col not in df.columns:
+        return go.Figure()
+
+    plot = df[["sector", col, "signal"]].dropna(subset=[col]).copy()
+    plot = plot.sort_values(col, ascending=True).reset_index(drop=True)
+
+    colors = [
+        _SIGNAL_META.get(sig, {}).get("color", "#888888")
+        for sig in plot["signal"]
+    ]
+    bar_colors = [
+        c if rs >= 0 else NEGATIVE_COLOR
+        for c, rs in zip(colors, plot[col])
+    ]
+
+    fig = go.Figure(go.Bar(
+        x=plot[col],
+        y=plot["sector"],
+        orientation="h",
+        marker_color=bar_colors,
+        marker_line_width=0,
+        text=[f"{v:+.2f}%" for v in plot[col]],
+        textposition="outside",
+        textfont=dict(size=10),
+        customdata=plot[["signal", col]].values,
+        hovertemplate=(
+            "<b>%{y}</b><br>"
+            "RS vs Nifty50: <b>%{x:+.2f}%</b><br>"
+            "Signal: %{customdata[0]}"
+            "<extra></extra>"
+        ),
+    ))
+
+    fig.add_vline(x=0, line_color="rgba(255,255,255,0.5)", line_width=2)
+
+    period_label = {"1w": "1 Week", "1m": "1 Month", "3m": "3 Month"}[period]
+    fig.update_layout(
+        title=dict(
+            text=(
+                f"Sector Relative Strength vs Nifty50 — {period_label}  "
+                "<span style='font-size:11px;color:rgba(255,255,255,0.4)'>"
+                "Positive = outperforming benchmark  ·  Negative = lagging benchmark</span>"
+            ),
+            font=dict(size=14),
+        ),
+        plot_bgcolor=PLOT_BG, paper_bgcolor=PAPER_BG,
+        xaxis=dict(
+            title="Excess Return vs Nifty50 (%)",
+            showgrid=True, gridcolor=GRID_COLOR,
+            zeroline=False, ticksuffix="%",
+        ),
+        yaxis=dict(showgrid=False, tickfont=dict(size=12)),
+        height=max(420, len(plot) * 28 + 100),
+        margin=dict(t=70, b=50, l=180, r=100),
+    )
+    return fig
+
+
+def _rs_delivery_scatter(df: pd.DataFrame, period: str) -> go.Figure:
+    """
+    The definitive institutional lens:
+      X = Relative Strength vs Nifty50 (price outperformance)
+      Y = Delivery Z-Score (institutional conviction)
+
+    4 quadrants:
+      Top-Right  (RS > 0, Z > 1): Leading + inflow = strongest sectors
+      Top-Left   (RS < 0, Z > 1): Lagging price but institutions accumulating = best entry
+      Bottom-Right (RS > 0, Z < -0.5): Outperforming but institutions exiting = distribution
+      Bottom-Left  (RS < 0, Z < -0.5): Lagging + outflow = avoid
+    """
+    col = f"rs_{period}"
+    plot = df.dropna(subset=[col, "z_score"]).copy()
+    if plot.empty:
+        return go.Figure()
+
+    x_vals = plot[col]
+    y_vals = plot["z_score"]
+    x_pad = max((x_vals.max() - x_vals.min()) * 0.28, 1.0)
+    y_pad = max((y_vals.max() - y_vals.min()) * 0.28, 0.5)
+    x0, x1 = x_vals.min() - x_pad, x_vals.max() + x_pad
+    y0, y1 = y_vals.min() - y_pad, y_vals.max() + y_pad
+
+    fig = go.Figure()
+
+    fig.add_shape(type="rect", x0=x0, x1=0, y0=0, y1=y1,
+                  fillcolor="rgba(64,196,255,0.09)", line_width=0, layer="below")
+    fig.add_shape(type="rect", x0=0, x1=x1, y0=0, y1=y1,
+                  fillcolor="rgba(0,200,83,0.09)", line_width=0, layer="below")
+    fig.add_shape(type="rect", x0=x0, x1=0, y0=y0, y1=0,
+                  fillcolor="rgba(213,0,0,0.09)", line_width=0, layer="below")
+    fig.add_shape(type="rect", x0=0, x1=x1, y0=y0, y1=0,
+                  fillcolor="rgba(255,109,0,0.07)", line_width=0, layer="below")
+
+    for label, lx, ly, xanchor, yanchor, bgcolor in [
+        ("🔍 HIDDEN ACCUMULATION\n(Best Entry)",  x0 + x_pad*0.3, y1 - y_pad*0.3, "left",  "top",    "rgba(64,196,255,0.18)"),
+        ("💰 LEADING\n(Strong Hold / Add)",        x1 - x_pad*0.3, y1 - y_pad*0.3, "right", "top",    "rgba(0,200,83,0.18)"),
+        ("📤 LAGGING\n(Avoid)",                   x0 + x_pad*0.3, y0 + y_pad*0.3, "left",  "bottom", "rgba(213,0,0,0.18)"),
+        ("⚠️ DISTRIBUTION\n(Exit / Short)",       x1 - x_pad*0.3, y0 + y_pad*0.3, "right", "bottom", "rgba(255,109,0,0.18)"),
+    ]:
+        fig.add_annotation(
+            x=lx, y=ly, text=f"<b>{label}</b>",
+            showarrow=False,
+            font=dict(size=11, color="rgba(255,255,255,0.70)"),
+            xanchor=xanchor, yanchor=yanchor,
+            bgcolor=bgcolor, borderpad=5,
+            align="center",
+        )
+
+    fig.add_hline(y=0,    line_color="rgba(255,255,255,0.35)", line_width=1.5)
+    fig.add_hline(y=1.0,  line_dash="dash", line_width=1.0,
+                  line_color="rgba(0,200,83,0.45)",
+                  annotation_text="Surge threshold (Z=+1σ)",
+                  annotation_position="top right",
+                  annotation_font=dict(size=10, color="rgba(0,200,83,0.7)"))
+    if y0 < -0.5:
+        fig.add_hline(y=-0.5, line_dash="dash", line_width=1.0,
+                      line_color="rgba(255,80,0,0.45)",
+                      annotation_text="Weakness threshold (Z=−0.5σ)",
+                      annotation_position="bottom right",
+                      annotation_font=dict(size=10, color="rgba(255,80,0,0.7)"))
+    fig.add_vline(x=0, line_color="rgba(255,255,255,0.35)", line_width=1.5)
+
+    for signal in [
+        "🔥 Secret Accumulation", "✅ Confirmed Accumulation",
+        "👀 Early Accumulation", "📊 Volume Spike", "⚖️ Neutral",
+        "📉 Weakening", "⚠️ Distribution Trap", "❌ Active Selling",
+    ]:
+        grp = plot[plot["signal"] == signal]
+        if grp.empty:
+            continue
+        color = _SIGNAL_META.get(signal, {}).get("color", "#888888")
+        sizes = (grp["accum_score"] / 100 * 22 + 12).clip(12, 34)
+
+        fig.add_trace(go.Scatter(
+            x=grp[col],
+            y=grp["z_score"],
+            mode="markers+text",
+            name=signal,
+            text=grp["sector"],
+            textposition="top center",
+            textfont=dict(size=9, color="rgba(255,255,255,0.75)"),
+            marker=dict(
+                color=color, size=sizes, opacity=0.90,
+                line=dict(width=1.5, color="rgba(255,255,255,0.5)"),
+            ),
+            customdata=grp[["sector", "signal", "accum_score",
+                             "z_score", col, "price_1w",
+                             f"nifty_{period}"]].values,
+            hovertemplate=(
+                "<b>%{customdata[0]}</b><br>"
+                f"<span style='color:{color}'>%{{customdata[1]}}</span><br>"
+                "────────────────────<br>"
+                f"RS vs Nifty50: <b>%{{customdata[4]:+.2f}}%</b><br>"
+                "Z-Score: <b>%{customdata[3]:+.2f}σ</b><br>"
+                "Score: %{customdata[2]:.0f}/100<br>"
+                f"Sector 1W: %{{customdata[5]:+.2f}}%  ·  Nifty50: %{{customdata[6]:+.2f}}%"
+                "<extra></extra>"
+            ),
+        ))
+
+    period_label = {"1w": "1 Week", "1m": "1 Month", "3m": "3 Month"}[period]
+    fig.update_layout(
+        plot_bgcolor=PLOT_BG, paper_bgcolor=PAPER_BG,
+        title=dict(
+            text=(
+                f"RS vs Nifty50 ({period_label}) × Institutional Delivery Flow  "
+                "<span style='font-size:11px;color:rgba(255,255,255,0.4)'>"
+                "Top-Left = hidden accumulation (best entry)  ·  "
+                "Top-Right = leading + confirmed (hold/add)  ·  "
+                "Bottom-Right = distributing (exit)</span>"
+            ),
+            font=dict(size=13),
+        ),
+        xaxis=dict(
+            title=f"← Lagging Nifty50  |  RS vs Nifty50 {period_label} (%)  |  Leading Nifty50 →",
+            showgrid=True, gridcolor=GRID_COLOR,
+            zeroline=False, ticksuffix="%", tickfont=dict(size=11),
+            range=[x0, x1],
+        ),
+        yaxis=dict(
+            title="← Institutions Exiting  |  Delivery Z-Score (σ)  |  Institutions Entering →",
+            showgrid=True, gridcolor=GRID_COLOR,
+            zeroline=False, ticksuffix="σ", tickfont=dict(size=11),
+            range=[y0, y1],
+        ),
+        legend=dict(
+            orientation="h", y=-0.15, x=0.5, xanchor="center",
+            font=dict(size=11), bgcolor="rgba(0,0,0,0)", itemsizing="constant",
+        ),
+        height=640,
+        margin=dict(t=70, b=100, l=100, r=40),
+        hoverlabel=dict(bgcolor="#1a1a2e", font_size=13,
+                        bordercolor="rgba(255,255,255,0.2)"),
+        hovermode="closest",
+    )
+    return fig
+
+
+def _render_relative_strength(trade_date: date, min_turnover: float) -> None:
+    """
+    Relative Strength of every sector vs the Nifty50 benchmark.
+
+    Why this matters:
+      Absolute price return is meaningless without benchmark context.
+      A sector up +2% when Nifty is +5% is a LAGGER, not a leader.
+      RS = sector_return − nifty50_return tells you who is getting
+      disproportionate institutional money flows relative to the market.
+    """
+    df = cached_sector_rotation(trade_date, min_turnover)
+
+    if df.empty:
+        st.info("No sector rotation data for this date.")
+        return
+
+    # Check if RS columns exist (requires index_data to be populated)
+    has_rs = "rs_1w" in df.columns and df["rs_1w"].notna().any()
+    if not has_rs:
+        st.warning(
+            "Nifty50 benchmark data not found. Run:\n"
+            "```\npython -m src.cli backfill-indices 120\n```\n"
+            "to populate index data, then refresh."
+        )
+        return
+
+    # ── Benchmark KPI bar ─────────────────────────────────────────────────────
+    n_1w = df["nifty_1w"].iloc[0] if "nifty_1w" in df.columns else None
+    n_1m = df["nifty_1m"].iloc[0] if "nifty_1m" in df.columns else None
+    n_3m = df["nifty_3m"].iloc[0] if "nifty_3m" in df.columns else None
+
+    st.markdown("##### 📌 Nifty50 Benchmark Returns (RS = Sector − Benchmark)")
+    c1, c2, c3, c4 = st.columns(4)
+    def _fmt(v):
+        if v is None or (isinstance(v, float) and pd.isna(v)):
+            return "—"
+        color = POSITIVE_COLOR if v >= 0 else NEGATIVE_COLOR
+        return f"<span style='color:{color};font-size:1.1rem;font-weight:700'>{v:+.2f}%</span>"
+
+    c1.markdown(
+        f"<div style='text-align:center;padding:10px;background:rgba(255,255,255,0.04);"
+        f"border-radius:8px;border-top:2px solid #FFD700'>"
+        f"<div style='font-size:10px;color:#888;letter-spacing:1px'>NIFTY50  1W</div>"
+        f"<div style='margin-top:4px'>{_fmt(n_1w)}</div></div>",
+        unsafe_allow_html=True,
+    )
+    c2.markdown(
+        f"<div style='text-align:center;padding:10px;background:rgba(255,255,255,0.04);"
+        f"border-radius:8px;border-top:2px solid #FFD700'>"
+        f"<div style='font-size:10px;color:#888;letter-spacing:1px'>NIFTY50  1M</div>"
+        f"<div style='margin-top:4px'>{_fmt(n_1m)}</div></div>",
+        unsafe_allow_html=True,
+    )
+    c3.markdown(
+        f"<div style='text-align:center;padding:10px;background:rgba(255,255,255,0.04);"
+        f"border-radius:8px;border-top:2px solid #FFD700'>"
+        f"<div style='font-size:10px;color:#888;letter-spacing:1px'>NIFTY50  3M</div>"
+        f"<div style='margin-top:4px'>{_fmt(n_3m)}</div></div>",
+        unsafe_allow_html=True,
+    )
+    outperformers_1m = int(df["rs_1m"].gt(0).sum()) if "rs_1m" in df.columns else 0
+    c4.markdown(
+        f"<div style='text-align:center;padding:10px;background:rgba(255,255,255,0.04);"
+        f"border-radius:8px;border-top:2px solid #4CAF50'>"
+        f"<div style='font-size:10px;color:#888;letter-spacing:1px'>OUTPERFORMERS (1M)</div>"
+        f"<div style='margin-top:4px'><span style='color:#4CAF50;font-size:1.1rem;"
+        f"font-weight:700'>{outperformers_1m} / {len(df)} sectors</span></div></div>",
+        unsafe_allow_html=True,
+    )
+
+    st.divider()
+
+    # ── Period selector + charts ──────────────────────────────────────────────
+    period = st.radio(
+        "Period",
+        options=["1w", "1m", "3m"],
+        format_func=lambda p: {"1w": "1 Week", "1m": "1 Month", "3m": "3 Month"}[p],
+        horizontal=True,
+        key="rs_period_sel",
+        index=1,  # default: 1 Month
+    )
+
+    # RS × Delivery scatter — the primary chart
+    st.plotly_chart(
+        _rs_delivery_scatter(df, period),
+        use_container_width=True,
+    )
+
+    # RS bar chart
+    st.plotly_chart(
+        _rs_bar_chart(df, period),
+        use_container_width=True,
+    )
+
+    # ── RS Summary Table ──────────────────────────────────────────────────────
+    st.markdown("#### Sector RS vs Nifty50 — Full Table")
+    with st.expander("📋 Show RS Table", expanded=False):
+        rs_cols = ["sector", "signal", "accum_score",
+                   "price_1w", "rs_1w", "price_1m", "rs_1m",
+                   "price_3m", "rs_3m", "z_score", "dv_ratio"]
+        disp = df[[c for c in rs_cols if c in df.columns]].copy()
+        disp = disp.sort_values("rs_1m", ascending=False).reset_index(drop=True)
+        disp.columns = [
+            c.replace("price_1w", "Sector 1W%")
+             .replace("price_1m", "Sector 1M%")
+             .replace("price_3m", "Sector 3M%")
+             .replace("rs_1w",    "RS 1W%")
+             .replace("rs_1m",    "RS 1M%")
+             .replace("rs_3m",    "RS 3M%")
+             .replace("accum_score", "Score")
+             .replace("z_score",  "Z-Score")
+             .replace("dv_ratio", "DV Ratio")
+             .replace("sector",   "Sector")
+             .replace("signal",   "Signal")
+            for c in disp.columns
+        ]
+        st.dataframe(
+            disp,
+            use_container_width=True,
+            hide_index=True,
+            column_config={
+                "Score":      st.column_config.NumberColumn("Score",      format="%.1f"),
+                "Sector 1W%": st.column_config.NumberColumn("Sector 1W%", format="%+.2f%%"),
+                "Sector 1M%": st.column_config.NumberColumn("Sector 1M%", format="%+.2f%%"),
+                "Sector 3M%": st.column_config.NumberColumn("Sector 3M%", format="%+.2f%%"),
+                "RS 1W%":     st.column_config.NumberColumn("RS 1W%",     format="%+.2f%%"),
+                "RS 1M%":     st.column_config.NumberColumn("RS 1M%",     format="%+.2f%%"),
+                "RS 3M%":     st.column_config.NumberColumn("RS 3M%",     format="%+.2f%%"),
+                "Z-Score":    st.column_config.NumberColumn("Z-Score",    format="%+.2f"),
+                "DV Ratio":   st.column_config.NumberColumn("DV Ratio",   format="%.2f×"),
+            },
+        )
+
+
 # ── Entry Point ───────────────────────────────────────────────────────────────
 
 def render(selected_date: date, min_turnover: float, all_dates: list | None = None) -> None:
     st.subheader("🔄 Sector Rotation — Smart Money Tracker")
 
-    tab_smart, tab_clock = st.tabs(["🎯 Smart Money (Daily Signal)", "📅 Rotation Clock"])
+    tab_smart, tab_clock, tab_rs = st.tabs([
+        "🎯 Smart Money (Daily Signal)",
+        "📅 Rotation Clock",
+        "📈 vs Nifty50",
+    ])
 
     with tab_smart:
         _render_smart_money(selected_date, min_turnover)
 
     with tab_clock:
         _render_rotation_clock(selected_date, min_turnover, all_dates=all_dates)
+
+    with tab_rs:
+        _render_relative_strength(selected_date, min_turnover)
