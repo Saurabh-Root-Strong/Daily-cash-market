@@ -359,13 +359,16 @@ def _compute_outlook(df: pd.DataFrame) -> pd.DataFrame:
         br = row["_br"]
         pm = row["_pm"] if not pd.isna(row["_pm"]) else 0
         # Abnormal flow = Z >= 1.5 OR DV >= 1.5x OR both moderate (Z>=1.0 + DV>=1.2)
-        # Broad = majority of stocks above their norm, OR signal is extreme (no breadth needed)
+        # Broad = majority of stocks above their norm, OR signal is extreme
         abnormal = z >= 1.5 or dv >= 1.5 or (z >= 1.0 and dv >= 1.2)
         broad    = br >= 0.5 or z >= 2.0 or dv >= 2.0
         strong   = abnormal and broad
         if strong and pm > 0:      return "🟢 Accumulating"
         if strong:                  return "🟡 Buying Dips"
         if dv >= 0.75 and pm > 0:  return "🟠 Weak Rally"
+        # Neutral: delivery near normal (0.6–0.75×) OR price flat — not actively distributing
+        # Distributing: delivery clearly below normal (<0.6×) OR price down with low delivery
+        if dv >= 0.60 and abs(pm) <= 1.5:   return "⚪ Neutral"
         return "🔴 Distributing"
 
     out["Signal"] = out.apply(_sig, axis=1)
@@ -392,25 +395,94 @@ def render(selected_date: date, min_turnover: float) -> None:
     st.markdown("---")
 
     # ── 1-2 Week Outlook ──────────────────────────────────────────────────────
-    st.markdown("### 📈 1–2 Week Sector Outlook")
+    st.markdown(
+        "### 📈 1–2 Week Sector Outlook "
+        "<span title='Score = 35% DV Ratio + 25% Breadth + 20% Z-Score + 10% Price Trend + 10% Delivery Acceleration. "
+        "Score is a RELATIVE rank within today's cross-section — the best sector gets highest score. "
+        "Accumulating = abnormal+broad delivery + price up. "
+        "Buying Dips = abnormal+broad + price down (smart money absorbing). "
+        "Weak Rally = normal delivery + price up (retail-driven, low conviction). "
+        "Neutral = near-normal delivery, flat price. "
+        "Distributing = below-normal delivery or price falling with weak flow.' "
+        "style='cursor:help;color:#ffd600;font-size:16px'>ℹ️</span>",
+        unsafe_allow_html=True,
+    )
     st.caption(
-        "Score = 35% DV Ratio (relative flow) + 25% Breadth (stock participation) "
-        "+ 20% Z-Score (statistical abnormality) + 10% price trend + 10% acceleration"
+        "Score = **35% DV Ratio** (relative flow) + **25% Breadth** (stock participation) "
+        "+ **20% Z-Score** (statistical abnormality) + **10% Price Trend** + **10% Delivery Acceleration** "
+        "— relative rank within today's sector universe"
     )
     scored = _compute_outlook(sector_df)
+
+    def _kpi_help(row) -> str:
+        dv = row.get("dv_ratio", float("nan"))
+        z  = row.get("z_score",  float("nan"))
+        br = row.get("breadth",  float("nan"))
+        sc = row.get("Score",    float("nan"))
+        lines = []
+        if not pd.isna(dv):
+            dv_note = ("significantly above norm — institutional surge" if dv >= 1.5
+                       else "above norm" if dv >= 1.0
+                       else "below norm — reduced participation")
+            lines.append(f"DV Ratio {dv:.2f}× — delivery today vs own 100D avg. {dv_note}.")
+        if not pd.isna(z):
+            z_note  = ("rare extreme event (top ~2.5% of days)" if abs(z) >= 2.0
+                       else "elevated (top ~16% of days)" if abs(z) >= 1.0
+                       else "normal range")
+            lines.append(f"Z-Score {z:+.1f}σ — {z_note}.")
+        if not pd.isna(br):
+            br_note = ("broad — sector-wide, not single-stock" if br >= 0.5
+                       else "narrow — dominated by 1–2 large-caps, not the whole sector")
+            lines.append(f"Breadth {br*100:.0f}% — {br_note}.")
+        if not pd.isna(sc):
+            lines.append(f"Composite Score {sc:.0f}/100 — relative rank today.")
+        return "\n\n".join(lines)
+
+    # Top 3 — strongest buy signals
+    st.markdown(
+        "<div style='font-size:13px;font-weight:600;color:#00c853;margin-bottom:4px'>"
+        "🏆 Strongest Signals (Buy / Accumulate)</div>",
+        unsafe_allow_html=True,
+    )
     c1, c2, c3 = st.columns(3)
     for col, (_, row) in zip([c1, c2, c3], scored.head(3).iterrows()):
         dv = row.get("dv_ratio", float("nan"))
         z  = row.get("z_score",  float("nan"))
         br = row.get("breadth",  float("nan"))
-        dv_str = f"{dv:.2f}x"       if not pd.isna(dv) else "—"
-        z_str  = f"{z:+.1f}σ"       if not pd.isna(z)  else "—"
-        br_str = f"{br*100:.0f}%"   if not pd.isna(br) else "—"
+        dv_str = f"{dv:.2f}x"     if not pd.isna(dv) else "—"
+        z_str  = f"{z:+.1f}σ"     if not pd.isna(z)  else "—"
+        br_str = f"{br*100:.0f}%" if not pd.isna(br) else "—"
         col.metric(
-            f"{row['Signal']} — {row['sector']}",
-            f"Score: {row['Score']:.0f}/100",
-            f"DV {dv_str}  |  Z {z_str}  |  Breadth {br_str}",
+            label=f"{row['Signal']} — {row['sector']}",
+            value=f"Score: {row['Score']:.0f}/100",
+            delta=f"DV {dv_str}  |  Z {z_str}  |  Breadth {br_str}",
+            help=_kpi_help(row),
         )
+
+    # Bottom 3 — avoid / exit signals (only Distributing sectors)
+    distrib = scored[scored["Signal"] == "🔴 Distributing"].tail(3)
+    if not distrib.empty:
+        st.markdown(
+            "<div style='font-size:13px;font-weight:600;color:#d62728;margin:10px 0 4px 0'>"
+            "⚠️ Weakest Signals (Avoid / Exit)</div>",
+            unsafe_allow_html=True,
+        )
+        d1, d2, d3 = st.columns(3)
+        for col, (_, row) in zip([d1, d2, d3], distrib.iterrows()):
+            dv = row.get("dv_ratio", float("nan"))
+            z  = row.get("z_score",  float("nan"))
+            br = row.get("breadth",  float("nan"))
+            dv_str = f"{dv:.2f}x"     if not pd.isna(dv) else "—"
+            z_str  = f"{z:+.1f}σ"     if not pd.isna(z)  else "—"
+            br_str = f"{br*100:.0f}%" if not pd.isna(br) else "—"
+            col.metric(
+                label=f"{row['Signal']} — {row['sector']}",
+                value=f"Score: {row['Score']:.0f}/100",
+                delta=f"DV {dv_str}  |  Z {z_str}  |  Breadth {br_str}",
+                delta_color="inverse",
+                help=_kpi_help(row),
+            )
+
     st.plotly_chart(outlook_bar_chart(scored), use_container_width=True)
     st.markdown("---")
 
@@ -626,10 +698,25 @@ def render(selected_date: date, min_turnover: float) -> None:
         st.markdown("""
         | Signal | Trigger | Next 1-2W Implication |
         |--------|---------|----------------------|
-        | 🟢 **Accumulating** | Abnormal flow (Z ≥ 1.5σ or DV ≥ 1.5x) + Broad (≥50% stocks above norm) + Price up | High-conviction institutional buying — follow |
-        | 🟡 **Buying Dips**  | Abnormal + Broad flow + Price down | Smart money absorbing weakness — watch for bounce |
-        | 🟠 **Weak Rally**   | Normal delivery (DV 0.75–1.5x) + Price up | Price moving without broad institutional backing — lower conviction |
-        | 🔴 **Distributing** | Normal or below-normal flow or narrow breadth | No unusual broad participation — avoid or reduce |
+        | 🟢 **Accumulating** | Abnormal flow (Z ≥ 1.5σ or DV ≥ 1.5×) + Broad (≥50% stocks) + Price rising | High-conviction institutional buying — follow with conviction |
+        | 🟡 **Buying Dips**  | Abnormal + Broad flow + Price falling or flat | Smart money absorbing weakness — watch for bounce |
+        | 🟠 **Weak Rally**   | Normal delivery (DV 0.75–1.5×) + Price rising | Price moving without institutional backing — lower conviction, may not sustain |
+        | ⚪ **Neutral**      | Near-normal delivery (DV 0.60–0.75×) + flat price (within ±1.5%) | No clear signal in either direction — wait and watch |
+        | 🔴 **Distributing** | Delivery clearly below normal (DV < 0.60×) OR price falling with weak flow | Institutional money leaving — avoid or reduce exposure |
+
+        ---
+
+        **Score interpretation (relative rank within today's sector universe):**
+        | Score Range | Meaning |
+        |-------------|---------|
+        | 80–100 | Very strong signal — top institutional interest today |
+        | 60–80  | Moderate positive — above average participation |
+        | 40–60  | Neutral — no strong directional lean |
+        | 20–40  | Below average — weak participation |
+        | 0–20   | Weakest sector today — active outflow or very low delivery |
+
+        ⚠️ **Score is RELATIVE**: even a score of 80/100 means "best in today's universe" — not absolute strength.
+        On a broad market selloff day, the top scorer may still be distributing in absolute terms.
 
         **Key principle:** High absolute delivery ≠ strong signal. *Abnormal + Broad* delivery = strong signal.
         Banking doing ₹7,000 Cr is normal. Defence doing ₹800 Cr when it averages ₹300 Cr AND 70% of Defence stocks are above their own norm — that is the real signal.

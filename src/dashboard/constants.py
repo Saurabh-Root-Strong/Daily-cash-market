@@ -15,6 +15,7 @@ SIGNAL_COLORS: dict[str, str] = {
     "🟢 Accumulating": "#2ca02c",
     "🟡 Buying Dips":  "#f0b429",
     "🟠 Weak Rally":   "#f58518",
+    "⚪ Neutral":      "#888888",
     "🔴 Distributing": "#d62728",
 }
 

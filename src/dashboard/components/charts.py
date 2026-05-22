@@ -216,20 +216,84 @@ def contribution_treemap(contribution_df: pd.DataFrame, sector_name: str) -> go.
 
 # ── Sector Performance ────────────────────────────────────────────────────────
 def outlook_bar_chart(scored_df: pd.DataFrame) -> go.Figure:
-    """Horizontal bar chart of composite sector outlook scores."""
-    top    = scored_df.head(10)
-    colors = top["Signal"].map(SIGNAL_COLORS).fillna(NEUTRAL_COLOR).tolist()
+    """Horizontal bar chart of ALL sector outlook scores.
+
+    All sectors shown (not top-10). Sorted score high→low.
+    A dotted divider separates positive signals from Neutral/Distributing.
+    Rich hover shows DV Ratio, Z-Score, Breadth, and price context.
+    """
+    if scored_df.empty:
+        return go.Figure()
+
+    # Sort score high→low; for horizontal bar Plotly renders bottom=last row,
+    # so use ascending=True to get highest score at the top visually.
+    df = scored_df.sort_values("Score", ascending=True).copy()
+    colors = df["Signal"].map(SIGNAL_COLORS).fillna(NEUTRAL_COLOR).tolist()
+
+    def _hover(row) -> str:
+        dv  = row.get("dv_ratio",          float("nan"))
+        z   = row.get("z_score",           float("nan"))
+        br  = row.get("breadth",           float("nan"))
+        pm  = row.get("2W_price_chg_pct",  row.get("1W_price_chg_pct", float("nan")))
+        dv_s = f"{dv:.2f}×" if not pd.isna(dv) else "—"
+        z_s  = f"{z:+.1f}σ" if not pd.isna(z)  else "—"
+        br_s = f"{br*100:.0f}%" if not pd.isna(br) else "—"
+        pm_s = f"{pm:+.1f}%"   if not pd.isna(pm) else "—"
+        return (
+            f"<b>{row['sector']}</b>  {row['Signal']}<br>"
+            f"Score: <b>{row['Score']:.0f}/100</b><br>"
+            f"─────────────────<br>"
+            f"DV Ratio: <b>{dv_s}</b>  — delivery vs own 100D avg<br>"
+            f"Z-Score:  <b>{z_s}</b>  — statistical abnormality<br>"
+            f"Breadth:  <b>{br_s}</b>  — stocks above own norm<br>"
+            f"2W Price: <b>{pm_s}</b>"
+        )
+
+    hover_texts = [_hover(row) for _, row in df.iterrows()]
 
     fig = go.Figure(go.Bar(
-        x=top["Score"], y=top["sector"], orientation="h",
-        marker_color=colors, text=top["Signal"], textposition="outside",
-        hovertemplate="<b>%{y}</b><br>Score: %{x:.1f}<extra></extra>",
+        x=df["Score"],
+        y=df["sector"],
+        orientation="h",
+        marker_color=colors,
+        marker_line_width=0,
+        opacity=0.88,
+        text=df["Signal"],
+        textposition="outside",
+        textfont=dict(size=10),
+        hovertemplate="%{hovertext}<extra></extra>",
+        hovertext=hover_texts,
     ))
+
+    # Dotted divider between positive and neutral/negative signals
+    avoid_signals = {"🔴 Distributing", "⚪ Neutral"}
+    positive_rows = [i for i, sig in enumerate(df["Signal"].values) if sig not in avoid_signals]
+    if positive_rows:
+        divider_y = positive_rows[-1] + 0.5  # between last positive and first neutral
+        fig.add_hline(
+            y=divider_y,
+            line_dash="dot", line_width=1.5,
+            line_color="rgba(255,255,255,0.28)",
+        )
+        fig.add_annotation(
+            x=119, y=divider_y,
+            text="<b>↑ Buy signals  |  Neutral/Avoid ↓</b>",
+            showarrow=False, font=dict(size=9, color="rgba(255,255,255,0.40)"),
+            xanchor="right", yanchor="bottom",
+        )
+
+    n = len(df)
     fig.update_layout(
-        xaxis=dict(title="Composite Score (0–100)", range=[0, 115]),
-        yaxis=dict(autorange="reversed", tickfont=dict(size=12)),
+        xaxis=dict(
+            title="Composite Score (0–100)  ·  Relative rank within today's sector universe",
+            range=[0, 130],
+            tickfont=dict(size=10),
+        ),
+        yaxis=dict(tickfont=dict(size=11)),
         plot_bgcolor=PLOT_BG, paper_bgcolor=PAPER_BG,
-        margin=dict(l=160, r=200, t=20, b=40), height=360,
+        margin=dict(l=180, r=130, t=15, b=50),
+        height=max(380, n * 26 + 60),
+        hoverlabel=dict(bgcolor="#1a1a2e", font_size=12, bordercolor="rgba(255,255,255,0.2)"),
     )
     return fig
 
