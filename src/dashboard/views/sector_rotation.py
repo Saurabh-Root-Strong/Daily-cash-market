@@ -195,8 +195,15 @@ def _quadrant_chart(df: pd.DataFrame) -> go.Figure:
 
 # ── Rotation Clock Chart ──────────────────────────────────────────────────────
 
-def _rotation_clock_chart(df: pd.DataFrame, period_name: str) -> go.Figure:
-    """RRG-style bubble chart: X = price return, Y = delivery slope z-score."""
+def _rotation_clock_chart(
+    df: pd.DataFrame, period_name: str, nifty_return: float | None = None
+) -> go.Figure:
+    """RRG-style bubble chart: X = price return, Y = delivery slope z-score.
+
+    nifty_return shifts the quadrant center from 0% to the market return so that
+    phases (Leading / Improving / Weakening / Lagging) are market-relative —
+    a sector only 'Leading' if it beat Nifty50, not just because it was positive.
+    """
     if df.empty:
         return go.Figure()
 
@@ -207,13 +214,20 @@ def _rotation_clock_chart(df: pd.DataFrame, period_name: str) -> go.Figure:
     x0, x1 = x_vals.min() - x_pad, x_vals.max() + x_pad
     y0, y1 = y_vals.min() - y_pad, y_vals.max() + y_pad
 
+    # Quadrant center: use Nifty50 return if available, else 0%
+    cx = nifty_return if nifty_return is not None else 0.0
+
     fig = go.Figure()
 
-    # Quadrant shading — top-left=Improving, top-right=Leading, bottom-left=Lagging, bottom-right=Weakening
-    fig.add_shape(type="rect", x0=x0, x1=0,  y0=0,  y1=y1, fillcolor="rgba(64,196,255,0.09)", line_width=0, layer="below")
-    fig.add_shape(type="rect", x0=0,  x1=x1, y0=0,  y1=y1, fillcolor="rgba(0,200,83,0.09)",  line_width=0, layer="below")
-    fig.add_shape(type="rect", x0=x0, x1=0,  y0=y0, y1=0,  fillcolor="rgba(213,0,0,0.09)",   line_width=0, layer="below")
-    fig.add_shape(type="rect", x0=0,  x1=x1, y0=y0, y1=0,  fillcolor="rgba(255,109,0,0.07)", line_width=0, layer="below")
+    # Quadrant shading — centered on Nifty50 return (not 0%)
+    # top-left=Improving (delivery rising, price below Nifty50)
+    # top-right=Leading (delivery rising, price above Nifty50)
+    # bottom-left=Lagging (delivery falling, price below Nifty50)
+    # bottom-right=Weakening (delivery falling, price above Nifty50)
+    fig.add_shape(type="rect", x0=x0, x1=cx,  y0=0,  y1=y1, fillcolor="rgba(64,196,255,0.09)", line_width=0, layer="below")
+    fig.add_shape(type="rect", x0=cx,  x1=x1, y0=0,  y1=y1, fillcolor="rgba(0,200,83,0.09)",  line_width=0, layer="below")
+    fig.add_shape(type="rect", x0=x0, x1=cx,  y0=y0, y1=0,  fillcolor="rgba(213,0,0,0.09)",   line_width=0, layer="below")
+    fig.add_shape(type="rect", x0=cx,  x1=x1, y0=y0, y1=0,  fillcolor="rgba(255,109,0,0.07)", line_width=0, layer="below")
 
     corner_labels = [
         ("🔍 CONTRARIAN INFLOW",  x0 + x_pad * 0.35, y1 - y_pad * 0.35, "left",  "top",    "rgba(64,196,255,0.18)"),
@@ -229,7 +243,22 @@ def _rotation_clock_chart(df: pd.DataFrame, period_name: str) -> go.Figure:
         )
 
     fig.add_hline(y=0, line_color="rgba(255,255,255,0.35)", line_width=1.5)
-    fig.add_vline(x=0, line_color="rgba(255,255,255,0.35)", line_width=1.5)
+    # Primary vertical axis: Nifty50 baseline (gold) if available, else 0% (white)
+    if nifty_return is not None:
+        fig.add_vline(x=nifty_return, line_color="#ffd600", line_width=2, line_dash="dash")
+        fig.add_annotation(
+            x=nifty_return, y=y1,
+            text=f"<b>Nifty50: {nifty_return:+.2f}%</b>",
+            showarrow=False,
+            font=dict(size=11, color="#ffd600"),
+            xanchor="center", yanchor="top",
+            bgcolor="rgba(255,214,0,0.13)", borderpad=4,
+            yshift=-4,
+        )
+        # Zero line as a faint reference
+        fig.add_vline(x=0, line_color="rgba(255,255,255,0.20)", line_width=1, line_dash="dot")
+    else:
+        fig.add_vline(x=0, line_color="rgba(255,255,255,0.35)", line_width=1.5)
     fig.add_hline(y= 0.25, line_dash="dot", line_width=1.0, line_color="rgba(0,200,83,0.30)")
     fig.add_hline(y=-0.25, line_dash="dot", line_width=1.0, line_color="rgba(213,0,0,0.30)")
 
@@ -251,6 +280,7 @@ def _rotation_clock_chart(df: pd.DataFrame, period_name: str) -> go.Figure:
         dv_str  = grp["deliv_value_cr"].apply(lambda v: f"₹{v:,.0f} Cr").values
         to_str  = grp["turnover_cr"].apply(lambda v: f"₹{v:,.0f} Cr").values
 
+        vs_nifty = (grp["cum_price_ret_pct"] - cx).round(2).values
         customdata = list(zip(
             grp["sector"].values,
             grp["flow_signal"].values,
@@ -259,6 +289,7 @@ def _rotation_clock_chart(df: pd.DataFrame, period_name: str) -> go.Figure:
             chg_str,
             to_str,
             grp["avg_deliv_pct"].round(1).values,
+            vs_nifty,                              # [7] — excess return vs Nifty50
         ))
 
         fig.add_trace(go.Scatter(
@@ -276,6 +307,7 @@ def _rotation_clock_chart(df: pd.DataFrame, period_name: str) -> go.Figure:
                 f"<span style='color:{color}'>%{{customdata[1]}}</span><br>"
                 "─────────────────────────<br>"
                 "Price Return: <b>%{x:+.2f}%</b><br>"
+                "vs Nifty50: <b>%{customdata[7]:+.2f}%</b><br>"
                 "Delivery Slope Z: <b>%{y:+.2f}σ</b><br>"
                 "Delivery Value: <b>%{customdata[2]}</b><br>"
                 "Del Chg vs Prior: <b>%{customdata[4]}</b><br>"
@@ -285,14 +317,30 @@ def _rotation_clock_chart(df: pd.DataFrame, period_name: str) -> go.Figure:
             ),
         ))
 
+    # Flag extreme outliers — sectors returning >3× Nifty50 or >40% in a single period
+    outlier_threshold = max(abs(cx) * 3, 40.0)
+    outliers = df[df["cum_price_ret_pct"] > outlier_threshold]
+    for _, row in outliers.iterrows():
+        fig.add_annotation(
+            x=row["cum_price_ret_pct"], y=row["slope_z"],
+            text=f"⚠️ {row['sector']}<br>{row['cum_price_ret_pct']:+.1f}%",
+            showarrow=True, arrowhead=2, arrowcolor="#ff9100",
+            font=dict(size=10, color="#ff9100"),
+            bgcolor="rgba(255,145,0,0.15)", borderpad=3,
+            ax=-50, ay=-30,
+        )
+
+    nifty_subtitle = f" · Nifty50: {nifty_return:+.2f}%" if nifty_return is not None else ""
     fig.update_layout(
         title=dict(
-            text=f"Sector Rotation Clock — {period_name}",
+            text=f"Sector Rotation Clock — {period_name}{nifty_subtitle}",
             font=dict(size=16), x=0.5,
         ),
         plot_bgcolor=PLOT_BG, paper_bgcolor=PAPER_BG,
         xaxis=dict(
-            title="← Price Falling  |  Cumulative Price Return (%)  |  Price Rising →",
+            title="← Below Market  |  Cumulative Price Return (%)  |  Above Market →"
+                  if nifty_return is not None else
+                  "← Price Falling  |  Cumulative Price Return (%)  |  Price Rising →",
             showgrid=True, gridcolor=GRID_COLOR, zeroline=False,
             range=[x0, x1], ticksuffix="%", tickfont=dict(size=11),
         ),
@@ -824,19 +872,26 @@ def _render_custom_range(all_dates: list, min_turnover: float) -> None:
         st.warning("No data found for this date range. The range may be too short or pre-date available history.")
         return
 
-    # KPI pills
+    # KPI pills — Nifty50 first for benchmark context
+    nifty_ret = df["nifty_return"].iloc[0] if "nifty_return" in df.columns else None
     pc = df["phase"].value_counts()
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("💰 Leading",   pc.get("Leading",   0))
-    k2.metric("🔍 Improving", pc.get("Improving", 0))
-    k3.metric("⚖️ Neutral",   pc.get("Neutral",   0))
-    k4.metric("⚠️ Weakening", pc.get("Weakening", 0))
-    k5.metric("📤 Lagging",   pc.get("Lagging",   0))
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.metric(
+        "🔵 Nifty50",
+        f"{nifty_ret:+.2f}%" if nifty_ret is not None else "N/A",
+        help="Nifty50 return for this period. Quadrant center shifts to this value "
+             "so phases reflect market-relative performance.",
+    )
+    k2.metric("💰 Leading",   pc.get("Leading",   0))
+    k3.metric("🔍 Improving", pc.get("Improving", 0))
+    k4.metric("⚖️ Neutral",   pc.get("Neutral",   0))
+    k5.metric("⚠️ Weakening", pc.get("Weakening", 0))
+    k6.metric("📤 Lagging",   pc.get("Lagging",   0))
 
     # Bubble chart
     period_label = f"{from_snap.strftime('%d %b')} → {to_snap.strftime('%d %b %Y')}"
     st.plotly_chart(
-        _rotation_clock_chart(df, period_label),
+        _rotation_clock_chart(df, period_label, nifty_return=nifty_ret),
         use_container_width=True,
         key="cr_clock_chart",
     )
@@ -1120,14 +1175,18 @@ def _render_rotation_clock(selected_date: date, min_turnover: float, all_dates: 
 
     with st.expander("📖 How to read the Rotation Clock", expanded=False):
         st.markdown("""
-**RRG-Inspired Framework — 4 Rotation Phases:**
+**RRG-Inspired Framework — 4 Market-Relative Rotation Phases:**
 
-| Phase | Delivery Slope | Price Return | Interpretation | Action |
-|-------|---------------|--------------|----------------|--------|
-| 💰 **Leading** | Rising ↑ | Rising ↑ | Institutions buying + price confirming | **BUY / HOLD** |
-| 🔍 **Improving** | Rising ↑ | Falling ↓ | Institutions accumulating while retail exits | **ACCUMULATE** |
-| ⚠️ **Weakening** | Falling ↓ | Rising ↑ | Institutions distributing into retail FOMO | **EXIT / REDUCE** |
-| 📤 **Lagging** | Falling ↓ | Falling ↓ | Institutions exiting, price confirming | **AVOID** |
+| Phase | Delivery Slope | Price vs Nifty50 | Interpretation | Action |
+|-------|---------------|------------------|----------------|--------|
+| 💰 **Leading**   | Rising ↑ | Above Nifty50 ↑ | Institutions buying + outperforming market | **BUY / HOLD** |
+| 🔍 **Improving** | Rising ↑ | Below Nifty50 ↓ | Institutions accumulating while underperforming — contrarian zone | **ACCUMULATE** |
+| ⚠️ **Weakening** | Falling ↓ | Above Nifty50 ↑ | Institutions distributing into outperforming prices | **EXIT / REDUCE** |
+| 📤 **Lagging**   | Falling ↓ | Below Nifty50 ↓ | Institutions exiting, price lagging market | **AVOID** |
+
+**Quadrant Center = Nifty50** — The vertical gold dashed line marks the Nifty50 return for the selected period.
+Sectors to the RIGHT of the gold line are outperforming the market; sectors to the LEFT are underperforming.
+This makes the chart valid in both bull AND bear markets — a sector at +5% is "Improving" not "Lagging" if Nifty50 was +15%.
 
 **Delivery Slope** = Linear regression of daily turnover-weighted delivery % over the period.
 Positive slope = institutions are INCREASINGLY committed (building positions).
@@ -1142,8 +1201,8 @@ Negative = less institutional money (OUTFLOW).
 
 **Bubble Size** = Total delivery value ₹ Cr — larger bubbles = more absolute institutional activity.
 
-**Key insight:** Sectors typically rotate: Improving → Leading → Weakening → Lagging → Improving.
-Catching a sector moving from Improving to Leading (rising delivery + turning positive price) is the ideal entry.
+**Key insight:** Sectors rotate: Improving → Leading → Weakening → Lagging → Improving.
+Ideal entry: sector moving from Improving to Leading (rising delivery + price crossing above Nifty50 baseline).
         """)
 
     _PERIODS = {
@@ -1170,17 +1229,24 @@ Catching a sector moving from Improving to Leading (rising delivery + turning po
         return
 
     # KPI pills
+    nifty_ret = df["nifty_return"].iloc[0] if "nifty_return" in df.columns else None
     pc = df["phase"].value_counts()
-    k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("💰 Leading",   pc.get("Leading",   0), help="Delivery rising + price rising — institutions and price aligned")
-    k2.metric("🔍 Improving", pc.get("Improving", 0), help="Delivery rising + price falling — contrarian accumulation zone")
-    k3.metric("⚖️ Neutral",   pc.get("Neutral",   0), help="No clear directional bias in delivery momentum")
-    k4.metric("⚠️ Weakening", pc.get("Weakening", 0), help="Delivery falling + price rising — institutions distributing into rally")
-    k5.metric("📤 Lagging",   pc.get("Lagging",   0), help="Delivery falling + price falling — institutional exit confirmed")
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1.metric(
+        "🔵 Nifty50",
+        f"{nifty_ret:+.2f}%" if nifty_ret is not None else "N/A",
+        help="Nifty50 cumulative return for this period — the quadrant center. "
+             "Sectors right of this line outperformed the market.",
+    )
+    k2.metric("💰 Leading",   pc.get("Leading",   0), help="Delivery rising + price beating Nifty50")
+    k3.metric("🔍 Improving", pc.get("Improving", 0), help="Delivery rising + price below Nifty50 — contrarian accumulation")
+    k4.metric("⚖️ Neutral",   pc.get("Neutral",   0), help="No clear directional bias in delivery momentum")
+    k5.metric("⚠️ Weakening", pc.get("Weakening", 0), help="Delivery falling + price beating Nifty50 — distributing into rally")
+    k6.metric("📤 Lagging",   pc.get("Lagging",   0), help="Delivery falling + price below Nifty50 — institutional exit")
 
     # Bubble chart
     st.plotly_chart(
-        _rotation_clock_chart(df, sel),
+        _rotation_clock_chart(df, sel, nifty_return=nifty_ret),
         use_container_width=True,
         key=f"rot_clock_chart_{window}",
     )

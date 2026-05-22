@@ -523,6 +523,14 @@ def get_sector_rotation_timeframe(
         else set()
     )
 
+    # Nifty50 return for this exact window — used as quadrant center so phase
+    # classification is market-relative (a sector beating Nifty50 = Leading/Weakening,
+    # a sector lagging Nifty50 = Improving/Lagging). Without this, during bull markets
+    # all sectors have positive price returns and Improving/Lagging become empty.
+    curr_dates_sorted = sorted(curr_dates)
+    nifty_window_ret  = get_nifty50_custom_return(curr_dates_sorted[0], curr_dates_sorted[-1])
+    nifty_threshold   = nifty_window_ret if nifty_window_ret is not None else 0.0
+
     records = []
     for sector, grp in hist.groupby("sector"):
         grp  = grp.sort_values("trade_date")
@@ -574,7 +582,7 @@ def get_sector_rotation_timeframe(
 
     def _phase(row) -> str:
         sz = row["slope_z"]
-        pr = row["cum_price_ret_pct"]
+        pr = row["cum_price_ret_pct"] - nifty_threshold  # excess return vs Nifty50
         if   sz >  0.25 and pr >  0.5:  return "Leading"
         elif sz >  0.25 and pr < -0.5:  return "Improving"
         elif sz < -0.25 and pr >  0.5:  return "Weakening"
@@ -589,6 +597,7 @@ def get_sector_rotation_timeframe(
         "Lagging":   "📤 MONEY EXITING",
         "Neutral":   "⚖️ SIDEWAYS",
     })
+    df["nifty_return"] = nifty_window_ret  # None if index_data unavailable
 
     return df.sort_values("slope_z", ascending=False).reset_index(drop=True)
 
@@ -774,8 +783,12 @@ def get_sector_rotation_custom_range(
     s_std  = df["delivery_slope"].std()
     df["slope_z"] = ((df["delivery_slope"] - s_mean) / max(s_std, 1e-9)).round(2)
 
+    nifty_ret_custom  = get_nifty50_custom_return(from_date, to_date)
+    nifty_thr_custom  = nifty_ret_custom if nifty_ret_custom is not None else 0.0
+
     def _phase(row) -> str:
-        sz, pr = row["slope_z"], row["cum_price_ret_pct"]
+        sz = row["slope_z"]
+        pr = row["cum_price_ret_pct"] - nifty_thr_custom  # excess return vs Nifty50
         if   sz >  0.25 and pr >  0.5:  return "Leading"
         elif sz >  0.25 and pr < -0.5:  return "Improving"
         elif sz < -0.25 and pr >  0.5:  return "Weakening"
@@ -790,6 +803,7 @@ def get_sector_rotation_custom_range(
         "Lagging":   "📤 MONEY EXITING",
         "Neutral":   "⚖️ SIDEWAYS",
     })
+    df["nifty_return"] = nifty_ret_custom
 
     return df.sort_values("slope_z", ascending=False).reset_index(drop=True)
 
