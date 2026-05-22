@@ -395,18 +395,7 @@ def render(selected_date: date, min_turnover: float) -> None:
     st.markdown("---")
 
     # ── 1-2 Week Outlook ──────────────────────────────────────────────────────
-    st.markdown(
-        "### 📈 1–2 Week Sector Outlook "
-        "<span title='Score = 35% DV Ratio + 25% Breadth + 20% Z-Score + 10% Price Trend + 10% Delivery Acceleration. "
-        "Score is a RELATIVE rank within today's cross-section — the best sector gets highest score. "
-        "Accumulating = abnormal+broad delivery + price up. "
-        "Buying Dips = abnormal+broad + price down (smart money absorbing). "
-        "Weak Rally = normal delivery + price up (retail-driven, low conviction). "
-        "Neutral = near-normal delivery, flat price. "
-        "Distributing = below-normal delivery or price falling with weak flow.' "
-        "style='cursor:help;color:#ffd600;font-size:16px'>ℹ️</span>",
-        unsafe_allow_html=True,
-    )
+    st.markdown("### 📈 1–2 Week Sector Outlook")
     st.caption(
         "Score = **35% DV Ratio** (relative flow) + **25% Breadth** (stock participation) "
         "+ **20% Z-Score** (statistical abnormality) + **10% Price Trend** + **10% Delivery Acceleration** "
