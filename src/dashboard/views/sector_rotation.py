@@ -519,19 +519,57 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> No
                 ascending=[True, False, False],
             ).drop(columns="_rank")
 
+            # Context strip: stock count + top-3 delivery contributors
+            n_stocks = len(stocks)
+            total_dv = stocks["deliv_value_cr"].sum()
             total_turnover = stocks["turnover_cr"].sum()
-            dominant = stocks[stocks["turnover_cr"] / total_turnover > 0.30]
+            top3 = stocks.nlargest(3, "deliv_value_cr")[["symbol", "deliv_value_cr"]]
+            top3_parts = " + ".join(
+                f"{r['symbol']} {r['deliv_value_cr'] / total_dv * 100:.0f}%"
+                for _, r in top3.iterrows()
+            ) if total_dv > 0 else ""
+            top3_total_pct = top3["deliv_value_cr"].sum() / total_dv * 100 if total_dv > 0 else 0
+
+            n_industries = stocks["industry"].nunique() if "industry" in stocks.columns else 0
+            industries_list = stocks["industry"].dropna().unique().tolist() if "industry" in stocks.columns else []
+
+            st.markdown(
+                f"<div style='font-size:11px;color:#888;margin-bottom:4px'>"
+                f"{n_stocks} stocks &nbsp;·&nbsp; "
+                f"Top-3 delivery: {top3_parts} = {top3_total_pct:.0f}% of sector"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+            # Mixed-sector warning: ≥4 distinct sub-industries is a quality flag
+            if n_industries >= 4:
+                industry_summary = ", ".join(sorted(industries_list)[:6])
+                if len(industries_list) > 6:
+                    industry_summary += f" +{len(industries_list) - 6} more"
+                st.markdown(
+                    f"<div style='background:rgba(100,100,255,0.10);border-left:3px solid #7986cb;"
+                    f"padding:6px 10px;border-radius:0 4px 4px 0;margin-bottom:4px;font-size:12px'>"
+                    f"🔀 <b>Mixed sector</b> — {n_industries} sub-industries: {industry_summary}. "
+                    f"Sector-level signals may blend unrelated themes."
+                    f"</div>",
+                    unsafe_allow_html=True,
+                )
+
+            # Delivery-value dominance warning (institutional metric, not turnover)
+            dominant = stocks[stocks["deliv_value_cr"] / total_dv > 0.35] if total_dv > 0 else stocks.iloc[:0]
             if not dominant.empty:
                 dom = dominant.iloc[0]
-                dom_pct = dom["turnover_cr"] / total_turnover * 100
+                dom_dv_pct = dom["deliv_value_cr"] / total_dv * 100
+                dom_to_pct = dom["turnover_cr"] / total_turnover * 100 if total_turnover > 0 else 0
                 dom_conv = stocks.loc[stocks["symbol"] == dom["symbol"], "conviction"].values[0]
                 warn_color = "#ff9100" if invest_signal else "#d50000"
                 st.markdown(
                     f"<div style='background:rgba(255,145,0,0.12);border-left:3px solid {warn_color};"
                     f"padding:6px 10px;border-radius:0 4px 4px 0;margin-bottom:6px;font-size:12px'>"
-                    f"⚠️ <b>{dom['symbol']}</b> dominates <b>{dom_pct:.0f}%</b> of sector turnover "
-                    f"with <b>{dom_conv}</b> conviction ({dom['wtd_deliv_per']:.1f}% delivery). "
-                    f"The sector signal is driven by this one stock — verify independently."
+                    f"⚠️ <b>{dom['symbol']}</b> drives <b>{dom_dv_pct:.0f}%</b> of sector delivery value "
+                    f"(₹{dom['deliv_value_cr']:.0f} Cr · {dom['wtd_deliv_per']:.1f}% del · {dom_to_pct:.0f}% of turnover) "
+                    f"with <b>{dom_conv}</b> conviction. "
+                    f"Sector signal is driven by this one stock — verify independently."
                     f"</div>",
                     unsafe_allow_html=True,
                 )
