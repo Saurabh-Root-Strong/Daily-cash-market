@@ -549,6 +549,12 @@ def get_sector_rotation_timeframe(
         daily_rets    = curr["wtd_daily_ret_pct"].fillna(0) / 100
         cum_price_pct = float((1 + daily_rets).prod() - 1) * 100
 
+        # Price-delivery daily correlation — key Weakening filter.
+        # Genuine distribution = price rising while delivery falls (corr < 0).
+        # corr > 0 means both moving together → normal momentum, NOT distribution.
+        corr_raw = curr["wtd_daily_ret_pct"].corr(curr["wtd_deliv_pct"])
+        price_deliv_corr = float(corr_raw) if not pd.isna(corr_raw) else 0.0
+
         # Delivery value: current vs prior period
         curr_dv = float(curr["deliv_value_cr"].sum())
         if not prev.empty:
@@ -562,6 +568,7 @@ def get_sector_rotation_timeframe(
             "sector":              sector,
             "delivery_slope":      round(delivery_slope, 4),
             "cum_price_ret_pct":   round(cum_price_pct, 2),
+            "price_deliv_corr":    round(price_deliv_corr, 3),
             "deliv_value_cr":      round(curr_dv, 1),
             "deliv_value_prev_cr": round(prev_dv, 1) if prev_dv is not None else None,
             "deliv_chg_pct":       round(deliv_chg, 1) if deliv_chg is not None else None,
@@ -580,16 +587,44 @@ def get_sector_rotation_timeframe(
     s_std  = df["delivery_slope"].std()
     df["slope_z"] = ((df["delivery_slope"] - s_mean) / max(s_std, 1e-9)).round(2)
 
-    def _phase(row) -> str:
-        sz = row["slope_z"]
-        pr = row["cum_price_ret_pct"] - nifty_threshold  # excess return vs Nifty50
-        if   sz >  0.25 and pr >  0.5:  return "Leading"
-        elif sz >  0.25 and pr < -0.5:  return "Improving"
-        elif sz < -0.25 and pr >  0.5:  return "Weakening"
-        elif sz < -0.25 and pr < -0.5:  return "Lagging"
-        else:                            return "Neutral"
+    def _phase_and_confidence(row) -> tuple:
+        sz   = row["slope_z"]
+        pr   = row["cum_price_ret_pct"] - nifty_threshold
+        corr = row["price_deliv_corr"]
 
-    df["phase"] = df.apply(_phase, axis=1)
+        if sz > 0.25 and pr > 0.5:
+            # Leading: delivery rising + price beating market
+            # corr > 0 (price and delivery co-moving) increases confidence
+            conf = min(abs(sz) / 1.5, 1.0) * (1.0 + max(corr, 0.0) * 0.5)
+            return "Leading", round(min(conf, 1.0), 2)
+
+        elif sz > 0.25 and pr < -0.5:
+            # Improving: delivery rising but price lagging market
+            conf = min(abs(sz) / 1.5, 1.0)
+            return "Improving", round(min(conf, 1.0), 2)
+
+        elif sz < -0.25 and pr > 0.5:
+            # Weakening candidate: delivery falling + price beating market.
+            # ONLY confirmed if price and delivery are anti-correlated
+            # (price rising as delivery falls = genuine sell-into-strength distribution).
+            # If corr >= -0.15, delivery is just normalising from a peak — not distribution.
+            if corr < -0.15:
+                conf = min(abs(sz) / 1.5, 1.0) * (1.0 + abs(min(corr, 0.0)) * 0.5)
+                return "Weakening", round(min(conf, 1.0), 2)
+            else:
+                return "Neutral", 0.3
+
+        elif sz < -0.25 and pr < -0.5:
+            # Lagging: delivery falling + price below market — confirmed exit
+            conf = min(abs(sz) / 1.5, 1.0)
+            return "Lagging", round(min(conf, 1.0), 2)
+
+        else:
+            return "Neutral", 0.5
+
+    df[["phase", "signal_confidence"]] = df.apply(
+        lambda r: pd.Series(_phase_and_confidence(r)), axis=1
+    )
     df["flow_signal"] = df["phase"].map({
         "Leading":   "💰 MONEY ENTERING",
         "Improving": "🔍 CONTRARIAN INFLOW",
@@ -672,18 +707,31 @@ def get_rotation_clock_backtest(
         daily = grp.sort_values("trade_date")["wtd_daily_ret_pct"].fillna(0) / 100
         forward_rets[sector] = float((1 + daily).prod() - 1) * 100
 
+    # Nifty50 forward return for the same period — market-relative validation.
+    # In bull markets, even "distributing" sectors go up in absolute terms.
+    # The correct question is: did the sector OUTPERFORM or UNDERPERFORM Nifty50?
+    nifty_fwd = get_nifty50_custom_return(signal_date, as_of_date)
+
     signals = signals.copy()
-    signals["signal_date"]     = signal_date
-    signals["forward_ret_pct"] = signals["sector"].map(forward_rets)
+    signals["signal_date"]          = signal_date
+    signals["forward_ret_pct"]      = signals["sector"].map(forward_rets)
+    signals["forward_nifty_ret"]    = nifty_fwd
+    # Excess return vs Nifty50 over the forward period
+    if nifty_fwd is not None:
+        signals["forward_vs_nifty"] = signals["forward_ret_pct"] - nifty_fwd
+    else:
+        signals["forward_vs_nifty"] = signals["forward_ret_pct"]  # fallback to absolute
 
     def _correct(row) -> Optional[bool]:
         phase = row["phase"]
-        fwd_r = row.get("forward_ret_pct")
+        # Use market-relative return: sector correct if it beat Nifty50 (inflow)
+        # or underperformed Nifty50 (outflow). Falls back to absolute if no index data.
+        fwd_r = row.get("forward_vs_nifty") if nifty_fwd is not None else row.get("forward_ret_pct")
         if fwd_r is None or pd.isna(fwd_r) or phase == "Neutral":
             return None
         if phase in ("Leading", "Improving"):
-            return bool(fwd_r > 0)
-        return bool(fwd_r < 0)   # Weakening, Lagging
+            return bool(fwd_r > 0)   # sector beat the market
+        return bool(fwd_r < 0)       # Weakening/Lagging: sector underperformed market
 
     signals["signal_correct"] = signals.apply(_correct, axis=1)
 
@@ -759,6 +807,9 @@ def get_sector_rotation_custom_range(
         daily_rets    = curr["wtd_daily_ret_pct"].fillna(0) / 100
         cum_price_pct = float((1 + daily_rets).prod() - 1) * 100
 
+        corr_raw = curr["wtd_daily_ret_pct"].corr(curr["wtd_deliv_pct"])
+        price_deliv_corr = float(corr_raw) if not pd.isna(corr_raw) else 0.0
+
         curr_dv = float(curr["deliv_value_cr"].sum())
         prev_dv = float(prev["deliv_value_cr"].sum()) if not prev.empty else None
         deliv_chg = (curr_dv - prev_dv) / max(abs(prev_dv), 0.1) * 100 if prev_dv is not None else None
@@ -767,6 +818,7 @@ def get_sector_rotation_custom_range(
             "sector":              sector,
             "delivery_slope":      round(delivery_slope, 4),
             "cum_price_ret_pct":   round(cum_price_pct, 2),
+            "price_deliv_corr":    round(price_deliv_corr, 3),
             "deliv_value_cr":      round(curr_dv, 1),
             "deliv_value_prev_cr": round(prev_dv, 1) if prev_dv is not None else None,
             "deliv_chg_pct":       round(deliv_chg, 1) if deliv_chg is not None else None,
@@ -786,16 +838,29 @@ def get_sector_rotation_custom_range(
     nifty_ret_custom  = get_nifty50_custom_return(from_date, to_date)
     nifty_thr_custom  = nifty_ret_custom if nifty_ret_custom is not None else 0.0
 
-    def _phase(row) -> str:
-        sz = row["slope_z"]
-        pr = row["cum_price_ret_pct"] - nifty_thr_custom  # excess return vs Nifty50
-        if   sz >  0.25 and pr >  0.5:  return "Leading"
-        elif sz >  0.25 and pr < -0.5:  return "Improving"
-        elif sz < -0.25 and pr >  0.5:  return "Weakening"
-        elif sz < -0.25 and pr < -0.5:  return "Lagging"
-        else:                            return "Neutral"
+    def _phase_and_confidence_custom(row) -> tuple:
+        sz   = row["slope_z"]
+        pr   = row["cum_price_ret_pct"] - nifty_thr_custom
+        corr = row["price_deliv_corr"]
+        if sz > 0.25 and pr > 0.5:
+            conf = min(abs(sz) / 1.5, 1.0) * (1.0 + max(corr, 0.0) * 0.5)
+            return "Leading", round(min(conf, 1.0), 2)
+        elif sz > 0.25 and pr < -0.5:
+            return "Improving", round(min(abs(sz) / 1.5, 1.0), 2)
+        elif sz < -0.25 and pr > 0.5:
+            if corr < -0.15:
+                conf = min(abs(sz) / 1.5, 1.0) * (1.0 + abs(min(corr, 0.0)) * 0.5)
+                return "Weakening", round(min(conf, 1.0), 2)
+            else:
+                return "Neutral", 0.3
+        elif sz < -0.25 and pr < -0.5:
+            return "Lagging", round(min(abs(sz) / 1.5, 1.0), 2)
+        else:
+            return "Neutral", 0.5
 
-    df["phase"] = df.apply(_phase, axis=1)
+    df[["phase", "signal_confidence"]] = df.apply(
+        lambda r: pd.Series(_phase_and_confidence_custom(r)), axis=1
+    )
     df["flow_signal"] = df["phase"].map({
         "Leading":   "💰 MONEY ENTERING",
         "Improving": "🔍 CONTRARIAN INFLOW",

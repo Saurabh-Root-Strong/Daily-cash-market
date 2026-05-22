@@ -280,7 +280,9 @@ def _rotation_clock_chart(
         dv_str  = grp["deliv_value_cr"].apply(lambda v: f"₹{v:,.0f} Cr").values
         to_str  = grp["turnover_cr"].apply(lambda v: f"₹{v:,.0f} Cr").values
 
-        vs_nifty = (grp["cum_price_ret_pct"] - cx).round(2).values
+        vs_nifty  = (grp["cum_price_ret_pct"] - cx).round(2).values
+        corr_vals = grp["price_deliv_corr"].round(2).values if "price_deliv_corr" in grp.columns else [0.0] * len(grp)
+        conf_vals = grp["signal_confidence"].round(2).values if "signal_confidence" in grp.columns else [0.5] * len(grp)
         customdata = list(zip(
             grp["sector"].values,
             grp["flow_signal"].values,
@@ -289,7 +291,9 @@ def _rotation_clock_chart(
             chg_str,
             to_str,
             grp["avg_deliv_pct"].round(1).values,
-            vs_nifty,                              # [7] — excess return vs Nifty50
+            vs_nifty,        # [7] — excess return vs Nifty50
+            corr_vals,       # [8] — price-delivery correlation
+            conf_vals,       # [9] — signal confidence
         ))
 
         fig.add_trace(go.Scatter(
@@ -306,13 +310,13 @@ def _rotation_clock_chart(
                 "<b>%{customdata[0]}</b><br>"
                 f"<span style='color:{color}'>%{{customdata[1]}}</span><br>"
                 "─────────────────────────<br>"
-                "Price Return: <b>%{x:+.2f}%</b><br>"
-                "vs Nifty50: <b>%{customdata[7]:+.2f}%</b><br>"
+                "Price Return: <b>%{x:+.2f}%</b>  (vs Nifty50: <b>%{customdata[7]:+.2f}%</b>)<br>"
                 "Delivery Slope Z: <b>%{y:+.2f}σ</b><br>"
-                "Delivery Value: <b>%{customdata[2]}</b><br>"
-                "Del Chg vs Prior: <b>%{customdata[4]}</b><br>"
-                "Avg Delivery %: %{customdata[6]:.1f}%<br>"
-                "Turnover: %{customdata[5]}"
+                "Price-Del Correlation: <b>%{customdata[8]:.2f}</b>  "
+                "<span style='color:rgba(200,200,200,0.6)'>(−=distribution, +=co-moving)</span><br>"
+                "Signal Confidence: <b>%{customdata[9]:.2f}</b><br>"
+                "Delivery Value: <b>%{customdata[2]}</b>  ·  Del Chg: <b>%{customdata[4]}</b><br>"
+                "Avg Delivery %: %{customdata[6]:.1f}%  ·  Turnover: %{customdata[5]}"
                 "<extra></extra>"
             ),
         ))
@@ -1015,13 +1019,19 @@ def _render_signal_validation(
         st.info(f"Not enough history to backtest {period_name} signals. Need at least {window * 2} trading days.")
         return
 
-    signal_date = bt["signal_date"].iloc[0]
-    n_fwd_days  = bt["forward_ret_pct"].dropna().shape[0]
+    signal_date   = bt["signal_date"].iloc[0]
+    nifty_fwd_ret = bt["forward_nifty_ret"].iloc[0] if "forward_nifty_ret" in bt.columns else None
+    using_relative = nifty_fwd_ret is not None
 
+    nifty_note = (
+        f"  Nifty50 returned **{nifty_fwd_ret:+.2f}%** over that period — "
+        f"'Correct' = sector beat Nifty50 (inflow) or underperformed Nifty50 (outflow)."
+        if using_relative else ""
+    )
     st.caption(
         f"Signals computed **as of {signal_date.strftime('%d %b %Y')}** "
         f"({window} trading days before {selected_date.strftime('%d %b %Y')}). "
-        f"Forward returns measured from that date to today."
+        f"Forward returns measured from that date to today.{nifty_note}"
     )
 
     # ── Phase-level accuracy summary ──────────────────────────────────────────
@@ -1042,26 +1052,36 @@ def _render_signal_validation(
             cols[i].metric(meta["label"], "—")
             continue
 
-        avg_ret   = grp["forward_ret_pct"].mean()
-        n_correct = int(grp["signal_correct"].fillna(False).sum())
-        n_total   = len(grp)
-        hit_rate  = n_correct / n_total * 100
+        avg_ret        = grp["forward_ret_pct"].mean()
+        avg_vs_nifty   = grp["forward_vs_nifty"].mean() if "forward_vs_nifty" in grp.columns else None
+        n_correct      = int(grp["signal_correct"].fillna(False).sum())
+        n_total        = len(grp)
+        hit_rate       = n_correct / n_total * 100
 
         total_correct   += n_correct
         total_predicted += n_total
 
-        # Color logic: inflow phases want positive avg_ret, outflow want negative
         expected_positive = phase in inflow_phases
-        ret_ok = (avg_ret > 0) if expected_positive else (avg_ret < 0)
+        # Color by market-relative avg if available, else absolute
+        ref_ret = avg_vs_nifty if avg_vs_nifty is not None else avg_ret
+        ret_ok  = (ref_ret > 0) if expected_positive else (ref_ret < 0)
+
+        vs_str = f" (vs Nifty50: {avg_vs_nifty:+.1f}%)" if avg_vs_nifty is not None else ""
+        correct_label = (
+            "beat market" if expected_positive else "underperform market"
+        ) if using_relative else (
+            "> 0%" if expected_positive else "< 0%"
+        )
 
         cols[i].metric(
             label=f"{meta['label']} ({n_total})",
-            value=f"{avg_ret:+.1f}% avg",
+            value=f"{avg_ret:+.1f}% avg{vs_str}",
             delta=f"{hit_rate:.0f}% hit  {n_correct}/{n_total}",
             delta_color="normal" if ret_ok else "inverse",
             help=(
                 f"{'Inflow' if expected_positive else 'Outflow'} signal.\n"
-                f"Correct = forward return {'> 0%' if expected_positive else '< 0%'}."
+                f"Correct = forward return {correct_label}.\n"
+                + (f"Nifty50 forward: {nifty_fwd_ret:+.2f}%" if nifty_fwd_ret else "")
             ),
         )
 
@@ -1081,13 +1101,23 @@ def _render_signal_validation(
     st.markdown("---")
 
     # ── Sector detail table ───────────────────────────────────────────────────
-    disp = bt[[
-        "sector", "phase", "forward_ret_pct", "signal_correct",
-        "cum_price_ret_pct", "slope_z", "deliv_chg_pct",
-    ]].copy()
+    avail_cols = ["sector", "phase", "signal_confidence", "forward_ret_pct",
+                  "forward_vs_nifty", "signal_correct",
+                  "cum_price_ret_pct", "slope_z", "price_deliv_corr", "deliv_chg_pct"]
+    disp = bt[[c for c in avail_cols if c in bt.columns]].copy()
 
     disp["signal_correct"] = disp["signal_correct"].map(
         lambda v: "✅ Correct" if v is True else ("❌ Wrong" if v is False else "—")
+    )
+
+    correct_help = (
+        "✅ = sector beat Nifty50 (inflow) or underperformed Nifty50 (outflow)\n"
+        "❌ = signal was wrong vs market\n"
+        "— = Neutral (no directional prediction)"
+    ) if using_relative else (
+        "✅ = signal direction matched actual return\n"
+        "❌ = signal was wrong\n"
+        "— = Neutral (no directional prediction)"
     )
 
     st.dataframe(
@@ -1095,23 +1125,35 @@ def _render_signal_validation(
         hide_index=True,
         use_container_width=True,
         column_config={
-            "sector":          st.column_config.TextColumn("Sector"),
-            "phase":           st.column_config.TextColumn("Phase on Signal Date",
+            "sector":            st.column_config.TextColumn("Sector"),
+            "phase":             st.column_config.TextColumn("Phase on Signal Date",
                 help=f"Rotation phase as of {signal_date.strftime('%d %b %Y')}"),
-            "forward_ret_pct": st.column_config.NumberColumn(
-                "Actual Forward Return", format="%+.2f%%",
+            "signal_confidence": st.column_config.NumberColumn(
+                "Confidence", format="%.2f",
+                help="Signal strength 0→1.\n"
+                     "Based on slope_z magnitude, price-delivery anti-correlation strength.\n"
+                     "High confidence (>0.7) = stronger evidence for the phase call."),
+            "forward_ret_pct":   st.column_config.NumberColumn(
+                "Forward Return (abs)", format="%+.2f%%",
                 help=f"Cumulative sector return from {signal_date.strftime('%d %b')} → {selected_date.strftime('%d %b')}"),
-            "signal_correct":  st.column_config.TextColumn("Correct?",
-                help="✅ = signal direction matched actual return\n"
-                     "❌ = signal was wrong\n"
-                     "— = Neutral (no directional prediction)"),
+            "forward_vs_nifty":  st.column_config.NumberColumn(
+                "vs Nifty50",  format="%+.2f%%",
+                help=f"Forward return minus Nifty50 ({nifty_fwd_ret:+.2f}% forward)\n"
+                     "Positive = sector outperformed market. Used for accuracy scoring."
+                     if nifty_fwd_ret is not None else "Forward return vs Nifty50"),
+            "signal_correct":    st.column_config.TextColumn("Correct?", help=correct_help),
             "cum_price_ret_pct": st.column_config.NumberColumn(
                 "Price Ret on Signal Date", format="%+.2f%%",
-                help=f"Sector price return as of {signal_date.strftime('%d %b')} — what triggered the phase classification"),
-            "slope_z":         st.column_config.NumberColumn(
+                help=f"Sector return as of {signal_date.strftime('%d %b')} — what triggered classification"),
+            "slope_z":           st.column_config.NumberColumn(
                 "Delivery Slope Z", format="%+.2f",
                 help="Delivery momentum Z-score on the signal date"),
-            "deliv_chg_pct":   st.column_config.NumberColumn(
+            "price_deliv_corr":  st.column_config.NumberColumn(
+                "Price-Del Corr", format="%.2f",
+                help="Correlation between daily price return and daily delivery %.\n"
+                     "Negative = price rising as delivery falls (distribution confirmed).\n"
+                     "Only Weakening signals with corr < -0.15 are shown as Weakening."),
+            "deliv_chg_pct":     st.column_config.NumberColumn(
                 "Del Chg% on Signal Date", format="%+.1f%%",
                 help="Delivery value change vs prior period on the signal date"),
         },
