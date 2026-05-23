@@ -3,7 +3,7 @@ from typing import Optional, Dict
 import pandas as pd
 
 from src.analytics.delivery_signals import get_stock_metrics
-from src.analytics.base import get_weighting_method, get_min_turnover_filter
+from src.analytics.base import get_weighting_method, get_min_turnover_filter, get_thresholds
 from src.data.repository import query_dataframe
 from src.logging_setup import get_logger
 
@@ -26,7 +26,7 @@ def aggregate_by_sector(
 
     df = df.dropna(subset=["sector"])
 
-    acc_threshold, dist_threshold = 1.2, 0.8
+    acc_threshold, dist_threshold = get_thresholds()
 
     records = []
     for sector, grp in df.groupby("sector"):
@@ -90,8 +90,14 @@ def get_sector_drilldown(trade_date: date, sector_name: str, top_n: int = 10) ->
     total_turnover = sector_df["turnover_lacs"].sum()
     total_deliv_value = sector_df["deliv_value_lacs"].sum()
 
-    sector_df["turnover_share_pct"] = (sector_df["turnover_lacs"] / total_turnover * 100).round(2)
-    sector_df["deliv_value_share_pct"] = (sector_df["deliv_value_lacs"] / total_deliv_value * 100).round(2)
+    sector_df["turnover_share_pct"] = (
+        (sector_df["turnover_lacs"] / total_turnover * 100).round(2)
+        if total_turnover > 0 else 0.0
+    )
+    sector_df["deliv_value_share_pct"] = (
+        (sector_df["deliv_value_lacs"] / total_deliv_value * 100).round(2)
+        if total_deliv_value > 0 else 0.0
+    )
 
     top_by_delivery_pct = sector_df.nlargest(top_n, "deliv_per")
     top_by_delivery_value = sector_df.nlargest(top_n, "deliv_value_lacs")
@@ -658,6 +664,18 @@ def get_all_stocks() -> pd.DataFrame:
         ORDER BY company_name
     """
     return query_dataframe(sql, [])
+
+
+def get_stock_close_prices(symbols: tuple, trade_date: date) -> dict:
+    """Return {symbol: close_price} for a list of symbols on the given date."""
+    if not symbols:
+        return {}
+    ph = ", ".join("?" * len(symbols))
+    df = query_dataframe(
+        f"SELECT symbol, close_price FROM daily_data WHERE trade_date = ? AND symbol IN ({ph})",
+        [trade_date] + list(symbols),
+    )
+    return {} if df.empty else dict(zip(df["symbol"], df["close_price"]))
 
 
 def search_stock_suggestions(query: str, limit: int = 15) -> pd.DataFrame:

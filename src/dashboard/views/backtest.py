@@ -56,15 +56,8 @@ def _assign_conviction(stocks: pd.DataFrame, invest_signal: bool) -> pd.DataFram
 
 
 def _get_prices(symbols: list, trade_date: date) -> dict:
-    from src.data.repository import query_dataframe
-    if not symbols:
-        return {}
-    ph = ", ".join("?" * len(symbols))
-    df = query_dataframe(
-        f"SELECT symbol, close_price FROM daily_data WHERE trade_date = ? AND symbol IN ({ph})",
-        [trade_date] + list(symbols),
-    )
-    return dict(zip(df["symbol"], df["close_price"]))
+    from src.dashboard.cache.queries import cached_stock_close_prices
+    return cached_stock_close_prices(tuple(symbols), trade_date)
 
 
 def _sector_side(action: str) -> str:

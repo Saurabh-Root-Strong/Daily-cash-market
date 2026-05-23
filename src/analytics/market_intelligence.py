@@ -30,7 +30,7 @@ import pandas as pd
 
 from src.data.repository import query_dataframe
 
-__all__ = ["get_market_intelligence", "MarketIntelligence", "Signal"]
+__all__ = ["get_market_intelligence", "MarketIntelligence", "Signal", "FIITodaySnapshot"]
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
@@ -65,6 +65,41 @@ class TomorrowVerdict:
     key_driver: str       # the single most impactful signal
     key_risk: str         # what would invalidate this view
     direction_color: str  # hex colour for the direction label
+    squeeze_risk: bool = False           # FII massively short + DII floor = squeeze fuel
+    short_covering_active: bool = False  # FII is actively reducing large short (= net buying)
+
+
+@dataclass
+class FIITodaySnapshot:
+    """
+    Structured view of what FIIs actually DID today — all three data layers combined.
+    Used for display in the dashboard; does not contribute to composite score.
+
+    Combines:
+      • OI layer   — gross long/short changes vs yesterday (absolute position moves)
+      • Volume layer — today's trading activity vs baseline (conviction signal)
+      • Rupee flow  — ₹Cr net from fii_derivatives_stats (real money confirmation)
+    """
+    as_of_date: date
+    # OI layer (futures only — directional signal)
+    long_change: int            # fut_idx_long today − yesterday (+ve = added longs)
+    short_change: int           # fut_idx_short today − yesterday (+ve = added shorts)
+    oi_net_change: int          # long_change − short_change (+ve = bullish)
+    cumulative_long: int        # current total open long contracts
+    cumulative_short: int       # current total open short contracts
+    cumulative_net: int         # current net = cumulative_long − cumulative_short
+    # Volume layer
+    vol_today: int              # total activity contracts today
+    vol_z: float                # z-score vs 20D baseline (0.0 if < 5 data points)
+    # Rupee flow (from fii_derivatives_stats; 0.0 if not available)
+    fut_net_cr: float           # index futures rupee net (buy−sell)
+    opt_net_cr: float           # index options rupee net
+    total_net_cr: float         # total index F&O net ₹Cr
+    # Classification
+    action_label: str           # "SHORT COVERING" | "ADDING LONGS" | "ADDING SHORTS" | etc.
+    action_color: str           # hex
+    action_emoji: str
+    covering_pct: float = 0.0  # if short: % of total short covered today
 
 
 @dataclass
@@ -79,6 +114,7 @@ class MarketIntelligence:
     weekly_expiry: Optional[WeeklyExpiryView] = None
     fii_flow_available: bool = False
     tomorrow_verdict: Optional[TomorrowVerdict] = None
+    fii_today: Optional[FIITodaySnapshot] = None
 
 
 # ── Helper: next Thursday expiry ─────────────────────────────────────────────
@@ -199,6 +235,26 @@ def get_market_intelligence(
     # ── Tomorrow's Verdict ────────────────────────────────────────────────────
     verdict = _compute_tomorrow_verdict(signals, composite, weekly, oi_df)
 
+    # ── Squeeze / Short Covering Alert ────────────────────────────────────────
+    if verdict and not oi_df.empty:
+        today_oi_chk = oi_df[oi_df["trade_date"] == oi_df["trade_date"].max()]
+        fii_r = today_oi_chk[today_oi_chk["client_type"] == "FII"]
+        if not fii_r.empty:
+            fn = float(fii_r.iloc[0]["fut_idx_net"])
+            if verdict.short_covering_active:
+                alerts.append(
+                    f"SHORT COVERING ACTIVE: FII net {fn:+,.0f} contracts and REDUCING. "
+                    "Covering = forced buying = near-term bullish. Watch for acceleration."
+                )
+            elif verdict.squeeze_risk:
+                alerts.append(
+                    f"SQUEEZE RISK: FII holds {fn:+,.0f} massive short. "
+                    "Any positive catalyst forces covering = sudden UP move. "
+                    "Do not initiate fresh shorts — squeeze risk elevated."
+                )
+
+    fii_today = _compute_fii_today_snapshot(oi_df, vol_df, fii_stats_df)
+
     return MarketIntelligence(
         as_of_date=as_of_date,
         composite_score=composite,
@@ -210,6 +266,7 @@ def get_market_intelligence(
         weekly_expiry=weekly,
         fii_flow_available=fii_flow_available,
         tomorrow_verdict=verdict,
+        fii_today=fii_today,
     )
 
 
@@ -394,31 +451,49 @@ def _signal_fii_futures_trend(oi_df: pd.DataFrame, as_of_date: date) -> Optional
     z = _zscore(delta_5d, baseline_deltas)
 
     if z >= 2.0:
+        still_short = today_net < -20_000
+        label = "Aggressive Short Covering" if still_short else "Aggressive Long Build"
+        desc = (
+            f"FII net {today_net:+,.0f} contracts (still SHORT) but COVERED "
+            f"{delta_5d:+,.0f} contracts in 5 days (z-score: {z:.1f}σ above normal). "
+            "Unusually intense short covering = massive net BUYING. "
+            "This is the most powerful near-term bullish signal: FIIs are FORCED to buy "
+            "to close their short positions. Rally is self-reinforcing until shorts are covered."
+            if still_short else
+            f"FII Index Futures net position changed by {delta_5d:+,.0f} contracts in 5 days "
+            f"(z-score: {z:.1f}σ above normal). Unusual intensity of long accumulation — "
+            "historically this precedes sustained up-moves. Smart money is building "
+            "large directional exposure at this level."
+        )
         return Signal(
-            name="FII Futures: Aggressive Accumulation",
+            name=f"FII Futures: {label}",
             category="Futures OI",
             direction=1, strength=3, score=3,
-            headline="Aggressive Long Build",
-            description=(
-                f"FII Index Futures net position changed by {delta_5d:+,.0f} contracts in 5 days "
-                f"(z-score: {z:.1f}σ above normal). Unusual intensity of long accumulation — "
-                "historically this precedes sustained up-moves. Smart money is building "
-                "large directional exposure at this level."
-            ),
-            emoji="🔥",
+            headline=label,
+            description=desc,
+            emoji="⚡" if still_short else "🔥",
         )
     elif z >= 1.0:
+        still_short = today_net < -20_000
+        label = "Short Covering in Progress" if still_short else "Steady Long Addition"
+        desc = (
+            f"FII net {today_net:+,.0f} contracts (still SHORT), "
+            f"but REDUCED position by {delta_5d:+,.0f} contracts over 5 days (z: {z:.1f}σ). "
+            "SHORT COVERING = net BUY transactions = near-term bullish trigger. "
+            "IMPORTANT: The direction of change matters more than the absolute level. "
+            "FII is buying (to close shorts) — this drives market UP even while positioning stays bearish."
+            if still_short else
+            f"FII Index Futures net +{delta_5d:+,.0f} contracts over 5D (z: {z:.1f}σ). "
+            "Above-average pace of long building — conviction improving. "
+            "Not yet extreme but trend is clearly constructive."
+        )
         return Signal(
-            name="FII Futures: Steady Accumulation",
+            name=f"FII Futures: {label}",
             category="Futures OI",
             direction=1, strength=2, score=2,
-            headline="Steady Long Addition",
-            description=(
-                f"FII Index Futures net +{delta_5d:+,.0f} contracts over 5D (z: {z:.1f}σ). "
-                "Above-average pace of long building — conviction improving. "
-                "Not yet extreme but trend is clearly constructive."
-            ),
-            emoji="🟢",
+            headline=label,
+            description=desc,
+            emoji="🔄" if still_short else "🟢",
         )
     elif z <= -2.0:
         return Signal(
@@ -548,17 +623,26 @@ def _signal_fii_dii_alignment(oi_df: pd.DataFrame, as_of_date: date) -> Optional
             emoji="⚠️",
         )
     elif fii_net < 0 and dii_net > 0:
+        is_squeeze = fii_net < -75_000 and dii_net > 20_000
         return Signal(
-            name="Alignment: FII Short, DII Support",
+            name="Alignment: FII Short, DII Support" + (" ⚡ SQUEEZE SETUP" if is_squeeze else ""),
             category="Futures OI",
-            direction=0, strength=1, score=0,
-            headline="FII Short / DII Support",
+            direction=1 if is_squeeze else 0,
+            strength=2 if is_squeeze else 1,
+            score=1 if is_squeeze else 0,
+            headline="FII Short + DII Floor = SQUEEZE SETUP" if is_squeeze else "FII Short / DII Support",
             description=(
+                f"FII massively short ({fii_net:+,.0f}) while DII is actively buying ({dii_net:+,.0f}). "
+                "⚡ SQUEEZE SETUP: DII creates a floor that prevents the bearish thesis from playing out. "
+                "FII cannot push market down while DII keeps buying. "
+                "Any positive catalyst forces FII to cover shorts (= BUY) → sudden sharp UP move. "
+                "CRITICAL: This setup produces the sharpest short-term rallies."
+                if is_squeeze else
                 f"FII net short ({fii_net:,.0f}) but DII net long ({dii_net:+,.0f}). "
                 "DII (LIC, MFs) typically buy on dips to deploy domestic inflows. "
                 "Market range-bound — FII selling creates ceiling, DII buying creates floor."
             ),
-            emoji="⚖️",
+            emoji="⚡" if is_squeeze else "⚖️",
         )
     else:
         return Signal(
@@ -976,6 +1060,131 @@ def _pcr_extreme_alert(oi_df: pd.DataFrame, as_of_date: date) -> Optional[str]:
     return None
 
 
+# ── FII Today Snapshot ───────────────────────────────────────────────────────
+
+def _compute_fii_today_snapshot(
+    oi_df: pd.DataFrame,
+    vol_df: pd.DataFrame,
+    fii_stats_df: pd.DataFrame,
+) -> Optional[FIITodaySnapshot]:
+    """
+    Combine OI change + Volume + Rupee flow into a single structured snapshot
+    of what FIIs did TODAY.  Used only for display — no score contribution.
+
+    Three data layers:
+      OI layer:    how many long/short contracts were added or closed today
+      Volume:      was today unusually active (z-score vs 20D baseline)?
+      Rupee flow:  did real ₹ move in index F&O (from fii_derivatives_stats)?
+    """
+    fii_daily = (
+        oi_df[oi_df["client_type"] == "FII"]
+        .sort_values("trade_date")
+        .reset_index(drop=True)
+    )
+    if len(fii_daily) < 2:
+        return None
+
+    today = fii_daily.iloc[-1]
+    prev  = fii_daily.iloc[-2]
+
+    # ── OI layer ─────────────────────────────────────────────────────────────
+    long_today  = int(today.get("fut_idx_long",  0) or 0)
+    short_today = int(today.get("fut_idx_short", 0) or 0)
+    long_prev   = int(prev.get("fut_idx_long",   0) or 0)
+    short_prev  = int(prev.get("fut_idx_short",  0) or 0)
+
+    long_change  = long_today  - long_prev    # +ve = added longs today
+    short_change = short_today - short_prev   # +ve = added shorts today
+    oi_net_change = long_change - short_change # +ve = net bullish move
+    cum_net = long_today - short_today
+
+    # ── Volume layer ─────────────────────────────────────────────────────────
+    vol_today_cnt = 0
+    vol_z = 0.0
+    if not vol_df.empty:
+        fii_vol = (
+            vol_df[vol_df["client_type"] == "FII"]
+            .sort_values("trade_date")
+            .set_index("trade_date")["total_activity"]
+        )
+        if len(fii_vol) >= 2:
+            vol_today_cnt = int(fii_vol.iloc[-1])
+            if len(fii_vol) >= 6:
+                vol_z = _zscore(float(fii_vol.iloc[-1]), fii_vol.iloc[:-1])
+
+    # ── Rupee flow layer ─────────────────────────────────────────────────────
+    fut_net_cr = 0.0
+    opt_net_cr = 0.0
+    if not fii_stats_df.empty:
+        latest_d   = fii_stats_df["trade_date"].max()
+        today_cr   = fii_stats_df[fii_stats_df["trade_date"] == latest_d].copy()
+        if "net_value_cr" not in today_cr.columns:
+            today_cr["net_value_cr"] = today_cr["buy_value_cr"] - today_cr["sell_value_cr"]
+        fut_rows = today_cr[today_cr["category"].str.contains("FUTURES", case=False, na=False)]
+        opt_rows = today_cr[today_cr["category"].str.contains("OPTIONS", case=False, na=False)]
+        fut_net_cr = float(fut_rows["net_value_cr"].sum())
+        opt_net_cr = float(opt_rows["net_value_cr"].sum())
+    total_net_cr = fut_net_cr + opt_net_cr
+
+    # ── Classify action ──────────────────────────────────────────────────────
+    is_massive_short = cum_net < -50_000
+    is_long          = cum_net >  10_000
+    covering_pct     = 0.0
+
+    if oi_net_change > 1_000 and is_massive_short:
+        action_label = "SHORT COVERING"
+        action_color = "#69f0ae"
+        action_emoji = "⚡"
+        if (long_prev - short_prev) != 0:
+            covering_pct = abs(oi_net_change) / abs(long_prev - short_prev) * 100
+    elif oi_net_change > 1_000 and is_long:
+        action_label = "ADDING LONGS"
+        action_color = "#00c853"
+        action_emoji = "🟢"
+    elif oi_net_change > 1_000:
+        action_label = "NET BUYER"
+        action_color = "#69f0ae"
+        action_emoji = "🟡"
+    elif oi_net_change < -1_000 and is_massive_short:
+        action_label = "ADDING SHORTS"
+        action_color = "#ff5252"
+        action_emoji = "💀"
+    elif oi_net_change < -1_000 and is_long:
+        action_label = "LONG UNWINDING"
+        action_color = "#ff9800"
+        action_emoji = "📉"
+    elif oi_net_change < -1_000:
+        action_label = "NET SELLER"
+        action_color = "#ff5252"
+        action_emoji = "🔴"
+    else:
+        action_label = "HOLDING"
+        action_color = "#888888"
+        action_emoji = "⚪"
+
+    # ── Rupee flow override: when ₹ and OI disagree, note it ─────────────────
+    # (display layer can flag this as "conflicting signals")
+
+    return FIITodaySnapshot(
+        as_of_date=fii_daily.iloc[-1]["trade_date"],
+        long_change=long_change,
+        short_change=short_change,
+        oi_net_change=oi_net_change,
+        cumulative_long=long_today,
+        cumulative_short=short_today,
+        cumulative_net=cum_net,
+        vol_today=vol_today_cnt,
+        vol_z=vol_z,
+        fut_net_cr=fut_net_cr,
+        opt_net_cr=opt_net_cr,
+        total_net_cr=total_net_cr,
+        action_label=action_label,
+        action_color=action_color,
+        action_emoji=action_emoji,
+        covering_pct=covering_pct,
+    )
+
+
 # ── Tomorrow's Verdict ────────────────────────────────────────────────────────
 
 def _compute_tomorrow_verdict(
@@ -989,15 +1198,42 @@ def _compute_tomorrow_verdict(
 
     Priority hierarchy (highest wins):
       1. Expiry day (DTE ≤ 1) → pin/consolidation effect dominates
-      2. FII + DII institutional divergence → tug-of-war → range
+      1.5 Short covering active → FII reducing massive short = net buying = UP
+      2. FII + DII institutional divergence → tug-of-war → range (with squeeze risk)
       3. Composite score magnitude → directional call
-    """
-    today_oi = oi_df[oi_df["trade_date"] == oi_df["trade_date"].max()]
-    fii_row  = today_oi[today_oi["client_type"] == "FII"]
-    dii_row  = today_oi[today_oi["client_type"] == "DII"]
 
-    fii_net = float(fii_row.iloc[0]["fut_idx_net"]) if not fii_row.empty else 0.0
-    dii_net = float(dii_row.iloc[0]["fut_idx_net"]) if not dii_row.empty else 0.0
+    Key insight: "FII is bearish" (existing short position) ≠ "market will fall".
+    A massive FII short is FUEL for a rally when FIIs cover (buy back). The direction
+    of OI change (delta_5d) matters more than the absolute level for predicting tomorrow.
+    """
+    today_oi   = oi_df[oi_df["trade_date"] == oi_df["trade_date"].max()]
+    fii_row    = today_oi[today_oi["client_type"] == "FII"]
+    dii_row    = today_oi[today_oi["client_type"] == "DII"]
+    client_row = today_oi[today_oi["client_type"] == "Client"]
+
+    fii_net    = float(fii_row.iloc[0]["fut_idx_net"])    if not fii_row.empty    else 0.0
+    dii_net    = float(dii_row.iloc[0]["fut_idx_net"])    if not dii_row.empty    else 0.0
+    client_net = float(client_row.iloc[0]["fut_idx_net"]) if not client_row.empty else 0.0
+
+    # ── 5D delta: direction of FII position change ────────────────────────────
+    fii_series = _fii_oi_series(oi_df)
+    delta_5d = 0.0
+    if len(fii_series) >= 6:
+        delta_5d = float(fii_series.iloc[-1]) - float(fii_series.iloc[-6])
+
+    # ── Squeeze and covering detection ────────────────────────────────────────
+    # short_covering_active: FII is massively short AND actively REDUCING the short
+    # Each covered contract = 1 BUY transaction → drives market UP
+    short_covering_active = fii_net < -75_000 and delta_5d > 10_000
+
+    # squeeze_risk: structural setup where covering can trigger sudden rally
+    # Conditions: massive short + NOT aggressively adding more + DII buying floor
+    retail_extreme_short = client_net < -20_000
+    squeeze_risk = (
+        fii_net < -75_000 and
+        delta_5d > -15_000 and                              # not aggressively adding shorts
+        (dii_net > 10_000 or retail_extreme_short)          # floor or contrarian signal
+    )
 
     fii_dii_diverge = (fii_net < -5_000 and dii_net > 5_000) or \
                       (fii_net > 5_000 and dii_net < -5_000)
@@ -1008,7 +1244,7 @@ def _compute_tomorrow_verdict(
     primary = signals[0] if signals else None
     primary_driver = primary.headline if primary else "Composite score"
 
-    # ── Rule 1: Expiry day (tomorrow IS expiry) ───────────────────────────
+    # ── Rule 1: Expiry day (tomorrow IS expiry) ───────────────────────────────
     if dte <= 1:
         if fii_dii_diverge:
             return TomorrowVerdict(
@@ -1021,6 +1257,7 @@ def _compute_tomorrow_verdict(
                 ),
                 key_risk="Global trigger (block deal, macro surprise) could break the range.",
                 direction_color="#FFD600",
+                squeeze_risk=squeeze_risk,
             )
         elif composite_score <= -3:
             return TomorrowVerdict(
@@ -1028,23 +1265,72 @@ def _compute_tomorrow_verdict(
                 confidence="MEDIUM",
                 headline="Expiry day with bearish setup → selling on rallies, limited upside",
                 key_driver=primary_driver,
-                key_risk="Short covering into close could produce a late squeeze.",
+                key_risk=(
+                    "⚡ Squeeze risk — short covering into expiry close can produce late surge."
+                    if squeeze_risk else
+                    "Short covering into close could produce a late squeeze."
+                ),
                 direction_color="#FF6D00",
+                squeeze_risk=squeeze_risk,
             )
         else:
             return TomorrowVerdict(
                 direction="SIDEWAYS",
                 confidence="MEDIUM",
-                headline=f"Expiry day — max pain pin dominates, expect narrow range",
+                headline="Expiry day — max pain pin dominates, expect narrow range",
                 key_driver=f"PCR {pcr:.2f}, DTE {dte}D — theta decay pins strikes",
                 key_risk="Gap open on global news could shift the max pain calculus.",
                 direction_color="#FFD600",
             )
 
-    # ── Rule 2: Institutional divergence in neutral score zone ────────────
+    # ── Rule 1.5: Short covering ACTIVELY IN PROGRESS ────────────────────────
+    # FII is massively short AND reducing position = net buying = drives market UP.
+    # This overrides the bearish composite score because the actual TRANSACTIONS are bullish.
+    if short_covering_active:
+        return TomorrowVerdict(
+            direction="UP",
+            confidence="MEDIUM",
+            headline=(
+                f"FII short covering in progress — net {fii_net:+,.0f} reducing by "
+                f"+{delta_5d:,.0f} over 5D. Every covered short = 1 BUY transaction."
+            ),
+            key_driver=(
+                f"Short covering: FII {fii_net:+,.0f} → 5D change +{delta_5d:,.0f} contracts. "
+                "Covering is net buying pressure regardless of absolute positioning level."
+            ),
+            key_risk=(
+                "Covering may pause on fresh negative catalyst. "
+                "Not a sustainable trend — watch for OI to stabilise and reverse."
+            ),
+            direction_color="#69F0AE",
+            squeeze_risk=True,
+            short_covering_active=True,
+        )
+
+    # ── Rule 2: Institutional divergence in neutral score zone ────────────────
     if fii_dii_diverge and -4 < composite_score < 4:
         fii_side = "selling" if fii_net < 0 else "buying"
         dii_side = "buying"  if dii_net > 0 else "selling"
+        if squeeze_risk:
+            return TomorrowVerdict(
+                direction="SIDEWAYS",
+                confidence="MEDIUM",
+                headline=(
+                    f"FII {fii_side} vs DII {dii_side} — range-bound. "
+                    f"⚡ SQUEEZE RISK: FII holds {fii_net:+,.0f} shorts with DII floor."
+                ),
+                key_driver=(
+                    f"Institutional standoff: FII {fii_net:+,.0f} (SHORT) vs DII {dii_net:+,.0f} (LONG). "
+                    "DII floor prevents bearish thesis from playing out at current levels."
+                ),
+                key_risk=(
+                    "⚡ SQUEEZE TRIGGER: Any positive catalyst forces FII to cover shorts = "
+                    "sudden BUY pressure = SHARP RALLY. "
+                    "Do NOT build fresh short positions at this level — squeeze risk is high."
+                ),
+                direction_color="#FFD600",
+                squeeze_risk=True,
+            )
         return TomorrowVerdict(
             direction="SIDEWAYS",
             confidence="MEDIUM",
@@ -1057,7 +1343,14 @@ def _compute_tomorrow_verdict(
             direction_color="#FFD600",
         )
 
-    # ── Rule 3: Score-driven directional verdict ──────────────────────────
+    # ── Rule 3: Score-driven directional verdict ──────────────────────────────
+    #
+    # KEY INSIGHT (backtest-validated): A bearish composite score (FII massively short)
+    # does NOT predict market will fall tomorrow. Historically 0/7 DOWN calls were correct —
+    # in 5 cases the market went UP strongly because deep FII short = squeeze fuel.
+    # Rule: Only UP is score-driven. DOWN requires active fresh short BUILDING (delta_5d negative)
+    # PLUS no squeeze setup. Otherwise the bearish stance is a CAUTION, not a trade signal.
+
     if composite_score >= 7:
         return TomorrowVerdict(
             direction="UP",
@@ -1076,36 +1369,60 @@ def _compute_tomorrow_verdict(
             key_risk="FII positioning could reverse if global risk-off sentiment increases.",
             direction_color="#69F0AE",
         )
-    elif composite_score <= -7:
-        return TomorrowVerdict(
-            direction="DOWN",
-            confidence="HIGH",
-            headline="Strong institutional bearish positioning — downside likely",
-            key_driver=primary_driver,
-            key_risk="DII support and oversold bounce could trigger a short squeeze.",
-            direction_color="#D50000",
-        )
-    elif composite_score <= -3:
-        # Check if DII is providing a floor
-        if dii_net > 20_000:
-            return TomorrowVerdict(
-                direction="DOWN",
-                confidence="MEDIUM",
-                headline="Bearish bias but DII buying limits downside — sell rallies",
-                key_driver=primary_driver,
-                key_risk=(
-                    f"DII net long {dii_net:+,.0f} contracts provides a floor. "
-                    "A sharp global bounce could trigger short covering."
-                ),
-                direction_color="#FF6D00",
-            )
+    elif composite_score <= -7 and delta_5d < -10_000 and not squeeze_risk:
+        # Only DOWN when FII is ACTIVELY BUILDING fresh shorts aggressively (not just holding):
+        # delta_5d < -10K = added 10K+ new short contracts in last 5 days (clear fresh build)
+        # AND no squeeze floor (DII not buying, retail not extreme short)
+        # Historically rare — most bearish periods are holding + covering, not fresh building
         return TomorrowVerdict(
             direction="DOWN",
             confidence="MEDIUM",
-            headline="Bearish institutional tilt — selling pressure on every bounce",
-            key_driver=primary_driver,
-            key_risk="Short covering rally if market falls to key support and holds.",
+            headline=(
+                f"FII aggressively building fresh shorts — net {fii_net:+,.0f}, "
+                f"added {abs(delta_5d):,.0f} new shorts in 5D. Selling pressure likely."
+            ),
+            key_driver=(
+                f"Fresh short build: delta_5d={delta_5d:+,.0f}. "
+                "FII is not holding existing shorts — they are actively adding. "
+                "This is directional selling, not a squeeze setup."
+            ),
+            key_risk=(
+                "Global macro surprise or large DII buying spree could reverse this sharply. "
+                "Tight stop-loss essential — short squeezes are violent when they start."
+            ),
             direction_color="#FF6D00",
+            squeeze_risk=False,
+        )
+    elif composite_score <= -3:
+        # Bearish score but NOT an active fresh short build → NOT a trade signal.
+        # FII holding a large short = potential squeeze fuel. Market could go either way.
+        # Backtest shows: these DOWN calls were 0% accurate. Stay flat and watch for covering.
+        _squeeze_warning = (
+            "⚡ SQUEEZE RISK: FII holds massive short with DII floor in place. "
+            "Any positive catalyst forces covering = sudden rally. DO NOT SHORT."
+            if squeeze_risk else
+            "FII bearish but not actively adding shorts. "
+            "Existing short position is squeeze fuel — market direction unclear."
+        )
+        _dii_note = (
+            f" DII providing {dii_net:+,.0f} contract support floor."
+            if dii_net > 10_000 else ""
+        )
+        return TomorrowVerdict(
+            direction="SIDEWAYS",
+            confidence="LOW",
+            headline=(
+                f"FII bearish bias (score {composite_score:+.0f}) but NOT a short trade signal — "
+                "bearish positioning = squeeze fuel, not guaranteed downside."
+            ),
+            key_driver=(
+                f"FII net {fii_net:+,.0f} (bearish stance).{_dii_note} "
+                "delta_5d={delta_5d:+,.0f} — not aggressively building, so existing short "
+                "is ammunition for a covering rally, not confirmation of fresh selling."
+            ).format(delta_5d=delta_5d),
+            key_risk=_squeeze_warning,
+            direction_color="#FFD600",
+            squeeze_risk=squeeze_risk,
         )
     else:
         return TomorrowVerdict(
@@ -1115,6 +1432,7 @@ def _compute_tomorrow_verdict(
             key_driver="Composite score in neutral zone (−3 to +3)",
             key_risk="Any large FII block trade or macro event could trigger a trend.",
             direction_color="#78909C",
+            squeeze_risk=squeeze_risk,
         )
 
 

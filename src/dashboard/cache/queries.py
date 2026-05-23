@@ -45,6 +45,12 @@ def cached_all_stocks() -> pd.DataFrame:
     return get_all_stocks()
 
 
+@st.cache_data(ttl=1800)
+def cached_stock_close_prices(symbols: tuple, trade_date: date) -> dict:
+    from src.analytics.sector_aggregator import get_stock_close_prices
+    return get_stock_close_prices(symbols, trade_date)
+
+
 @st.cache_data(ttl=_TTL)
 def cached_search_stocks(
     trade_date: date, query: str, min_turnover_lacs: float
@@ -187,7 +193,7 @@ def cached_fno_expiry_oi_history(symbol: str, from_date: date, to_date: date) ->
 
 @st.cache_data(ttl=_TTL)
 def cached_available_dates(limit: int = 500) -> list:
-    from src.data.repository import get_available_dates
+    from src.analytics.base import get_available_dates
     return get_available_dates(limit=limit)
 
 
@@ -257,6 +263,16 @@ def cached_rotation_clock_backtest(
 ) -> pd.DataFrame:
     from src.analytics.sector_rotation import get_rotation_clock_backtest
     return get_rotation_clock_backtest(trade_date, window_trading_days, min_turnover_lacs)
+
+
+@st.cache_data(ttl=3600)   # 1 hour — backtest is expensive; re-runs daily at most
+def cached_signal_backtest(
+    end_date: date,
+    backtest_days: int = 60,
+    threshold_pct: float = 0.25,
+):
+    from src.analytics.signal_backtest import run_signal_backtest
+    return run_signal_backtest(end_date, backtest_days=backtest_days, threshold_pct=threshold_pct)
 
 
 @st.cache_data(ttl=_TTL)
