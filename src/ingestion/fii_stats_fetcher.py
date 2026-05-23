@@ -30,7 +30,6 @@ from src.core.logging import get_logger
 from src.ingestion.base import BaseFetcher
 from src.ingestion.fao_fetcher import (
     _build_archive_url,
-    _primed_derivatives,
     _DERIVATIVES_PAGE,
 )
 
@@ -73,19 +72,22 @@ _XLSX_MAGIC = b"PK\x03\x04"
 class FIIStatsFetcher(BaseFetcher):
     """Downloads and parses the FII Derivatives Statistics XLS for one date."""
 
+    def __init__(self, client) -> None:
+        super().__init__(client)
+        self._derivatives_primed = False
+
     @property
     def name(self) -> str:
         return "FII Derivatives Statistics"
 
     def _prime(self) -> None:
-        global _primed_derivatives
-        if _primed_derivatives:
+        """Hit the derivatives page once per fetcher instance to prime cookies."""
+        if self._derivatives_primed:
             return
         try:
             self._client.get(_DERIVATIVES_PAGE, expect_404_ok=True)
-            import src.ingestion.fao_fetcher as _fao_mod
-            _fao_mod._primed_derivatives = True
             log.debug("Primed NSE derivatives session for FII stats")
+            self._derivatives_primed = True
         except Exception as exc:
             log.debug("FII stats prime failed (non-fatal): %s", exc)
 

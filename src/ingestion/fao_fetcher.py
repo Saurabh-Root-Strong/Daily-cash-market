@@ -68,9 +68,6 @@ _NUMERIC_COLS = [
     "total_long", "total_short",
 ]
 
-_primed_derivatives = False   # module-level flag so we only prime once per process
-
-
 def _build_archive_url(report_name: str, date_str: str) -> str:
     """Build NSE Archives API URL for one report + date (DD-MM-YYYY)."""
     archives = json.dumps([{
@@ -91,19 +88,22 @@ def _build_archive_url(report_name: str, date_str: str) -> str:
 class FAOParticipantFetcher(BaseFetcher):
     """Downloads and parses both OI + Volume participant CSVs for one date."""
 
+    def __init__(self, client) -> None:
+        super().__init__(client)
+        self._derivatives_primed = False
+
     @property
     def name(self) -> str:
         return "F&O Participant"
 
     def _prime_derivatives(self) -> None:
-        """Hit the derivatives reports page once to prime the session cookies."""
-        global _primed_derivatives
-        if _primed_derivatives:
+        """Hit the derivatives reports page once per fetcher instance to prime cookies."""
+        if self._derivatives_primed:
             return
         try:
             self._client.get(_DERIVATIVES_PAGE, expect_404_ok=True)
             log.debug("Primed NSE derivatives session")
-            _primed_derivatives = True
+            self._derivatives_primed = True
         except Exception as exc:
             log.debug("Derivatives prime failed (non-fatal): %s", exc)
 

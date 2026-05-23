@@ -107,11 +107,9 @@ class MarketDataRepository:
         if df.empty:
             return 0
         dates = df["trade_date"].unique().tolist()
+        ph = ", ".join("?" * len(dates))
         with self._cm.connect() as conn:
-            for d in dates:
-                conn.execute(
-                    "DELETE FROM fao_participant WHERE trade_date = ?", [d]
-                )
+            conn.execute(f"DELETE FROM fao_participant WHERE trade_date IN ({ph})", dates)
             conn.register("_fao_df", df)
             conn.execute("""
                 INSERT INTO fao_participant
@@ -139,11 +137,9 @@ class MarketDataRepository:
         if df.empty:
             return 0
         dates = df["trade_date"].unique().tolist()
+        ph = ", ".join("?" * len(dates))
         with self._cm.connect() as conn:
-            for d in dates:
-                conn.execute(
-                    "DELETE FROM fii_derivatives_stats WHERE trade_date = ?", [d]
-                )
+            conn.execute(f"DELETE FROM fii_derivatives_stats WHERE trade_date IN ({ph})", dates)
             conn.register("_fii_stats_df", df)
             conn.execute("""
                 INSERT INTO fii_derivatives_stats
@@ -165,11 +161,9 @@ class MarketDataRepository:
             df = df.copy()
             df["open_interest"] = df["open_interest"].clip(lower=0)
         dates = df["trade_date"].unique().tolist()
+        ph = ", ".join("?" * len(dates))
         with self._cm.connect() as conn:
-            for d in dates:
-                conn.execute(
-                    "DELETE FROM fno_bhavcopy WHERE trade_date = ?", [d]
-                )
+            conn.execute(f"DELETE FROM fno_bhavcopy WHERE trade_date IN ({ph})", dates)
             conn.register("_fno_df", df)
             conn.execute("""
                 INSERT INTO fno_bhavcopy
@@ -257,15 +251,12 @@ class MarketDataRepository:
     def get_dates_present(self, dates: list[datetime.date]) -> set[datetime.date]:
         if not dates:
             return set()
+        ph = ", ".join("?" * len(dates))
         with self._cm.connect() as conn:
-            conn.execute("CREATE TEMP TABLE IF NOT EXISTS _check_dates (d DATE)")
-            conn.execute("DELETE FROM _check_dates")
-            for d in dates:
-                conn.execute("INSERT INTO _check_dates VALUES (?)", [d])
-            rows = conn.execute("""
-                SELECT DISTINCT trade_date FROM daily_data
-                WHERE trade_date IN (SELECT d FROM _check_dates)
-            """).fetchall()
+            rows = conn.execute(
+                f"SELECT DISTINCT trade_date FROM daily_data WHERE trade_date IN ({ph})",
+                dates,
+            ).fetchall()
         return {r[0] for r in rows}
 
     def query(self, sql: str, params: list | None = None) -> pd.DataFrame:

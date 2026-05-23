@@ -9,6 +9,7 @@ No cookie priming needed for niftyindices.com (unlike nseindia.com).
 from __future__ import annotations
 
 import io
+import re
 from datetime import date
 
 import pandas as pd
@@ -53,6 +54,7 @@ _EXCLUDE_PATTERNS = [
     "2x Leverage", "1x Inverse", "PR 1x", "PR 2x", "TR 1x", "TR 2x",
     "USD", "Dividend Points", "Arbitrage", "Futures Index", "Futures TR",
 ]
+_EXCLUDE_RE = re.compile("|".join(re.escape(p) for p in _EXCLUDE_PATTERNS))
 
 
 class IndexFetcher:
@@ -97,9 +99,7 @@ class IndexFetcher:
             return pd.DataFrame()
 
         # Drop excluded index types (bonds, derivatives products)
-        mask = ~df["index_name"].apply(
-            lambda n: any(p in str(n) for p in _EXCLUDE_PATTERNS)
-        )
+        mask = ~df["index_name"].str.contains(_EXCLUDE_RE, na=False)
         df = df[mask].copy()
 
         # Add trade_date

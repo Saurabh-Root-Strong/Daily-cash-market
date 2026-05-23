@@ -39,7 +39,6 @@ import urllib.parse
 
 from src.ingestion.fao_fetcher import (
     _build_archive_url,
-    _primed_derivatives,
     _DERIVATIVES_PAGE,
     _ARCHIVE_BASE,
 )
@@ -96,19 +95,22 @@ _SCHEMA_COLS = [
 class FNOBhavCopyFetcher(BaseFetcher):
     """Downloads and parses the NSE FNO Bhavcopy DAT file for one date."""
 
+    def __init__(self, client) -> None:
+        super().__init__(client)
+        self._derivatives_primed = False
+
     @property
     def name(self) -> str:
         return "FNO BhavCopy"
 
     def _prime(self) -> None:
-        global _primed_derivatives
-        if _primed_derivatives:
+        """Hit the derivatives page once per fetcher instance to prime cookies."""
+        if self._derivatives_primed:
             return
         try:
             self._client.get(_DERIVATIVES_PAGE, expect_404_ok=True)
-            import src.ingestion.fao_fetcher as _m
-            _m._primed_derivatives = True
             log.debug("Primed NSE derivatives session for FNO bhavcopy")
+            self._derivatives_primed = True
         except Exception as exc:
             log.debug("FNO bhavcopy prime failed (non-fatal): %s", exc)
 

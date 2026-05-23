@@ -7,8 +7,11 @@ All table/index definitions live here; no DDL anywhere else.
 from __future__ import annotations
 
 from src.data.repository import get_repository
+from src.core.logging import get_logger
 
 __all__ = ["initialize_schema"]
+
+log = get_logger(__name__)
 
 
 def initialize_schema() -> None:
@@ -53,8 +56,8 @@ def initialize_schema() -> None:
             conn.execute(
                 "ALTER TABLE sector_master ADD COLUMN IF NOT EXISTS category VARCHAR DEFAULT ''"
             )
-        except Exception:
-            pass  # DuckDB versions that don't support IF NOT EXISTS in ALTER TABLE
+        except Exception as exc:
+            log.debug("sector_master.category migration skipped (already applied): %s", exc)
 
         conn.execute("CREATE SEQUENCE IF NOT EXISTS run_log_seq START 1")
 
@@ -142,8 +145,8 @@ def initialize_schema() -> None:
             conn.execute(
                 "ALTER TABLE fii_derivatives_stats ADD COLUMN IF NOT EXISTS oi_value_cr DOUBLE DEFAULT 0"
             )
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug("fii_derivatives_stats.oi_value_cr migration skipped (already applied): %s", exc)
         conn.execute("CREATE INDEX IF NOT EXISTS idx_fiis_date ON fii_derivatives_stats(trade_date)")
 
         # F&O Bhavcopy — per-instrument snapshot (futures + options, index + stock)
