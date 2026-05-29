@@ -21,23 +21,48 @@ net_value_cr = buy_value_cr - sell_value_cr
 from __future__ import annotations
 
 import io
+import json
+import re
+import urllib.parse
 from datetime import date
+from pathlib import Path
 
 import pandas as pd
 
 from src.core.exceptions import ParseError
 from src.core.logging import get_logger
 from src.ingestion.base import BaseFetcher
-from src.ingestion.fao_fetcher import (
-    _build_archive_url,
-    _DERIVATIVES_PAGE,
-)
 
 __all__ = ["FIIStatsFetcher"]
 
+_DERIVATIVES_PAGE = "https://www.nseindia.com/all-reports-derivatives"
+
 log = get_logger(__name__)
 
-_FII_STATS_NAME = "F&O - FII Derivatives Statistics"
+def _fii_stats_url_candidates(trade_date: date) -> list:
+    """
+    Ordered fallback chain for FII Derivatives Statistics XLS.
+    Tries direct archive domains first, then NSE API as last resort.
+    """
+    dmon       = trade_date.strftime("%d-%b-%Y")   # 26-May-2026
+    ddmmyyyy   = trade_date.strftime("%d%m%Y")     # 26052026
+    dd_mm_yyyy = trade_date.strftime("%d-%m-%Y")   # 26-05-2026
+
+    def _api():
+        a = json.dumps([{"name": "F&O - FII Derivatives Statistics",
+                         "type": "archives", "category": "derivatives",
+                         "section": "equity"}])
+        p = urllib.parse.urlencode({"archives": a, "date": dd_mm_yyyy,
+                                    "type": "equity", "mode": "single"})
+        return f"https://www.nseindia.com/api/reports?{p}"
+
+    return [
+        f"https://nsearchives.nseindia.com/content/fo/fii_stats_{dmon}.xls",   # primary
+        f"https://archives.nseindia.com/content/fo/fii_stats_{dmon}.xls",      # fallback 1
+        f"https://nsearchives.nseindia.com/content/fo/fii_stats_{dmon}.xlsx",  # fallback 2 (.xlsx)
+        f"https://archives.nseindia.com/content/fo/fii_stats_{dmon}.xlsx",
+        _api(),                                                                  # fallback 3 (API)
+    ]
 
 # All valid category names from NSE FII stats report (UPPERCASE as stored in DB)
 _VALID_CATEGORIES = {
@@ -95,23 +120,29 @@ class FIIStatsFetcher(BaseFetcher):
         """Returns one row per index category. Empty DataFrame when no data."""
         self._prime()
 
-        date_str = trade_date.strftime("%d-%m-%Y")
-        url  = _build_archive_url(_FII_STATS_NAME, date_str)
-        data = self._client.get_bytes(url, expect_404_ok=True)
+        for url in _fii_stats_url_candidates(trade_date):
+            try:
+                data = self._client.get_bytes(url, expect_404_ok=True)
+            except Exception as exc:
+                log.debug("FII Stats fallback failed %s: %s", url[-60:], exc)
+                continue
 
-        if not data:
-            log.debug("FII Stats not available for %s (holiday/weekend/404)", trade_date)
-            return pd.DataFrame()
+            if not data:
+                continue
+            if not (data[:4] == _XLS_MAGIC or data[:4] == _XLSX_MAGIC):
+                continue  # HTML/JSON error page — try next
 
-        if not (data[:4] == _XLS_MAGIC or data[:4] == _XLSX_MAGIC):
-            log.debug("FII Stats for %s: non-Excel response (len=%d)", trade_date, len(data))
-            return pd.DataFrame()
+            try:
+                df = _parse_fii_stats_xls(data, trade_date)
+                log.debug("FII Stats for %s fetched via %s", trade_date, url[-60:])
+                return df
+            except ParseError as exc:
+                log.warning("FII Stats parse error %s via %s: %s",
+                            trade_date, url[-60:], exc)
+                continue  # Try next URL — maybe different format
 
-        try:
-            return _parse_fii_stats_xls(data, trade_date)
-        except ParseError as exc:
-            log.warning("FII Stats parse error for %s: %s", trade_date, exc)
-            return pd.DataFrame()
+        log.debug("FII Stats not available for %s (all sources returned empty)", trade_date)
+        return pd.DataFrame()
 
 
 def _parse_fii_stats_xls(data: bytes, trade_date: date) -> pd.DataFrame:
@@ -180,3 +211,69 @@ def _parse_fii_stats_xls(data: bytes, trade_date: date) -> pd.DataFrame:
         df[col] = df[col].astype("float64")
 
     return df[["trade_date", "category"] + _NUMERIC_COLS]
+
+
+# ── Folder import (manual drop) ───────────────────────────────────────────────
+
+_DATE_FROM_TITLE = re.compile(
+    r"\b(\d{1,2})[- ]([A-Za-z]{3,9})[- ](\d{4})\b"
+)
+
+def _date_from_title_row(raw_df: pd.DataFrame) -> date | None:
+    """Extract trade date from the NSE title row: 'FII DERIVATIVES STATISTICS FOR 26-May-2026'."""
+    title = str(raw_df.iloc[0, 0]) if not raw_df.empty else ""
+    m = _DATE_FROM_TITLE.search(title)
+    if not m:
+        return None
+    try:
+        return date(int(m.group(3)),
+                    list(__import__("calendar").month_abbr).index(m.group(2).capitalize()),
+                    int(m.group(1)))
+    except Exception:
+        return None
+
+
+def import_fii_stats_folder(folder: str | Path | None = None) -> dict:
+    """
+    Parse all .xls / .xlsx files in data/fii_imports/ and upsert into DB.
+    Returns summary dict with files_processed, rows_inserted, errors.
+    """
+    from src.data.repository import get_repository
+
+    if folder is None:
+        from src.core.config import PROJECT_ROOT
+        folder = PROJECT_ROOT / "data" / "fii_imports"
+
+    folder = Path(folder)
+    repo = get_repository()
+
+    files_processed = 0
+    rows_inserted = 0
+    errors: list[str] = []
+
+    for f in sorted(folder.glob("*.xls*")):
+        try:
+            data = f.read_bytes()
+            engine = "xlrd" if data[:4] == b"\xd0\xcf\x11\xe0" else "openpyxl"
+            xl = pd.ExcelFile(io.BytesIO(data), engine=engine)
+            raw = xl.parse(xl.sheet_names[0], header=None)
+
+            trade_date = _date_from_title_row(raw)
+            if trade_date is None:
+                errors.append(f"{f.name}: could not parse date from title row")
+                continue
+
+            df = _parse_fii_stats_xls(data, trade_date)
+            if df.empty:
+                errors.append(f"{f.name}: no valid rows parsed")
+                continue
+
+            repo.upsert_fii_stats(df)
+            rows_inserted += len(df)
+            files_processed += 1
+            log.info("Imported %d FII stats rows for %s from %s", len(df), trade_date, f.name)
+
+        except Exception as exc:
+            errors.append(f"{f.name}: {exc}")
+
+    return {"files_processed": files_processed, "rows_inserted": rows_inserted, "errors": errors}

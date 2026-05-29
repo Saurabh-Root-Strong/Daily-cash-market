@@ -26,6 +26,7 @@ __all__ = [
     "upsert_fii_stats",
     "upsert_fno_bhavcopy",
     "upsert_index_data",
+    "upsert_fpi_flows",
     "log_run",
     "get_latest_trade_date",
     "get_available_dates",
@@ -180,6 +181,24 @@ class MarketDataRepository:
             """)
         return len(df)
 
+    def upsert_fpi_flows(self, df: pd.DataFrame) -> int:
+        """Upsert FPI NSDL flow rows. Overwrites any existing rows for the same (trade_date, category)."""
+        if df.empty:
+            return 0
+        dates = df["trade_date"].unique().tolist()
+        ph = ", ".join("?" * len(dates))
+        with self._cm.connect() as conn:
+            conn.execute(f"DELETE FROM fpi_nsdl_flows WHERE trade_date IN ({ph})", dates)
+            conn.register("_fpi_df", df)
+            conn.execute("""
+                INSERT INTO fpi_nsdl_flows
+                    (trade_date, category, gross_purchase_cr, gross_sales_cr, net_investment_cr)
+                SELECT
+                    trade_date, category, gross_purchase_cr, gross_sales_cr, net_investment_cr
+                FROM _fpi_df
+            """)
+        return len(df)
+
     def upsert_index_data(self, df: pd.DataFrame) -> int:
         if df.empty:
             return 0
@@ -259,6 +278,85 @@ class MarketDataRepository:
             ).fetchall()
         return {r[0] for r in rows}
 
+    def upsert_prediction(self, row: dict) -> None:
+        """Insert or replace one prediction_log row (DELETE + INSERT — DuckDB safe)."""
+        with self._cm.connect() as conn:
+            conn.execute(
+                "DELETE FROM prediction_log WHERE trade_date = ? AND fno_symbol = ?",
+                [row["trade_date"], row["fno_symbol"]],
+            )
+            conn.execute("""
+                INSERT INTO prediction_log (
+                    trade_date, fno_symbol,
+                    direction_pred, confidence_pred, composite_score, signal_count,
+                    feat_pcr, feat_max_pain_dist, feat_carry,
+                    feat_fii_net, feat_fii_5d_cumul, feat_fii_delta,
+                    feat_vix, feat_vix_5d_chg, feat_breadth,
+                    feat_hurst, feat_entropy, feat_oi_score,
+                    hmm_state, memory_label,
+                    actual_return, direction_actual, was_correct,
+                    outcome_filled, created_at
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,now())
+            """, [
+                row["trade_date"], row["fno_symbol"],
+                row.get("direction_pred"), row.get("confidence_pred"),
+                row.get("composite_score"), row.get("signal_count"),
+                row.get("feat_pcr"),          row.get("feat_max_pain_dist"),
+                row.get("feat_carry"),
+                row.get("feat_fii_net"),      row.get("feat_fii_5d_cumul"),
+                row.get("feat_fii_delta"),
+                row.get("feat_vix"),          row.get("feat_vix_5d_chg"),
+                row.get("feat_breadth"),
+                row.get("feat_hurst"),        row.get("feat_entropy"),
+                row.get("feat_oi_score"),
+                row.get("hmm_state"),         row.get("memory_label"),
+                row.get("actual_return"),     row.get("direction_actual"),
+                row.get("was_correct"),       row.get("outcome_filled", False),
+            ])
+
+    def get_unfilled_predictions(self) -> "pd.DataFrame":
+        return self.query(
+            "SELECT * FROM prediction_log WHERE outcome_filled = FALSE ORDER BY trade_date"
+        )
+
+    def fill_prediction_outcome(
+        self,
+        trade_date: datetime.date,
+        fno_symbol: str,
+        actual_return: float,
+        direction_actual: str,
+        was_correct: bool,
+    ) -> None:
+        with self._cm.connect() as conn:
+            conn.execute("""
+                UPDATE prediction_log
+                SET actual_return = ?, direction_actual = ?,
+                    was_correct = ?, outcome_filled = TRUE
+                WHERE trade_date = ? AND fno_symbol = ?
+            """, [actual_return, direction_actual, was_correct, trade_date, fno_symbol])
+
+    def get_filled_predictions(self, fno_symbol: str, limit: int = 500) -> "pd.DataFrame":
+        return self.query("""
+            SELECT * FROM prediction_log
+            WHERE fno_symbol = ? AND outcome_filled = TRUE
+            ORDER BY trade_date DESC
+            LIMIT ?
+        """, [fno_symbol, limit])
+
+    def get_distinct_dates(self, table: str) -> set[datetime.date]:
+        """All distinct trade_dates present in any table. Used for gap detection."""
+        with self._cm.connect() as conn:
+            rows = conn.execute(
+                f"SELECT DISTINCT trade_date FROM {table}"
+            ).fetchall()
+        return {r[0].date() if hasattr(r[0], "date") else r[0] for r in rows}
+
+    def execute_ddl(self, *statements: str) -> None:
+        """Execute DDL statements (CREATE/ALTER TABLE, CREATE INDEX) in one connection."""
+        with self._cm.connect() as conn:
+            for sql in statements:
+                conn.execute(sql)
+
     def query(self, sql: str, params: list | None = None) -> pd.DataFrame:
         with self._cm.connect() as conn:
             if params:
@@ -311,6 +409,10 @@ def upsert_fii_stats(df: pd.DataFrame) -> int:
 
 def upsert_fno_bhavcopy(df: pd.DataFrame) -> int:
     return get_repository().upsert_fno_bhavcopy(df)
+
+
+def upsert_fpi_flows(df: pd.DataFrame) -> int:
+    return get_repository().upsert_fpi_flows(df)
 
 
 def upsert_index_data(df: pd.DataFrame) -> int:

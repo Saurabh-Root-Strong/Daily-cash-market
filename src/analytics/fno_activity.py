@@ -26,9 +26,6 @@ __all__ = [
     "get_expiry_oi_history",
 ]
 
-_RANK_LABELS = {0: "Near Month", 1: "Mid Month", 2: "Far Month"}
-
-
 def is_monthly_expiry(d: date) -> bool:
     """
     True if d is the last occurrence of its weekday in its month.
@@ -41,12 +38,26 @@ def is_monthly_expiry(d: date) -> bool:
 
 
 def classify_expiry_rank(expiry_date: date, sorted_expiries: list[date]) -> str:
-    """Return Near/Mid/Far/Far+ label based on position in sorted expiry list."""
+    """
+    Return Near/Mid/Far label ranked WITHIN TYPE (monthly vs weekly separately).
+
+    Monthly: Near Month / Mid Month / Far Month / Far+
+    Weekly:  Near Week  / Mid Week  / Far Week  / Far Week
+
+    Ranking across all expiries (old behaviour) gave wrong labels for NIFTY —
+    its 4 weekly options before the June monthly claimed Near/Mid/Far Month,
+    hiding the real monthly futures structure in "Far+".
+    """
+    is_monthly = is_monthly_expiry(expiry_date)
+    same_type = [d for d in sorted_expiries if is_monthly_expiry(d) == is_monthly]
     try:
-        idx = sorted_expiries.index(expiry_date)
+        idx = same_type.index(expiry_date)
     except ValueError:
-        return "Far+"
-    return _RANK_LABELS.get(idx, "Far+")
+        return "Far+" if is_monthly else "Far Week"
+    if is_monthly:
+        return {0: "Near Month", 1: "Mid Month", 2: "Far Month"}.get(idx, "Far+")
+    else:
+        return {0: "Near Week", 1: "Mid Week", 2: "Far Week"}.get(idx, "Far Week")
 
 
 def get_fno_dates_available(from_date: Optional[date] = None) -> list[date]:
@@ -332,18 +343,20 @@ def get_expiry_oi_history(symbol: str, from_date: date, to_date: date) -> pd.Dat
     """
     Historical OI per expiry date for a symbol (for OI buildup chart).
     Returns: trade_date, expiry_date, expiry_label, call_oi, put_oi, fut_oi, total_oi
+    All OI columns are in ₹ Crores (value_lacs/100) for scale consistency across
+    old zip format (OI in lots) and new DAT format (OI in underlying units).
     """
     df = query_dataframe("""
         SELECT
             trade_date,
             expiry_date,
             SUM(CASE WHEN instrument IN ('FUTIDX','FUTSTK')
-                     THEN open_interest ELSE 0 END) AS fut_oi,
+                     THEN value_lacs ELSE 0 END) / 100 AS fut_oi,
             SUM(CASE WHEN option_type = 'CE'
-                     THEN open_interest ELSE 0 END) AS call_oi,
+                     THEN value_lacs ELSE 0 END) / 100 AS call_oi,
             SUM(CASE WHEN option_type = 'PE'
-                     THEN open_interest ELSE 0 END) AS put_oi,
-            SUM(open_interest)                      AS total_oi
+                     THEN value_lacs ELSE 0 END) / 100 AS put_oi,
+            SUM(value_lacs) / 100                       AS total_oi
         FROM fno_bhavcopy
         WHERE symbol     = ?
           AND trade_date >= ?

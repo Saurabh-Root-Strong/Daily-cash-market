@@ -15,3 +15,7 @@ dist/
 build/
 stock_list.csv
 NSE_Sector_Wise_Classification.xlsx
+data/fii_imports/*.xls
+data/fii_imports/*.xlsx
+data/fpi_imports/*.xls
+data/fpi_imports/*.xlsx

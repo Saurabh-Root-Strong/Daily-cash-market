@@ -30,10 +30,15 @@ from src.dashboard.cache.queries import (
 )
 
 _RANK_COLORS = {
+    # Monthly (futures structure layer)
     "Near Month": "#2196F3",
     "Mid Month":  "#FF9800",
     "Far Month":  "#9C27B0",
     "Far+":       "#607D8B",
+    # Weekly (options gamma layer)
+    "Near Week":  "#4CAF50",
+    "Mid Week":   "#8BC34A",
+    "Far Week":   "#CDDC39",
 }
 _TYPE_COLORS = {
     "Weekly":  "#4CAF50",
@@ -146,24 +151,27 @@ def _render_expiry_calendar(trade_date: date) -> None:
 
     st.markdown("#### Upcoming Expiry Dates")
 
-    # Near/Mid/Far summary cards
-    rank_rows = df[df["expiry_rank"].isin(["Near Month", "Mid Month", "Far Month"])]
+    # Summary cards: first Near Month and first Near Week (most actionable pair)
+    _all_near = ["Near Month", "Mid Month", "Far Month", "Near Week", "Mid Week", "Far Week"]
+    rank_rows = df[df["expiry_rank"].isin(_all_near)].head(6)
     if not rank_rows.empty:
-        cols = st.columns(len(rank_rows))
+        cols = st.columns(min(len(rank_rows), 6))
         for col, (_, row) in zip(cols, rank_rows.iterrows()):
             color = _RANK_COLORS.get(row["expiry_rank"], "#607D8B")
-            type_badge = (
-                "🗓️ Monthly" if row["expiry_type"] == "Monthly" else "📅 Weekly"
-            )
+            type_badge = "🗓️ Monthly" if row["expiry_type"] == "Monthly" else "📅 Weekly"
             pcr_txt = f"PCR {row['pcr']:.2f}" if row["pcr"] is not None else "PCR —"
-            col.markdown(f"""
-<div style="border-left:4px solid {color};padding:8px 12px;background:#1e1e1e;border-radius:4px">
-<div style="color:{color};font-weight:bold;font-size:0.8rem">{row['expiry_rank']}</div>
-<div style="font-size:1.2rem;font-weight:bold">{row['expiry_label']}</div>
-<div style="color:#aaa;font-size:0.8rem">{row['days_to_expiry']}d away &nbsp; {type_badge}</div>
-<div style="font-size:0.85rem">OI: {row['total_oi']:,.0f} &nbsp; {pcr_txt}</div>
-</div>
-""", unsafe_allow_html=True)
+            col.markdown(
+                f"<div style='border-left:4px solid {color};padding:8px 12px;"
+                f"background:#1e1e1e;border-radius:4px'>"
+                f"<div style='color:{color};font-weight:bold;font-size:0.8rem'>"
+                f"{row['expiry_rank']}</div>"
+                f"<div style='font-size:1.2rem;font-weight:bold'>{row['expiry_label']}</div>"
+                f"<div style='color:#aaa;font-size:0.8rem'>"
+                f"{row['days_to_expiry']}d away &nbsp; {type_badge}</div>"
+                f"<div style='font-size:0.85rem'>OI: {row['total_oi']:,.0f} &nbsp; {pcr_txt}</div>"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
 
     st.markdown("---")
 
@@ -1054,12 +1062,7 @@ def _render_index_futures_panel(trade_date: date, symbol: str, expiry_df: pd.Dat
         fig_oi = go.Figure(go.Bar(
             x=roll_df["expiry_label"],
             y=roll_df["open_interest"],
-            marker_color=[
-                "#2196F3" if r == "Near Month" else
-                "#FF9800" if r == "Mid Month" else
-                "#9C27B0" if r == "Far Month" else "#607D8B"
-                for r in roll_df["expiry_rank"]
-            ],
+            marker_color=[_RANK_COLORS.get(r, "#607D8B") for r in roll_df["expiry_rank"]],
             text=roll_df["open_interest"].apply(lambda v: f"{v/1000:.0f}K"),
             textposition="outside",
             customdata=roll_df[["chg_in_oi", "oi_pct"]].values,
@@ -1267,26 +1270,64 @@ def _render_index_fao(trade_date: date) -> None:
 
 
 def _render_index_expiry_cards(df: pd.DataFrame, symbol: str) -> None:
+    """
+    Two-section expiry structure display.
+
+    Monthly section (🗓️): futures structure layer — Near/Mid/Far Month.
+      Each index has exactly 3 monthly futures; this is where OI and carry live.
+
+    Weekly section (📅): options gamma layer — Near/Mid/Far Week.
+      Weekly expiries are options-only (no futures OI). PCR here is
+      short-term gamma positioning, different from the structural monthly PCR.
+    """
     st.markdown(f"#### {symbol} — Expiry Structure")
-    near_rows = df[df["expiry_rank"].isin(["Near Month", "Mid Month", "Far Month"])]
-    if near_rows.empty:
-        return
-    cols = st.columns(min(len(near_rows), 4))
-    for col, (_, row) in zip(cols, near_rows.iterrows()):
-        color = _RANK_COLORS.get(row["expiry_rank"], "#607D8B")
-        type_badge = "🗓️ Monthly" if row["expiry_type"] == "Monthly" else "📅 Weekly"
-        pcr_txt = f"PCR {row['pcr']:.2f}" if row["pcr"] is not None else "—"
-        col.markdown(f"""
-<div style="border-left:4px solid {color};padding:8px 12px;background:#1a1a2e;border-radius:4px">
-<div style="color:{color};font-weight:bold;font-size:0.75rem">{row['expiry_rank']} &nbsp; {type_badge}</div>
-<div style="font-size:1.1rem;font-weight:bold">{row['expiry_label']}</div>
-<div style="color:#aaa;font-size:0.78rem">{row['days_to_expiry']}d to expiry</div>
-<div style="font-size:0.82rem">
-  Fut: {row['fut_oi']:,.0f} &nbsp; Call: {row['call_oi']:,.0f}<br>
-  Put: {row['put_oi']:,.0f} &nbsp; {pcr_txt}
-</div>
-</div>
-""", unsafe_allow_html=True)
+
+    monthly_rows = df[df["expiry_rank"].isin(["Near Month", "Mid Month", "Far Month"])].copy()
+    weekly_rows  = df[df["expiry_rank"].isin(["Near Week",  "Mid Week",  "Far Week"])].copy()
+
+    def _expiry_card(col, row) -> None:
+        color    = _RANK_COLORS.get(row["expiry_rank"], "#607D8B")
+        pcr_txt  = f"PCR {row['pcr']:.2f}" if row["pcr"] is not None else "PCR —"
+        fut_oi   = row["fut_oi"]
+        fut_line = f"Fut: {fut_oi:,.0f}" if fut_oi > 0 else "Fut: — (options only)"
+        col.markdown(
+            f"<div style='border-left:4px solid {color};padding:8px 12px;"
+            f"background:#1a1a2e;border-radius:4px'>"
+            f"<div style='color:{color};font-weight:bold;font-size:0.75rem'>"
+            f"{row['expiry_rank']}</div>"
+            f"<div style='font-size:1.1rem;font-weight:bold'>{row['expiry_label']}</div>"
+            f"<div style='color:#aaa;font-size:0.78rem'>{row['days_to_expiry']}d to expiry</div>"
+            f"<div style='font-size:0.82rem'>"
+            f"{fut_line}<br>"
+            f"Call: {row['call_oi']:,.0f} &nbsp; Put: {row['put_oi']:,.0f}<br>"
+            f"{pcr_txt}"
+            f"</div></div>",
+            unsafe_allow_html=True,
+        )
+
+    # ── Monthly futures structure ──────────────────────────────────────────────
+    if not monthly_rows.empty:
+        st.markdown(
+            "<div style='font-size:0.7rem;color:#FF9800;letter-spacing:1px;"
+            "text-transform:uppercase;margin-bottom:4px'>"
+            "🗓️ Monthly Expiries — Futures & Options Structure</div>",
+            unsafe_allow_html=True,
+        )
+        cols = st.columns(min(len(monthly_rows), 3))
+        for col, (_, row) in zip(cols, monthly_rows.iterrows()):
+            _expiry_card(col, row)
+
+    # ── Weekly options gamma layer ─────────────────────────────────────────────
+    if not weekly_rows.empty:
+        st.markdown(
+            "<div style='font-size:0.7rem;color:#4CAF50;letter-spacing:1px;"
+            "text-transform:uppercase;margin:8px 0 4px'>"
+            "📅 Weekly Expiries — Options Gamma Layer (no futures OI)</div>",
+            unsafe_allow_html=True,
+        )
+        cols = st.columns(min(len(weekly_rows), 3))
+        for col, (_, row) in zip(cols, weekly_rows.iterrows()):
+            _expiry_card(col, row)
 
 
 def _index_oi_chart(df: pd.DataFrame, symbol: str, view_mode: str = "All") -> go.Figure:
@@ -1368,7 +1409,7 @@ def _oi_buildup_chart(df: pd.DataFrame, symbol: str) -> go.Figure:
         height=320,
         template="plotly_dark",
         legend=dict(orientation="h", yanchor="bottom", y=1.02),
-        yaxis_title="Total OI (Contracts)",
+        yaxis_title="OI Value (₹ Cr)",
         margin=dict(t=60, b=40),
     )
     return fig

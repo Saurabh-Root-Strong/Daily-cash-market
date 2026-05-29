@@ -1,0 +1,26 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "NSE Auto-Update",
+      "type": "shell",
+      "command": "${workspaceFolder}/venv/Scripts/python.exe",
+      "args": ["${workspaceFolder}/scripts/auto_update.py"],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "echo": false,
+        "reveal": "silent",
+        "focus": false,
+        "panel": "dedicated",
+        "showReuseMessage": false,
+        "clear": true
+      },
+      "runOptions": {
+        "runOn": "folderOpen"
+      },
+      "problemMatcher": []
+    }
+  ]
+}

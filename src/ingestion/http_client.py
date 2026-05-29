@@ -28,7 +28,7 @@ __all__ = ["NSEHttpClient"]
 log = get_logger(__name__)
 
 _PRIME_URLS = (
-    "https://www.nseindia.com/",
+    "https://www.nseindia.com/all-reports-derivatives",
     "https://www.nseindia.com/all-reports",
 )
 

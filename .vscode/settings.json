@@ -5,5 +5,6 @@
     "python.testing.unittestEnabled": false,
     "python.analysis.typeCheckingMode": "basic",
     "python.terminal.activateEnvironment": true,
-    "editor.formatOnSave": false
+    "editor.formatOnSave": false,
+    "task.allowAutomaticTasks": "on"
 }

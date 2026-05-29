@@ -297,3 +297,67 @@ def cached_sector_stocks_custom_range(
 ) -> pd.DataFrame:
     from src.analytics.sector_rotation import get_sector_stocks_custom_range
     return get_sector_stocks_custom_range(sector, from_date, to_date, min_turnover_lacs)
+
+
+# ── FPI Capital Flow ─────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=1800)
+def cached_fpi_available_dates() -> list:
+    from src.analytics.fpi_flows import get_fpi_available_dates
+    return get_fpi_available_dates()
+
+
+@st.cache_data(ttl=1800)
+def cached_fpi_date_range() -> tuple:
+    from src.analytics.fpi_flows import get_fpi_date_range
+    return get_fpi_date_range()
+
+
+@st.cache_data(ttl=_TTL)
+def cached_fpi_summary(as_of_date: date, lookback_days: int = 180) -> pd.DataFrame:
+    from src.analytics.fpi_flows import get_fpi_summary
+    return get_fpi_summary(as_of_date, lookback_days)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_fpi_category_breakdown(as_of_date: date, lookback_days: int = 15) -> pd.DataFrame:
+    from src.analytics.fpi_flows import get_fpi_category_breakdown
+    return get_fpi_category_breakdown(as_of_date, lookback_days)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_fpi_risk_appetite(as_of_date: date, lookback_days: int = 90) -> pd.DataFrame:
+    from src.analytics.fpi_flows import get_fpi_risk_appetite
+    return get_fpi_risk_appetite(as_of_date, lookback_days)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_fpi_15d_outlook(as_of_date: date) -> dict:
+    from src.analytics.fpi_flows import get_fpi_15d_outlook
+    return get_fpi_15d_outlook(as_of_date)
+
+
+# ── Index Prediction ──────────────────────────────────────────────────────────
+
+@st.cache_data(ttl=_TTL)
+def cached_index_predictions(trade_date: date) -> list:
+    from src.analytics.index_prediction import get_index_predictions
+    return get_index_predictions(trade_date)
+
+
+# ── Sector Signal Backtest ────────────────────────────────────────────────────
+
+@st.cache_data(ttl=_TTL)
+def cached_sector_signal_log(
+    as_of_date: date, min_turnover_lacs: float, lookback_dates: int = 30
+) -> pd.DataFrame:
+    from src.analytics.sector_signal_backtest import get_sector_signal_log
+    return get_sector_signal_log(as_of_date, min_turnover_lacs, lookback_dates)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_sector_accuracy_summary(
+    as_of_date: date, min_turnover_lacs: float, lookback_dates: int = 60
+) -> dict:
+    from src.analytics.sector_signal_backtest import get_sector_accuracy_summary
+    return get_sector_accuracy_summary(as_of_date, min_turnover_lacs, lookback_dates)

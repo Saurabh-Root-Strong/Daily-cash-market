@@ -37,11 +37,8 @@ from src.core.logging import get_logger
 from src.ingestion.base import BaseFetcher
 import urllib.parse
 
-from src.ingestion.fao_fetcher import (
-    _build_archive_url,
-    _DERIVATIVES_PAGE,
-    _ARCHIVE_BASE,
-)
+_DERIVATIVES_PAGE = "https://www.nseindia.com/all-reports-derivatives"
+_ARCHIVE_BASE     = "https://www.nseindia.com/api/reports"
 
 __all__ = ["FNOBhavCopyFetcher"]
 
@@ -114,41 +111,63 @@ class FNOBhavCopyFetcher(BaseFetcher):
         except Exception as exc:
             log.debug("FNO bhavcopy prime failed (non-fatal): %s", exc)
 
-    def fetch(self, trade_date: date) -> pd.DataFrame:
+    def _fno_url_candidates(self, trade_date: date) -> list:
         """
-        Returns one row per F&O instrument. Empty DataFrame when no data.
+        Ordered fallback chain for FNO Bhavcopy.
+        API no-date is primary (confirmed working); direct archive URLs as fallbacks.
+        Direct archive URLs only work for the last ~7 days.
+        """
+        dm   = trade_date.strftime("%d%m%Y")
+        dmon = trade_date.strftime("%d-%b-%Y").upper()   # 26-MAY-2026
+        return [
+            _build_archive_url_no_date(_FNO_BHAVCOPY_NAME),        # primary: API latest
+            f"https://nsearchives.nseindia.com/content/fo/FNO_BC{dm}.DAT",
+            f"https://archives.nseindia.com/content/fo/FNO_BC{dm}.DAT",
+            f"https://nsearchives.nseindia.com/content/fo/fo{dm}bhav.csv.zip",
+            f"https://archives.nseindia.com/content/fo/fo{dm}bhav.csv.zip",
+        ]
 
-        Note: NSE Archives API for this report is only reliable when called
-        WITHOUT a date parameter (returns today's file).  Date-specific requests
-        are broken — they all map to January of the same year.
-        We therefore omit the date parameter; the returned filename confirms the
-        actual date in the Content-Disposition header / col[21] field.
-        """
+    def fetch(self, trade_date: date) -> pd.DataFrame:
+        """Returns one row per F&O instrument. Empty DataFrame when no data."""
         self._prime()
 
-        # Omit date to get the latest available file from NSE
-        url  = _build_archive_url_no_date(_FNO_BHAVCOPY_NAME)
-        data = self._client.get_bytes(url, expect_404_ok=True)
+        from datetime import date as _date
+        candidates = self._fno_url_candidates(trade_date)
+        # The no-date API (index 0) always returns today's file regardless of the
+        # requested date.  For historical dates skip it so the direct archive URLs
+        # (which work for the last ~7 days) get tried instead.
+        if trade_date != _date.today():
+            candidates = candidates[1:]
 
-        if not data:
-            log.debug("FNO bhavcopy not available for %s (holiday/weekend/404)", trade_date)
-            return pd.DataFrame()
+        for url in candidates:
+            try:
+                data = self._client.get_bytes(url, expect_404_ok=True)
+            except Exception as exc:
+                log.debug("FNO fallback failed %s: %s", url[-60:], exc)
+                continue
 
-        try:
-            text = _decode_response(data)
-        except Exception as exc:
-            log.warning("FNO bhavcopy: cannot decode response for %s: %s", trade_date, exc)
-            return pd.DataFrame()
+            if not data:
+                continue
 
-        if not text:
-            log.debug("FNO bhavcopy for %s: empty after decode", trade_date)
-            return pd.DataFrame()
+            try:
+                text = _decode_response(data)
+            except Exception:
+                continue
 
-        try:
-            return _parse_fno_dat(text, trade_date)
-        except ParseError as exc:
-            log.warning("FNO bhavcopy parse error for %s: %s", trade_date, exc)
-            return pd.DataFrame()
+            if not text:
+                continue
+
+            try:
+                df = _parse_fno_dat(text, trade_date)
+                log.debug("FNO bhavcopy for %s fetched via %s", trade_date, url[-60:])
+                return df
+            except ParseError as exc:
+                log.warning("FNO bhavcopy parse error %s via %s: %s",
+                            trade_date, url[-60:], exc)
+                continue
+
+        log.debug("FNO bhavcopy not available for %s (all sources returned empty)", trade_date)
+        return pd.DataFrame()
 
 
 def _decode_response(data: bytes) -> str:
@@ -258,3 +277,124 @@ def _parse_fno_dat(text: str, trade_date: date) -> pd.DataFrame:
     df["strike_price"] = df["strike_price"].fillna(0.0)
 
     return df[[c for c in _SCHEMA_COLS if c in df.columns]].reset_index(drop=True)
+
+
+# ── Folder import (manual drop of fo*.zip files) ─────────────────────────────
+
+import re as _re
+from pathlib import Path as _Path
+
+_CONTRACT_RE = _re.compile(
+    r'^(FUTIDX|FUTSTK|OPTIDX|OPTSTK)'   # instrument (6 chars)
+    r'(.+?)'                              # symbol (non-greedy)
+    r'(\d{2}-[A-Z]{3}-\d{4})'            # expiry DD-MMM-YYYY
+    r'(CE|PE)?'                           # option type (absent for futures)
+    r'(\d+\.?\d*)?$'                      # strike (absent for futures)
+)
+
+_MONTH_MAP = {m: i+1 for i, m in enumerate(
+    ['JAN','FEB','MAR','APR','MAY','JUN','JUL','AUG','SEP','OCT','NOV','DEC']
+)}
+
+
+def _parse_contract_d(series: "pd.Series") -> "pd.DataFrame":
+    """Parse CONTRACT_D into instrument, symbol, expiry_date, option_type, strike_price."""
+    from datetime import date as _date
+    rows = []
+    for val in series:
+        m = _CONTRACT_RE.match(str(val).strip())
+        if not m:
+            rows.append(None)
+            continue
+        instr, sym, exp_str, opt, strike = m.groups()
+        d_str, mo_str, yr_str = exp_str.split('-')
+        exp = _date(int(yr_str), _MONTH_MAP[mo_str], int(d_str))
+        rows.append({
+            "instrument":  instr,
+            "symbol":      sym,
+            "expiry_date": exp,
+            "option_type": opt if opt else "XX",
+            "strike_price": float(strike) if strike else 0.0,
+        })
+    return pd.DataFrame([r for r in rows if r is not None], index=[i for i,r in enumerate(rows) if r is not None])
+
+
+def _parse_old_fno_zip(zip_path: _Path, trade_date: "date") -> "pd.DataFrame":
+    """Parse old-format NSE FNO zip (fo*.csv + op*.csv with CONTRACT_D column)."""
+    frames = []
+    with zipfile.ZipFile(zip_path) as zf:
+        for name in zf.namelist():
+            if not name.lower().endswith('.csv'):
+                continue
+            with zf.open(name) as f:
+                raw = pd.read_csv(f, dtype=str, low_memory=False)
+
+            raw.columns = [c.strip() for c in raw.columns]
+            if 'CONTRACT_D' not in raw.columns:
+                continue
+
+            parsed = _parse_contract_d(raw['CONTRACT_D'])
+            if parsed.empty:
+                continue
+
+            raw = raw.iloc[parsed.index].reset_index(drop=True)
+            parsed = parsed.reset_index(drop=True)
+
+            df = parsed.copy()
+            df['trade_date']    = trade_date
+            df['open_price']    = pd.to_numeric(raw.get('OPEN_PRICE',  pd.Series()), errors='coerce')
+            df['high_price']    = pd.to_numeric(raw.get('HIGH_PRICE',  pd.Series()), errors='coerce')
+            df['low_price']     = pd.to_numeric(raw.get('LOW_PRICE',   pd.Series()), errors='coerce')
+            df['close_price']   = pd.to_numeric(raw.get('CLOSE_PRIC',  pd.Series()), errors='coerce')
+            df['settle_price']  = pd.to_numeric(raw.get('SETTLEMENT',  pd.Series()), errors='coerce')
+            df['open_interest'] = pd.to_numeric(raw.get('OI_NO_CON',   pd.Series()), errors='coerce').fillna(0).astype('int64')
+            df['contracts']     = pd.to_numeric(raw.get('TRD_NO_CON',  pd.Series()), errors='coerce').fillna(0).astype('int64')
+            df['value_lacs']    = pd.to_numeric(raw.get('TRADED_VAL',  pd.Series()), errors='coerce').fillna(0) / 100_000
+            df['chg_in_oi']     = 0
+
+            frames.append(df[_SCHEMA_COLS])
+
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def import_fno_folder(folder: "_Path | str | None" = None) -> dict:
+    """
+    Parse all fo*.zip files in data/fii_imports/ (or given folder) and upsert into DB.
+    Filename must match foDD MM YY.zip  e.g. fo140526.zip → 2026-05-14
+    """
+    from src.core.config import PROJECT_ROOT
+    from src.data.repository import get_repository
+    from datetime import date
+
+    if folder is None:
+        folder = PROJECT_ROOT / "data" / "fii_imports"
+    folder = _Path(folder)
+    repo = get_repository()
+
+    files_processed = 0
+    rows_inserted   = 0
+    errors: list[str] = []
+
+    for f in sorted(folder.glob("fo*.zip")):
+        # Filename: foDDMMYY.zip  e.g. fo140526 → day=14 month=05 year=2026
+        stem = f.stem  # fo140526
+        try:
+            dd, mm, yy = int(stem[2:4]), int(stem[4:6]), int(stem[6:8])
+            trade_date = date(2000 + yy, mm, dd)
+        except Exception:
+            errors.append(f"{f.name}: cannot parse date from filename")
+            continue
+
+        try:
+            df = _parse_old_fno_zip(f, trade_date)
+            if df.empty:
+                errors.append(f"{f.name}: no rows parsed")
+                continue
+            repo.upsert_fno_bhavcopy(df)
+            rows_inserted += len(df)
+            files_processed += 1
+            log.info("Imported %d FNO rows for %s from %s", len(df), trade_date, f.name)
+        except Exception as exc:
+            errors.append(f"{f.name}: {exc}")
+
+    return {"files_processed": files_processed, "rows_inserted": rows_inserted, "errors": errors}

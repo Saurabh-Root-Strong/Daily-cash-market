@@ -8,6 +8,7 @@ dict subscripting like cfg["analytics"]["min_turnover_lacs"].
 from __future__ import annotations
 
 import functools
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -39,6 +40,10 @@ class DatabaseConfig:
 
     @property
     def resolved_path(self) -> Path:
+        # Cloud deployment: DATABASE_PATH env var overrides the config file path
+        env_path = os.environ.get("DATABASE_PATH")
+        if env_path:
+            return Path(env_path)
         return PROJECT_ROOT / self.path
 
 

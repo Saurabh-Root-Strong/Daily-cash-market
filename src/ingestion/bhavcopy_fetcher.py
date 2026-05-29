@@ -62,22 +62,40 @@ class BhavCopyFetcher(BaseFetcher):
             date=trade_date.strftime("%Y%m%d")
         )
 
+    def _url_candidates(self, trade_date: date) -> list:
+        """Ordered fallback chain for bhavcopy ZIP."""
+        d = trade_date.strftime("%Y%m%d")
+        dm = trade_date.strftime("%d%m%Y")
+        return [
+            self.build_url(trade_date),    # primary: nsearchives (from config)
+            # Fallback 1: archives domain alias
+            f"https://archives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{d}_F_0000.csv.zip",
+            # Fallback 2: older UDiFF format variant
+            f"https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{d}_F_0000.zip",
+            # Fallback 3: very old bhavcopy format (pre-UDiFF, still on NSE archives)
+            f"https://archives.nseindia.com/content/historical/EQUITIES/"
+            f"{trade_date.year}/{trade_date.strftime('%b').upper()}/cm{dm}bhav.csv.zip",
+        ]
+
     def fetch(self, trade_date: date) -> pd.DataFrame:
-        url = self.build_url(trade_date)
-        log.info("Fetching bhavcopy: %s", url)
-        raw_bytes = self._client.get_bytes(url, expect_404_ok=True)
-        if raw_bytes is None:
-            log.info("Bhavcopy not available for %s (holiday/weekend)", trade_date)
-            return pd.DataFrame()
-        try:
-            zf = zipfile.ZipFile(io.BytesIO(raw_bytes))
-            csv_name = next(n for n in zf.namelist() if n.endswith(".csv"))
-            raw_df = pd.read_csv(zf.open(csv_name))
-            return transform_to_schema(raw_df, trade_date)
-        except StopIteration:
-            raise ParseError(f"No CSV inside bhavcopy zip for {trade_date}")
-        except Exception as exc:
-            raise ParseError(f"Failed to parse bhavcopy for {trade_date}: {exc}") from exc
+        for url in self._url_candidates(trade_date):
+            log.info("Fetching bhavcopy: %s", url)
+            raw_bytes = self._client.get_bytes(url, expect_404_ok=True)
+            if raw_bytes is None:
+                continue
+            try:
+                zf = zipfile.ZipFile(io.BytesIO(raw_bytes))
+                csv_name = next(n for n in zf.namelist() if n.endswith(".csv"))
+                raw_df = pd.read_csv(zf.open(csv_name))
+                return transform_to_schema(raw_df, trade_date)
+            except StopIteration:
+                raise ParseError(f"No CSV inside bhavcopy zip for {trade_date}")
+            except Exception as exc:
+                log.warning("Bhavcopy parse failed via %s: %s", url[-60:], exc)
+                continue
+
+        log.info("Bhavcopy not available for %s (all sources empty — holiday/weekend)", trade_date)
+        return pd.DataFrame()
 
 
 def transform_to_schema(raw_df: pd.DataFrame, trade_date: date) -> pd.DataFrame:

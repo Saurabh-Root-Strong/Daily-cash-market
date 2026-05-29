@@ -231,19 +231,21 @@ def outlook_bar_chart(scored_df: pd.DataFrame) -> go.Figure:
     colors = df["Signal"].map(SIGNAL_COLORS).fillna(NEUTRAL_COLOR).tolist()
 
     def _hover(row) -> str:
-        dv  = row.get("dv_ratio",          float("nan"))
-        z   = row.get("z_score",           float("nan"))
-        br  = row.get("breadth",           float("nan"))
-        pm  = row.get("2W_price_chg_pct",  row.get("1W_price_chg_pct", float("nan")))
-        dv_s = f"{dv:.2f}×" if not pd.isna(dv) else "—"
-        z_s  = f"{z:+.1f}σ" if not pd.isna(z)  else "—"
-        br_s = f"{br*100:.0f}%" if not pd.isna(br) else "—"
-        pm_s = f"{pm:+.1f}%"   if not pd.isna(pm) else "—"
+        dv   = row.get("dv_ratio",          float("nan"))
+        dv5d = row.get("dv_ratio_5d",       float("nan"))
+        z    = row.get("z_score",           float("nan"))
+        br   = row.get("breadth",           float("nan"))
+        pm   = row.get("2W_price_chg_pct",  row.get("1W_price_chg_pct", float("nan")))
+        dv_s  = f"{dv:.2f}×"     if not pd.isna(dv)   else "—"
+        dv5_s = f"{dv5d:.2f}×"   if not pd.isna(dv5d) else "—"
+        z_s   = f"{z:+.1f}σ"     if not pd.isna(z)    else "—"
+        br_s  = f"{br*100:.0f}%" if not pd.isna(br)    else "—"
+        pm_s  = f"{pm:+.1f}%"    if not pd.isna(pm)    else "—"
         return (
             f"<b>{row['sector']}</b>  {row['Signal']}<br>"
             f"Score: <b>{row['Score']:.0f}/100</b><br>"
             f"─────────────────<br>"
-            f"DV Ratio: <b>{dv_s}</b>  — delivery vs own 100D avg<br>"
+            f"DV Today: <b>{dv_s}</b>  |  5-Day Avg: <b>{dv5_s}</b><br>"
             f"Z-Score:  <b>{z_s}</b>  — statistical abnormality<br>"
             f"Breadth:  <b>{br_s}</b>  — stocks above own norm<br>"
             f"2W Price: <b>{pm_s}</b>"

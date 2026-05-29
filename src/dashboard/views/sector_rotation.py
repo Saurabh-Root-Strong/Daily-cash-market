@@ -153,7 +153,8 @@ def _quadrant_chart(df: pd.DataFrame) -> go.Figure:
                 line=dict(width=1.5, color="rgba(255,255,255,0.5)"),
             ),
             customdata=grp[["sector", "action", "accum_score",
-                             "dv_ratio", "z_score", "breadth", "horizon"]].values,
+                             "dv_ratio", "z_score", "breadth", "horizon",
+                             "dv_ratio_5d"]].values,
             hovertemplate=(
                 "<b>%{customdata[0]}</b><br>"
                 f"<span style='color:{color}'>{signal}</span><br>"
@@ -161,7 +162,8 @@ def _quadrant_chart(df: pd.DataFrame) -> go.Figure:
                 "Score: <b>%{customdata[2]:.0f}</b>/100<br>"
                 "Price 1W: <b>%{x:+.2f}%</b><br>"
                 "Z-Score: <b>%{y:+.2f}σ</b><br>"
-                "DV Ratio: %{customdata[3]:.2f}×  ·  Breadth: %{customdata[5]:.0%}<br>"
+                "DV Today: %{customdata[3]:.2f}×  ·  5D Avg: %{customdata[7]:.2f}×<br>"
+                "Breadth: %{customdata[5]:.0%}<br>"
                 "Horizon: %{customdata[6]}<br>"
                 "<i>%{customdata[1]}</i>"
                 "<extra></extra>"
@@ -436,6 +438,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> No
     )
 
     dv   = row.get("dv_ratio")
+    dv5d = row.get("dv_ratio_5d")
     z    = row.get("z_score")
     br   = row.get("breadth")
     p1w  = row.get("price_1w")
@@ -447,12 +450,19 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> No
     def _fmt(v, fmt):
         return fmt.format(v) if (v is not None and not (isinstance(v, float) and pd.isna(v))) else "—"
 
-    dv_str   = _fmt(dv,  "{:.2f}×")
-    z_str    = _fmt(z,   "{:+.2f}σ")
-    p1w_str  = _fmt(p1w, "{:+.2f}%")
+    dv_str   = _fmt(dv,   "{:.2f}×")
+    dv5d_str = _fmt(dv5d, "{:.2f}×")
+    z_str    = _fmt(z,    "{:+.2f}σ")
+    p1w_str  = _fmt(p1w,  "{:+.2f}%")
     br_str   = f"{br * 100:.0f}%" if (br is not None and not (isinstance(br, float) and pd.isna(br))) else "—"
     dv1w_str = f"₹{dv1w:,.0f} Cr" if (dv1w is not None and not (isinstance(dv1w, float) and pd.isna(dv1w))) else "—"
 
+    # 5D avg color: green if sustained (>=1.15), orange if weak (<=0.9), grey otherwise
+    dv5d_color = (
+        POSITIVE_COLOR if (dv5d is not None and not pd.isna(dv5d) and dv5d >= 1.15)
+        else (NEGATIVE_COLOR if (dv5d is not None and not pd.isna(dv5d) and dv5d <= 0.90)
+        else "#888888")
+    )
     z_color   = (POSITIVE_COLOR if (z is not None and not pd.isna(z) and z >= 1.0)
                  else (NEGATIVE_COLOR if (z is not None and not pd.isna(z) and z <= -0.5)
                  else "#888888"))
@@ -490,7 +500,8 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> No
         f"{bar_html}"
         f"<div style='font-size:11px;margin-bottom:4px'>{row['signal']} &nbsp; {action_html}</div>"
         f"<div style='display:flex;gap:16px;margin-top:4px;font-size:12px'>"
-        f"<span>DV Ratio: <b>{dv_str}</b></span>"
+        f"<span>DV Today: <b>{dv_str}</b></span>"
+        f"<span>5D Avg: <b style='color:{dv5d_color}'>{dv5d_str}</b></span>"
         f"<span>Z-Score: <b style='color:{z_color}'>{z_str}</b></span>"
         f"<span>Breadth: <b>{br_str}</b></span>"
         f"<span>1W Price: <b style='color:{p1w_color}'>{p1w_str}</b></span>"
@@ -1453,13 +1464,15 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
 
 **Distribution Trap is the most dangerous.** Institutions need retail buyers to exit into. If delivery Z-Score collapses (below -0.5σ) while price rises, institutions are selling into the retail FOMO rally.
 
-**DV Ratio** — today's delivered value vs own 100D daily average. 1.5× = 50% above normal. Removes sector size bias.
+**DV Today** — today's delivered value ÷ own 100D daily average. 1.5× = 50% above normal. Single-day snapshot — can spike from one large block trade.
+
+**5D Avg DV** — 5-day average DV ratio (1W delivery ÷ 5 days, vs 100D daily mean). Smoothed institutional activity over a week — the primary signal driver. Avoids single-day noise.
 
 **Z-Score (σ)** — how many standard deviations today's delivery VALUE is above its 100D mean. Z ≥ 2.0 = top 2.5% of trading days.
 
 **Breadth** — fraction of stocks in the sector where today's delivery exceeds their own 100D average. 70%+ = broad institutional participation.
 
-**Score (0–100):** 35% DV Ratio + 25% Breadth + 20% Z-Score + 10% 1W Price trend + 10% Trend slope. Cross-sectional — ranks sectors relative to each other on today's data.
+**Score (0–100):** 30% 5D Avg DV + 20% DV Today + 20% Breadth + 10% Z-Score + 10% 1W Price + 10% Trend slope. Cross-sectional — ranks sectors relative to each other.
         """)
 
     with st.spinner("Computing 100-day rotation signals…"):
@@ -1565,6 +1578,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             signal   = str(row.get("signal", ""))
             coverage = str(row.get("coverage", "—") or "—")
             dv       = row.get("dv_ratio")
+            dv5d_t   = row.get("dv_ratio_5d")
             z        = row.get("z_score")
             br       = row.get("breadth")
             p1w      = row.get("price_1w")
@@ -1578,6 +1592,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 f"<td style='padding:6px 8px;width:130px'>{_score_bar(score, action)}</td>"
                 f"<td style='padding:6px 8px;font-size:12px;color:#aaa'>{coverage}</td>"
                 f"<td style='padding:6px 8px;text-align:right'>{_fmt_val(dv, '{:.2f}×')}</td>"
+                f"<td style='padding:6px 8px;text-align:right'>{_fmt_val(dv5d_t, '{:.2f}×')}</td>"
                 f"<td style='padding:6px 8px;text-align:right'>{_fmt_val(z, '{:+.2f}σ', plus=True)}</td>"
                 f"<td style='padding:6px 8px;text-align:right'>{_fmt_breadth(br)}</td>"
                 f"<td style='padding:6px 8px;text-align:right'>{_fmt_val(p1w, '{:+.2f}%', plus=True)}</td>"
@@ -1593,7 +1608,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 f"text-align:{'right' if i >= 4 else 'left'}'>{h}</th>"
                 for i, h in enumerate([
                     "Sector", "Signal", "Score", "Coverage",
-                    "DV Ratio", "Z-Score", "Breadth", "Price 1W%", "Action"
+                    "DV Today", "5D Avg", "Z-Score", "Breadth", "Price 1W%", "Action"
                 ])
             )
             + "</tr>"
@@ -1678,10 +1693,12 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         row = rot[rot["sector"] == chosen].iloc[0]
         meta = _SIGNAL_META.get(row["signal"], {})
 
-        dv_disp  = f"{row['dv_ratio']:.2f}×"  if pd.notna(row.get("dv_ratio"))  else "—"
-        z_disp   = f"{row['z_score']:+.2f}σ"  if pd.notna(row.get("z_score"))   else "—"
-        br_raw   = row.get("breadth")
-        br_disp  = f"{br_raw*100:.0f}% breadth" if (br_raw is not None and pd.notna(br_raw)) else "—"
+        dv_disp   = f"{row['dv_ratio']:.2f}×"     if pd.notna(row.get("dv_ratio"))     else "—"
+        dv5d_raw  = row.get("dv_ratio_5d")
+        dv5d_disp = f"{dv5d_raw:.2f}×"            if (dv5d_raw is not None and pd.notna(dv5d_raw)) else "—"
+        z_disp    = f"{row['z_score']:+.2f}σ"     if pd.notna(row.get("z_score"))      else "—"
+        br_raw    = row.get("breadth")
+        br_disp   = f"{br_raw*100:.0f}% breadth"  if (br_raw is not None and pd.notna(br_raw)) else "—"
 
         st.markdown(
             f"<div style='padding:10px 16px;border-left:4px solid "
@@ -1691,7 +1708,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             f"<span style='color:rgba(255,255,255,0.7)'>{row['action']}</span><br>"
             f"<span style='font-size:12px;color:rgba(255,255,255,0.5)'>"
             f"Score: {row['accum_score']:.0f}/100 &nbsp;|&nbsp; "
-            f"DV Ratio: {dv_disp} &nbsp;|&nbsp; Z-Score: {z_disp} &nbsp;|&nbsp; {br_disp}"
+            f"DV Today: {dv_disp} &nbsp;|&nbsp; 5D Avg: {dv5d_disp} &nbsp;|&nbsp; "
+            f"Z-Score: {z_disp} &nbsp;|&nbsp; {br_disp}"
             f" &nbsp;|&nbsp; Horizon: {row['horizon']}"
             f"</span></div>",
             unsafe_allow_html=True,
@@ -1709,10 +1727,10 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
     with st.expander("📋 Full Rotation Table — All Sectors", expanded=False):
         st.caption(
             "All sectors ranked by accumulation score.  "
-            "Score = 35% DV Ratio + 25% Breadth + 20% Z-Score + 10% 1W Price + 10% Trend slope"
+            "Score = 30% 5D Avg DV + 20% DV Today + 20% Breadth + 10% Z-Score + 10% 1W Price + 10% Trend slope"
         )
         display_cols = ["sector", "signal", "accum_score", "coverage", "horizon",
-                        "dv_ratio", "z_score", "breadth", "trend_slope",
+                        "dv_ratio", "dv_ratio_5d", "z_score", "breadth", "trend_slope",
                         "price_1w", "price_1m", "price_3m",
                         "today_dv_cr", "deliv_val_1w_cr",
                         "today_wtd_deliv_pct", "avg_wtd_deliv_pct_100d"]
@@ -1725,7 +1743,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 "signal":         st.column_config.TextColumn("Signal"),
                 "accum_score":    st.column_config.ProgressColumn(
                     "Score", max_value=100, format="%.0f",
-                    help="Score = 35% DV Ratio + 25% Breadth + 20% Z-Score + 10% Price 1W + 10% Trend slope\n"
+                    help="Score = 30% 5D Avg DV + 20% DV Today + 20% Breadth + 10% Z-Score + 10% Price 1W + 10% Trend slope\n"
                          "Cross-sectional: ranks sectors relative to each other on today's data"),
                 "coverage":       st.column_config.TextColumn(
                     "Coverage",
@@ -1734,10 +1752,15 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                          "Mid Term (3–4 months): steep 100-day slope + DV Ratio > 1.3 + Breadth ≥ 50%"),
                 "horizon":        st.column_config.TextColumn("Horizon"),
                 "dv_ratio":       st.column_config.NumberColumn(
-                    "DV Ratio", format="%.2f×",
+                    "DV Today", format="%.2f×",
                     help="Today's delivered value ÷ own 100D daily average\n"
                          "1.0× = exactly average  |  1.5× = 50% above norm\n"
-                         "Removes sector size bias — Banking and Defence on equal footing"),
+                         "Single-day snapshot — can spike from one large block trade"),
+                "dv_ratio_5d":    st.column_config.NumberColumn(
+                    "5D Avg DV", format="%.2f×",
+                    help="5-day average DV ratio = (1W delivery ÷ 5) ÷ (100D delivery ÷ 100)\n"
+                         "1.0× = exactly normal  |  1.3× = 30% above weekly average\n"
+                         "Primary signal driver — smooths single-day noise over a week"),
                 "z_score":        st.column_config.NumberColumn(
                     "Z-Score (σ)", format="%+.2f",
                     help="(Today's DV − 100D mean) ÷ 100D std deviation\n"

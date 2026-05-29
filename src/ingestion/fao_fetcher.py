@@ -1,24 +1,20 @@
 """
 FAOParticipantFetcher — F&O Participant-wise OI and Volume reports from NSE.
 
-NSE publishes two CSV files after each trading session, available via the
-Archives tab at nseindia.com/all-reports-derivatives.
-
-API endpoint (Archives):
-  https://www.nseindia.com/api/reports?archives=[{...}]&date=DD-MM-YYYY&...
+NSE publishes two CSV files after each trading session, available directly at:
+  https://archives.nseindia.com/content/nsccl/fao_participant_oi_DDMMYYYY.csv
+  https://archives.nseindia.com/content/nsccl/fao_participant_vol_DDMMYYYY.csv
 
 Participants: Client (retail), DII, FII, Pro (proprietary)
 
 Columns per file:
-  Date, Client Type, Future Index Long/Short, Future Stock Long/Short,
+  Client Type, Future Index Long/Short, Future Stock Long/Short,
   Option Index Call/Put Long/Short, Option Stock Call/Put Long/Short,
   Total Long Contracts, Total Short Contracts
 """
 from __future__ import annotations
 
 import io
-import json
-import urllib.parse
 from datetime import date
 
 import pandas as pd
@@ -32,10 +28,40 @@ __all__ = ["FAOParticipantFetcher"]
 log = get_logger(__name__)
 
 _DERIVATIVES_PAGE = "https://www.nseindia.com/all-reports-derivatives"
-_ARCHIVE_BASE     = "https://www.nseindia.com/api/reports"
 
-_ARCHIVE_OI_NAME  = "F&O - Participant wise Open Interest(csv)"
-_ARCHIVE_VOL_NAME = "F&O - Participant wise Trading Volumes(csv)"
+# Fallback chain for each file type — tried in order until one returns data
+# Primary: nsearchives (confirmed direct download)
+# Fallback 1: archives (old domain alias — may redirect)
+# Fallback 2: NSE /api/reports (Archive API — worked before domain change)
+def _oi_url_candidates(date_ddmmyyyy: str, date_dd_mm_yyyy: str) -> list:
+    import json, urllib.parse
+    def _api(name):
+        a = json.dumps([{"name": name, "type": "archives",
+                         "category": "derivatives", "section": "equity"}])
+        p = urllib.parse.urlencode({"archives": a, "date": date_dd_mm_yyyy,
+                                    "type": "equity", "mode": "single"})
+        return f"https://www.nseindia.com/api/reports?{p}"
+    return [
+        f"https://nsearchives.nseindia.com/content/nsccl/fao_participant_oi_{date_ddmmyyyy}.csv",
+        f"https://archives.nseindia.com/content/nsccl/fao_participant_oi_{date_ddmmyyyy}.csv",
+        _api("F&O - Participant wise Open Interest(csv)"),
+        _api("F&O-Participant wise Open Interest (csv)"),
+    ]
+
+def _vol_url_candidates(date_ddmmyyyy: str, date_dd_mm_yyyy: str) -> list:
+    import json, urllib.parse
+    def _api(name):
+        a = json.dumps([{"name": name, "type": "archives",
+                         "category": "derivatives", "section": "equity"}])
+        p = urllib.parse.urlencode({"archives": a, "date": date_dd_mm_yyyy,
+                                    "type": "equity", "mode": "single"})
+        return f"https://www.nseindia.com/api/reports?{p}"
+    return [
+        f"https://nsearchives.nseindia.com/content/nsccl/fao_participant_vol_{date_ddmmyyyy}.csv",
+        f"https://archives.nseindia.com/content/nsccl/fao_participant_vol_{date_ddmmyyyy}.csv",
+        _api("F&O - Participant wise Trading Volumes(csv)"),
+        _api("F&O-Participant wise Trading Volumes (csv)"),
+    ]
 
 _VALID_TYPES = {"Client", "DII", "FII", "Pro"}
 
@@ -68,23 +94,6 @@ _NUMERIC_COLS = [
     "total_long", "total_short",
 ]
 
-def _build_archive_url(report_name: str, date_str: str) -> str:
-    """Build NSE Archives API URL for one report + date (DD-MM-YYYY)."""
-    archives = json.dumps([{
-        "name":     report_name,
-        "type":     "archives",
-        "category": "derivatives",
-        "section":  "equity",
-    }])
-    params = urllib.parse.urlencode({
-        "archives": archives,
-        "date":     date_str,
-        "type":     "equity",
-        "mode":     "single",
-    })
-    return f"{_ARCHIVE_BASE}?{params}"
-
-
 class FAOParticipantFetcher(BaseFetcher):
     """Downloads and parses both OI + Volume participant CSVs for one date."""
 
@@ -107,31 +116,40 @@ class FAOParticipantFetcher(BaseFetcher):
         except Exception as exc:
             log.debug("Derivatives prime failed (non-fatal): %s", exc)
 
+    def _fetch_csv(self, urls: list, label: str, trade_date: date) -> str | None:
+        """Try each URL in order; return first valid CSV text, else None."""
+        for url in urls:
+            try:
+                text = self._client.get_text(url, expect_404_ok=True)
+            except Exception as exc:
+                log.debug("FAO %s fallback failed %s: %s", label, url[-60:], exc)
+                continue
+            if not text or not text.strip():
+                continue
+            first = text.strip().splitlines()[0]
+            if "<" in first or "{" in first:
+                continue
+            log.debug("FAO %s for %s fetched via %s", label, trade_date, url[-60:])
+            return text
+        return None
+
     def fetch(self, trade_date: date) -> pd.DataFrame:
         """Returns one row per (client_type x data_type).  Empty if no data."""
         self._prime_derivatives()
 
-        # Archives API uses DD-MM-YYYY
-        date_str = trade_date.strftime("%d-%m-%Y")
+        ddmmyyyy   = trade_date.strftime("%d%m%Y")
+        dd_mm_yyyy = trade_date.strftime("%d-%m-%Y")
 
         frames: list[pd.DataFrame] = []
-        for data_type, report_name in (
-            ("OI",  _ARCHIVE_OI_NAME),
-            ("Vol", _ARCHIVE_VOL_NAME),
+        for data_type, candidates in (
+            ("OI",  _oi_url_candidates(ddmmyyyy, dd_mm_yyyy)),
+            ("Vol", _vol_url_candidates(ddmmyyyy, dd_mm_yyyy)),
         ):
-            url  = _build_archive_url(report_name, date_str)
-            text = self._client.get_text(url, expect_404_ok=True)
-            if not text or not text.strip():
-                log.debug("F&O %s not available for %s (holiday/weekend/404)",
+            text = self._fetch_csv(candidates, data_type, trade_date)
+            if text is None:
+                log.debug("F&O %s not available for %s (all sources returned empty)",
                           data_type, trade_date)
                 continue
-            # NSE may return HTML error pages or JSON — skip if not CSV-like
-            if not text.strip().startswith(("Date", "date", "Client", "client")):
-                # Could be HTML or JSON error; try first line heuristic
-                first = text.strip().splitlines()[0] if text.strip() else ""
-                if "<" in first or "{" in first:
-                    log.debug("F&O %s for %s returned non-CSV response", data_type, trade_date)
-                    continue
             try:
                 frames.append(_parse_fao_csv(text, trade_date, data_type))
             except ParseError as exc:

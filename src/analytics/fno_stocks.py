@@ -77,10 +77,15 @@ def get_fno_stock_oi_signals(
               AND expiry_date >= ?
             GROUP BY symbol
         ),
+        prev_date AS (
+            SELECT MAX(trade_date) AS prev_dt
+            FROM fno_bhavcopy
+            WHERE trade_date < ?
+              AND instrument  = 'FUTSTK'
+        ),
         near_futures AS (
             SELECT f.symbol,
                    SUM(f.open_interest)  AS fut_oi,
-                   SUM(f.chg_in_oi)      AS chg_in_oi,
                    SUM(f.contracts)      AS fut_volume,
                    SUM(f.close_price  * GREATEST(f.contracts, 1)) /
                        SUM(GREATEST(f.contracts, 1))              AS close_price,
@@ -90,6 +95,17 @@ def get_fno_stock_oi_signals(
             INNER JOIN near_expiry ne
                     ON f.symbol = ne.symbol AND f.expiry_date = ne.near_exp
             WHERE f.trade_date  = ?
+              AND f.instrument  = 'FUTSTK'
+            GROUP BY f.symbol
+        ),
+        prev_futures AS (
+            SELECT f.symbol,
+                   SUM(f.open_interest)  AS prev_oi
+            FROM fno_bhavcopy f
+            INNER JOIN near_expiry ne
+                    ON f.symbol = ne.symbol AND f.expiry_date = ne.near_exp
+            CROSS JOIN prev_date pd
+            WHERE f.trade_date  = pd.prev_dt
               AND f.instrument  = 'FUTSTK'
             GROUP BY f.symbol
         ),
@@ -106,25 +122,28 @@ def get_fno_stock_oi_signals(
         )
         SELECT
             nf.symbol,
-            COALESCE(sm.company_name, nf.symbol)    AS company_name,
-            COALESCE(sm.sector,   'Others')          AS sector,
-            COALESCE(sm.industry, 'Others')          AS industry,
+            COALESCE(sm.company_name, nf.symbol)                    AS company_name,
+            COALESCE(sm.sector,   'Others')                         AS sector,
+            COALESCE(sm.industry, 'Others')                         AS industry,
             nf.fut_oi,
-            nf.chg_in_oi,
+            COALESCE(pf.prev_oi, nf.fut_oi)                        AS prev_oi,
+            nf.fut_oi - COALESCE(pf.prev_oi, nf.fut_oi)            AS chg_in_oi,
             nf.fut_volume,
             nf.close_price,
             nf.settle_price,
-            COALESCE(so.call_oi,  0)                 AS call_oi,
-            COALESCE(so.put_oi,   0)                 AS put_oi,
-            COALESCE(so.call_vol, 0)                 AS call_vol,
-            COALESCE(so.put_vol,  0)                 AS put_vol
+            COALESCE(so.call_oi,  0)                                AS call_oi,
+            COALESCE(so.put_oi,   0)                                AS put_oi,
+            COALESCE(so.call_vol, 0)                                AS call_vol,
+            COALESCE(so.put_vol,  0)                                AS put_vol
         FROM near_futures nf
+        LEFT JOIN prev_futures pf ON nf.symbol = pf.symbol
         LEFT JOIN stock_options so ON nf.symbol = so.symbol
         LEFT JOIN sector_master sm ON nf.symbol = sm.symbol
         WHERE nf.fut_oi >= ?
         ORDER BY nf.fut_oi DESC
     """, [
         trade_date, trade_date,   # near_expiry
+        trade_date,               # prev_date
         trade_date,               # near_futures join
         trade_date,               # stock_options
         min_fut_oi,
@@ -139,20 +158,19 @@ def get_fno_stock_oi_signals(
         / df["settle_price"].replace(0, float("nan")) * 100
     ).round(2)
 
-    # OI change %
-    prev_oi = (df["fut_oi"] - df["chg_in_oi"]).replace(0, float("nan"))
-    df["oi_chg_pct"] = (df["chg_in_oi"] / prev_oi * 100).round(2)
+    # OI change % (chg_in_oi = today_oi - prev_oi, computed in SQL from actual yesterday data)
+    df["oi_chg_pct"] = (
+        df["chg_in_oi"] / df["prev_oi"].replace(0, float("nan")) * 100
+    ).round(2)
 
     # Stock-level PCR (options only)
     df["stock_pcr"] = (
         df["put_oi"] / df["call_oi"].replace(0, float("nan"))
     ).round(2)
 
-    # OI signal (classic Long Buildup / Short Buildup etc.)
-    # chg_in_oi from NSE bhavcopy is often 0; signal falls back to price direction.
-    oi_chg_available = (df["chg_in_oi"].abs() > 0).any()
+    # OI signal using percentage change (scale-invariant across lots vs units formats)
     df["oi_signal"] = df.apply(
-        lambda r: _classify_signal(r["price_chg_pct"], r["chg_in_oi"]),
+        lambda r: _classify_signal(r["price_chg_pct"], r["oi_chg_pct"]),
         axis=1,
     )
     df["signal_score"] = df["oi_signal"].map(_SIGNAL_SCORE).fillna(0).astype(int)

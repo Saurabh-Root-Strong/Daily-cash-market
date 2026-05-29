@@ -52,6 +52,87 @@ _ROLES: dict[str, tuple[str, str]] = {
 
 # ── Formatting helpers ────────────────────────────────────────────────────────
 
+def _trading_days_between(d1, d2) -> int:
+    """Count weekdays between d1 (exclusive) and d2 (inclusive)."""
+    if hasattr(d1, "date"):
+        d1 = d1.date()
+    if hasattr(d2, "date"):
+        d2 = d2.date()
+    if d2 <= d1:
+        return 0
+    count = 0
+    d = d1 + timedelta(days=1)
+    while d <= d2:
+        if d.weekday() < 5:
+            count += 1
+        d += timedelta(days=1)
+    return count
+
+
+def _render_data_freshness(data_date: date, selected_date: date) -> None:
+    """
+    Show a data freshness banner when FAO participant data is lagging behind
+    the selected date. NSE publishes this data with a 1–3 day delay by design.
+    """
+    lag_days = _trading_days_between(data_date, selected_date)
+    if lag_days == 0:
+        return  # Up to date — no banner needed
+
+    if lag_days == 1:
+        color  = "#FFD600"
+        icon   = "🕐"
+        title  = "1 Trading Day Lag — Normal NSE Publication Delay"
+        detail = (
+            "NSE typically publishes the F&O participant OI report the same evening "
+            "but sometimes the previous day's file is the latest available. "
+            "Signals are based on yesterday's positions — still highly valid."
+        )
+    elif lag_days <= 3:
+        color  = "#FF9800"
+        icon   = "⚠️"
+        title  = f"{lag_days} Trading Days Lag — FAO Data Behind"
+        detail = (
+            f"FAO participant data is {lag_days} trading days old. "
+            "This happens when NSE Archives API had a delayed publication or when the "
+            "daily fetch ran before NSE uploaded the file. "
+            "The intelligence engine is working on older institutional positions — "
+            "treat signals as directional bias, not precise day-level calls."
+        )
+    else:
+        color  = "#ff5252"
+        icon   = "🚨"
+        title  = f"{lag_days} Trading Days Lag — Stale Data, Signals Unreliable"
+        detail = (
+            f"FAO participant data is {lag_days} trading days old "
+            f"(latest: {data_date.strftime('%d %b')}, selected: {selected_date.strftime('%d %b')}). "
+            "Institutional positions change daily — this lag is too large for reliable signals. "
+        )
+
+    backfill_cmd = "python -m src.cli backfill-fao 10"
+    st.markdown(
+        f"""<div style="
+            border-left:4px solid {color};
+            background:{color}18;
+            border-radius:0 8px 8px 0;
+            padding:10px 14px;
+            margin:6px 0 14px 0;
+            font-size:0.85em;
+        ">
+            <div style="color:{color};font-weight:700;margin-bottom:4px">
+                {icon} FAO DATA FRESHNESS — {title}
+            </div>
+            <div style="color:rgba(255,255,255,0.7);line-height:1.5">
+                {detail}
+            </div>
+            <div style="color:rgba(255,255,255,0.4);margin-top:6px;font-size:0.85em">
+                To backfill missing FAO dates: &nbsp;
+                <code style="background:#ffffff18;padding:2px 6px;border-radius:4px">{backfill_cmd}</code>
+            </div>
+        </div>""",
+        unsafe_allow_html=True,
+    )
+
+
 def _net_color(v: float | None) -> str:
     if v is None or pd.isna(v):
         return "#888888"
@@ -1742,8 +1823,13 @@ def _backtest_pnl_chart(records) -> go.Figure:
 def _backtest_detail_drill(records, threshold_pct: float) -> None:
     """Date-picker drill-down: show full signal detail for a selected date."""
     st.markdown(
-        "<div style='font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);"
-        "letter-spacing:1.5px;margin:4px 0 10px'>🔍 DATE DRILL-DOWN — Signal Detail for Any Date</div>",
+        "<div title='Select any historical date from the dropdown to see the full signal detail: "
+        "what the system predicted that evening, all contributing factors, "
+        "what actually happened the next trading day, and whether it was correct or wrong. "
+        "Drill into WRONG calls to understand why — squeeze/covering trigger? External macro? "
+        "Drill into CORRECT calls to confirm the edge.' "
+        "style='font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);"
+        "letter-spacing:1.5px;margin:4px 0 10px;cursor:help'>🔍 DATE DRILL-DOWN — Signal Detail for Any Date</div>",
         unsafe_allow_html=True,
     )
     date_options = sorted([r.signal_date for r in records], reverse=True)
@@ -1857,76 +1943,174 @@ def _backtest_results_table(records) -> None:
         })
     df = pd.DataFrame(rows).sort_values("Signal Date", ascending=False)
     col_cfg = {
-        "Signal Date": st.column_config.DateColumn("Date",    format="DD MMM YY"),
-        "Score":       st.column_config.NumberColumn("Score",  format="%+.0f"),
-        "Actual %":    st.column_config.NumberColumn("Nifty%", format="%+.2f"),
-        "Sim P&L %":   st.column_config.NumberColumn("SimP&L", format="%+.2f"),
+        "Signal Date": st.column_config.DateColumn("Date", format="DD MMM YY",
+            help="Date signal was generated (close of evening). Act on it the next morning."),
+        "Verdict":     st.column_config.TextColumn("Verdict",
+            help="UP = go long Nifty | DOWN = go short (rare, needs active fresh short-building) | SIDEWAYS = stay flat, no trade"),
+        "Conf.":       st.column_config.TextColumn("Conf.",
+            help="HIGH/MEDIUM/LOW confidence. Only trade HIGH confidence signals. HIGH = multiple indicators agree."),
+        "Score":       st.column_config.NumberColumn("Score", format="%+.0f",
+            help="9-signal composite score (range −18 to +18). ≥+7=UP HIGH. ≥+3=UP MED. ≤−7+delta_5d<−10K+no squeeze=DOWN. Otherwise SIDEWAYS."),
+        "View":        st.column_config.TextColumn("View",
+            help="Human-readable score label: STRONG BULLISH(≥+9) / BULLISH(≥+5) / CAUTIOUSLY BULLISH(≥+2) / NEUTRAL / CAUTIOUSLY BEARISH / BEARISH / STRONG BEARISH"),
+        "Squeeze":     st.column_config.TextColumn("Squeeze",
+            help="⚡ = Squeeze Risk active. FII massive short + DII buying = structural floor. Any positive news → FII forced to cover = sudden rally. NEVER short when active."),
+        "Covering":    st.column_config.TextColumn("Covering",
+            help="🔄 = Short Covering active. FII actively reducing massive short = net institutional buying. Each covered contract = 1 BUY transaction. Best UP signal."),
+        "Actual %":    st.column_config.NumberColumn("Nifty%", format="%+.2f",
+            help="Actual Nifty 50 % change on the NEXT trading day. Green = market went up, red = down. This is what the signal was predicting."),
+        "Actual Dir":  st.column_config.TextColumn("Actual Dir",
+            help="Classified market direction: UP(>+threshold%), DOWN(<−threshold%), SIDEWAYS(within ±threshold%). Compared with Verdict for CORRECT/WRONG."),
+        "Outcome":     st.column_config.TextColumn("Outcome",
+            help="CORRECT = Verdict matched Actual Direction. WRONG = did not match. SIDEWAYS is correct only if market also stayed within ±threshold."),
+        "Sim P&L %":   st.column_config.NumberColumn("SimP&L", format="%+.2f",
+            help="Per-signal P&L: +Nifty% if long (UP verdict), −Nifty% if short (DOWN verdict), 0% if flat (SIDEWAYS). Sum of all = cumulative P&L in summary card."),
     }
     st.dataframe(df, hide_index=True, use_container_width=True, column_config=col_cfg)
+
+
+_READ_ME_TABLE = """
+<div style='border:1px solid rgba(255,255,255,0.07);border-radius:10px;padding:16px 18px;
+background:rgba(255,255,255,0.015);margin:0 0 18px'>
+  <div style='font-size:9px;font-weight:700;color:rgba(255,255,255,0.3);letter-spacing:1.5px;
+  margin-bottom:14px'>📖 HOW TO READ THIS PAGE — Hover any row or heading below for full explanation</div>
+  <div style='display:grid;grid-template-columns:1fr 1fr;gap:18px'>
+    <div>
+      <div style='font-size:8px;font-weight:700;color:rgba(255,255,255,0.2);letter-spacing:1px;
+      border-bottom:1px solid rgba(255,255,255,0.06);padding-bottom:4px;margin-bottom:8px'>
+      SUMMARY CARD METRICS</div>
+      <table style='width:100%;font-size:9.5px;border-collapse:collapse'>
+        <tr title='% of ALL signals correct (UP+DOWN+SIDEWAYS combined). Low is OK — SIDEWAYS is genuinely hard to predict since market moves directionally most days. Do NOT use this alone for trading decisions.'>
+          <td style='color:#69f0ae;font-weight:700;padding:3px 8px 3px 0;white-space:nowrap;cursor:help'>Overall Hit Rate</td>
+          <td style='color:rgba(255,255,255,0.5);padding:3px 0'>% all signals correct. SIDEWAYS drags this down — not the key trading metric.</td></tr>
+        <tr style='background:rgba(255,255,255,0.02)' title='Of UP and DOWN calls ONLY — how many were correct. THE most important trading metric. &gt;55% = statistical edge. &gt;60% = strong edge. Only take UP/DOWN signals — never SIDEWAYS.'>
+          <td style='color:#69f0ae;font-weight:700;padding:3px 8px 3px 0;white-space:nowrap;cursor:help'>Directional Accuracy</td>
+          <td style='color:rgba(255,255,255,0.5);padding:3px 0'>UP+DOWN only. THE trading metric. &gt;55% = edge to trade on.</td></tr>
+        <tr title='If you followed every signal with 1 unleveraged unit — long Nifty on UP, short on DOWN, flat on SIDEWAYS — this is total return. Sharpe = annualised mean÷std. &gt;1 = good, &gt;2 = excellent.'>
+          <td style='color:#69f0ae;font-weight:700;padding:3px 8px 3px 0;white-space:nowrap;cursor:help'>Simulated P&amp;L</td>
+          <td style='color:rgba(255,255,255,0.5);padding:3px 0'>Total return following every signal, 1-unit unleveraged. Sharpe alongside.</td></tr>
+        <tr style='background:rgba(255,255,255,0.02)' title='Accuracy specifically for HIGH confidence signals. Should be HIGHER than overall accuracy — if not, the confidence calibration is wrong. Use HIGH conf. signals for larger position sizes.'>
+          <td style='color:#69f0ae;font-weight:700;padding:3px 8px 3px 0;white-space:nowrap;cursor:help'>High Conf. Accuracy</td>
+          <td style='color:rgba(255,255,255,0.5);padding:3px 0'>Accuracy on HIGH confidence signals only. Should exceed overall.</td></tr>
+        <tr title='Worst cumulative loss before recovery. Risk management rule: never risk more than 2× this figure in total capital allocated to this strategy.'>
+          <td style='color:#69f0ae;font-weight:700;padding:3px 8px 3px 0;white-space:nowrap;cursor:help'>Max Drawdown</td>
+          <td style='color:rgba(255,255,255,0.5);padding:3px 0'>Worst loss before recovery. Cap total exposure at 2× this number.</td></tr>
+      </table>
+    </div>
+    <div>
+      <div style='font-size:8px;font-weight:700;color:rgba(255,255,255,0.2);letter-spacing:1px;
+      border-bottom:1px solid rgba(255,255,255,0.06);padding-bottom:4px;margin-bottom:8px'>
+      SIGNAL HISTORY TABLE COLUMNS</div>
+      <table style='width:100%;font-size:9.5px;border-collapse:collapse'>
+        <tr title='Date the signal was generated (at market close that evening). Act on it the next trading morning.'>
+          <td style='color:#64b5f6;font-weight:700;padding:2px 8px 2px 0;white-space:nowrap;cursor:help'>Date</td>
+          <td style='color:rgba(255,255,255,0.5);padding:2px 0'>Signal generated this evening → trade next morning.</td></tr>
+        <tr style='background:rgba(255,255,255,0.02)' title='UP = go long Nifty next day. DOWN = go short (rare — only when FII actively builds fresh shorts). SIDEWAYS = do NOT trade, stay flat.'>
+          <td style='color:#64b5f6;font-weight:700;padding:2px 8px 2px 0;white-space:nowrap;cursor:help'>Verdict</td>
+          <td style='color:rgba(255,255,255,0.5);padding:2px 0'>UP=long | DOWN=short (rare) | SIDEWAYS=stay flat, no trade.</td></tr>
+        <tr title='HIGH/MEDIUM/LOW. Only trade HIGH confidence signals — multiple indicators agree. LOW = conflicted data = stay out.'>
+          <td style='color:#64b5f6;font-weight:700;padding:2px 8px 2px 0;white-space:nowrap;cursor:help'>Conf.</td>
+          <td style='color:rgba(255,255,255,0.5);padding:2px 0'>Signal confidence. Only trade HIGH confidence calls.</td></tr>
+        <tr style='background:rgba(255,255,255,0.02)' title='Composite score from 9 signals (range −18 to +18). ≥+7=UP HIGH. ≥+3=UP MEDIUM. ≤−7 AND delta_5d&lt;−10K AND no squeeze=DOWN. Otherwise SIDEWAYS.'>
+          <td style='color:#64b5f6;font-weight:700;padding:2px 8px 2px 0;white-space:nowrap;cursor:help'>Score</td>
+          <td style='color:rgba(255,255,255,0.5);padding:2px 0'>9-signal composite −18→+18. ≥+7=UP. ≤−7+fresh shorts=DOWN.</td></tr>
+        <tr title='Human-readable score label: STRONG BULLISH (≥+9) / BULLISH (≥+5) / CAUTIOUSLY BULLISH (≥+2) / NEUTRAL / CAUTIOUSLY BEARISH / BEARISH / STRONG BEARISH.'>
+          <td style='color:#64b5f6;font-weight:700;padding:2px 8px 2px 0;white-space:nowrap;cursor:help'>View</td>
+          <td style='color:rgba(255,255,255,0.5);padding:2px 0'>Score label: BULLISH / NEUTRAL / BEARISH spectrum.</td></tr>
+        <tr style='background:rgba(255,255,255,0.02)' title='⚡ = FII holds a massive short position AND DII is buying = structural floor = squeeze setup. Any positive catalyst forces FII to cover shorts (BUY) = sudden sharp rally. NEVER short when squeeze is active.'>
+          <td style='color:#64b5f6;font-weight:700;padding:2px 8px 2px 0;white-space:nowrap;cursor:help'>⚡ Squeeze</td>
+          <td style='color:rgba(255,255,255,0.5);padding:2px 0'>⚡ = squeeze risk. Never short. Any catalyst = sudden rally.</td></tr>
+        <tr title='🔄 = FII is actively REDUCING a massive short position = net institutional buying. Each covered short contract = 1 BUY transaction. Best UP signal in the system — combining with Squeeze = highest conviction trade.'>
+          <td style='color:#64b5f6;font-weight:700;padding:2px 8px 2px 0;white-space:nowrap;cursor:help'>🔄 Covering</td>
+          <td style='color:rgba(255,255,255,0.5);padding:2px 0'>🔄 = FII covering shorts = net buying pressure. Top signal.</td></tr>
+        <tr style='background:rgba(255,255,255,0.02)' title='Actual Nifty 50 % change on the NEXT trading day. This is the number the signal was trying to predict. Green = market went up, red = down.'>
+          <td style='color:#64b5f6;font-weight:700;padding:2px 8px 2px 0;white-space:nowrap;cursor:help'>Nifty%</td>
+          <td style='color:rgba(255,255,255,0.5);padding:2px 0'>Actual next-day Nifty 50 return. What the signal predicted.</td></tr>
+        <tr title='Classified actual direction: UP (&gt;+threshold%), DOWN (&lt;−threshold%), SIDEWAYS (within ±threshold%). Compared against Verdict for CORRECT/WRONG.'>
+          <td style='color:#64b5f6;font-weight:700;padding:2px 8px 2px 0;white-space:nowrap;cursor:help'>Actual Dir</td>
+          <td style='color:rgba(255,255,255,0.5);padding:2px 0'>Classified actual direction vs ±threshold.</td></tr>
+        <tr style='background:rgba(255,255,255,0.02)' title='CORRECT = Verdict matched Actual Direction exactly. WRONG = did not match. Note: SIDEWAYS verdict is only CORRECT if market also stayed within ±threshold.'>
+          <td style='color:#64b5f6;font-weight:700;padding:2px 8px 2px 0;white-space:nowrap;cursor:help'>Outcome</td>
+          <td style='color:rgba(255,255,255,0.5);padding:2px 0'>CORRECT if Verdict = Actual Dir. WRONG otherwise.</td></tr>
+        <tr title='Per-signal simulated P&amp;L: +Nifty% if went long (UP verdict), −Nifty% if went short (DOWN verdict), 0% if stayed flat (SIDEWAYS). Sum of all SimP&amp;L = cumulative P&amp;L in summary card.'>
+          <td style='color:#64b5f6;font-weight:700;padding:2px 8px 2px 0;white-space:nowrap;cursor:help'>SimP&amp;L</td>
+          <td style='color:rgba(255,255,255,0.5);padding:2px 0'>P&amp;L this signal: +X% long UP, −X% short DOWN, 0 SIDEWAYS.</td></tr>
+      </table>
+    </div>
+  </div>
+  <div style='border-top:1px solid rgba(255,255,255,0.06);margin-top:12px;padding-top:12px'>
+    <div style='font-size:8px;font-weight:700;color:rgba(255,255,255,0.2);letter-spacing:1px;margin-bottom:8px'>
+    3 TRADING RULES — When to act on these signals</div>
+    <div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px'>
+      <div title='Wait for Verdict=UP AND (Short Covering=🔄 OR Squeeze Risk=⚡). This combination means FII is being FORCED to buy (covering their shorts) = institutional buying pressure = market goes up. Historically the highest accuracy combination.'
+      style='background:rgba(0,200,83,0.05);border:1px solid rgba(0,200,83,0.2);border-radius:6px;padding:8px 10px;cursor:help'>
+        <div style='font-size:8.5px;font-weight:700;color:#00c853'>✅ RULE 1 — Only trade UP+covering+squeeze</div>
+        <div style='font-size:9.5px;color:rgba(255,255,255,0.45);margin-top:4px'>Wait for Verdict=UP AND (🔄 Covering OR ⚡ Squeeze). FII forced to buy = institutional buying = highest conviction.</div>
+      </div>
+      <div title='A bearish score means FII holds a large short position. A LARGE SHORT POSITION = SQUEEZE FUEL, not a guaranteed sell signal. Historically score-based DOWN calls were 0% accurate because bearish FII positioning caused squeezes, not falls. DOWN signal ONLY fires when FII actively builds fresh shorts (5D delta below −10K contracts) with no DII floor.'
+      style='background:rgba(255,82,82,0.05);border:1px solid rgba(255,82,82,0.2);border-radius:6px;padding:8px 10px;cursor:help'>
+        <div style='font-size:8.5px;font-weight:700;color:#ff5252'>🚫 RULE 2 — Never short on score alone</div>
+        <div style='font-size:9.5px;color:rgba(255,255,255,0.45);margin-top:4px'>Bearish score = FII large short = squeeze fuel. Shorting into a squeeze = violent loss. DOWN requires fresh short-building (rare).</div>
+      </div>
+      <div title='SIDEWAYS verdict means the signal engine sees no clear institutional edge. The market moves directionally most days (+/−0.25%), so SIDEWAYS calls are often "wrong" by count — but the value is preserving capital when the signal is unsure. Do NOT force a trade.'
+      style='background:rgba(255,202,40,0.05);border:1px solid rgba(255,202,40,0.2);border-radius:6px;padding:8px 10px;cursor:help'>
+        <div style='font-size:8.5px;font-weight:700;color:#ffca28'>⏸ RULE 3 — Ignore SIDEWAYS</div>
+        <div style='font-size:9.5px;color:rgba(255,255,255,0.45);margin-top:4px'>SIDEWAYS = no clear edge = no trade. Trail stop-losses on existing positions. Best trade is sometimes no trade.</div>
+      </div>
+    </div>
+  </div>
+</div>
+"""
 
 
 def _render_backtest(selected_date: date) -> None:
     """Full backtest mode render."""
     st.markdown(
-        "<div style='font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);"
-        "letter-spacing:2px;margin:4px 0 14px'>"
+        "<div title='Walk-Forward Backtest: For each date D in history, signal is computed using "
+        "ONLY data available up to close of day D — no future information. "
+        "Outcome is measured against the NEXT trading day Nifty 50 return. "
+        "This is the most honest evaluation: exactly what you would have seen on that evening.' "
+        "style='font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);"
+        "letter-spacing:2px;margin:4px 0 10px;cursor:help'>"
         "📊 SIGNAL ACCURACY BACKTEST — Walk-Forward Historical Validation</div>",
         unsafe_allow_html=True,
     )
 
+    # ── READ ME (always visible, before controls) ─────────────────────────────
+    st.html(_READ_ME_TABLE)
+
     # ── Controls ──────────────────────────────────────────────────────────────
-    c_days, c_thresh, c_run = st.columns([2, 2, 1])
+    c_days, c_thresh, c_run = st.columns([3, 4, 1])
     with c_days:
-        bt_days = st.selectbox(
+        bt_days = st.radio(
             "Backtest Window",
             [30, 45, 60, 90],
             index=2,
-            format_func=lambda d: f"Last {d} trading sessions",
+            format_func=lambda d: f"{d} sessions",
+            horizontal=True,
             key="bt_days",
+            help="How many historical trading days to evaluate. More = more stable stats. Fewer = more recent/relevant.",
         )
     with c_thresh:
-        bt_thresh = st.selectbox(
+        bt_thresh = st.radio(
             "Directional Threshold",
             [0.15, 0.25, 0.35, 0.50],
             index=1,
-            format_func=lambda t: f"±{t:.2f}% Nifty (current: ±{t*24:.0f}pts)",
+            format_func=lambda t: f"±{t:.2f}%",
+            horizontal=True,
             key="bt_thresh",
+            help="Nifty % change needed to count as UP or DOWN. Below threshold = SIDEWAYS. ±0.25% ≈ ±6pts on Nifty24K.",
         )
     with c_run:
         st.markdown("<div style='margin-top:26px'>", unsafe_allow_html=True)
-        run_btn = st.button("▶ Run Backtest", type="primary", use_container_width=True)
+        run_btn = st.button("▶ Run", type="primary", use_container_width=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
-    # Methodology explainer
-    with st.expander("📖 Backtest Methodology — How is accuracy measured?", expanded=False):
-        st.markdown(f"""
-**Walk-Forward (No Look-Ahead Bias):**
-For each historical date D, the signal is computed using ONLY data available at close of day D.
-No future information is used. This is exactly what you'd have seen on that evening.
+    # Persist run state across Streamlit re-runs (dropdown selection resets buttons)
+    if run_btn:
+        st.session_state["bt_ran"] = True
 
-**Scoring Rule (threshold = ±{bt_thresh:.2f}%):**
-| Signal Said | Nifty Next Day | Outcome |
-|-------------|----------------|---------|
-| UP | > +{bt_thresh:.2f}% | ✅ CORRECT |
-| UP | < +{bt_thresh:.2f}% | ❌ WRONG |
-| DOWN | < −{bt_thresh:.2f}% | ✅ CORRECT |
-| DOWN | > −{bt_thresh:.2f}% | ❌ WRONG |
-| SIDEWAYS | Between ±{bt_thresh:.2f}% | ✅ CORRECT |
-| SIDEWAYS | Outside ±{bt_thresh:.2f}% | ❌ WRONG |
-
-**Simulated P&L:**
-- UP signal → go long 1 unit Nifty → P&L = actual next-day Nifty %
-- DOWN signal → go short 1 unit → P&L = -(actual Nifty %)
-- SIDEWAYS → stay flat → P&L = 0%
-- This is unleveraged — real trading with leverage would multiply all figures.
-
-**Important context:**
-- FII signals are medium-term indicators, not day-trading signals
-- Short covering setups may show "WRONG" but were contextually correct (market squeezed up)
-- ±{bt_thresh:.2f}% threshold filters out noise — small moves don't count either way
-        """)
-
-    if not run_btn:
+    if not (run_btn or st.session_state.get("bt_ran")):
         st.info(
             "Configure settings above and click **▶ Run Backtest** to evaluate signal accuracy "
             f"over the last {bt_days} trading sessions.\n\n"
@@ -1982,8 +2166,11 @@ No future information is used. This is exactly what you'd have seen on that even
         )
 
     st.markdown(
-        f"<div style='border:1px solid {_decision_color}66;border-radius:10px;"
-        f"padding:12px 16px;background:{_decision_color}11;margin:8px 0'>"
+        f"<div title='TRADEABLE: Directional accuracy ≥60% AND Sharpe ≥1.0 — system has a meaningful statistical edge, take UP+covering+squeeze signals. "
+        f"TRADE WITH CAUTION: Directional ≥50% AND Sharpe ≥0 — marginal edge, only HIGH confidence signals, half position size. "
+        f"DO NOT TRADE: Accuracy or Sharpe below threshold — signal engine in losing phase, stay flat.' "
+        f"style='border:1px solid {_decision_color}66;border-radius:10px;"
+        f"padding:12px 16px;background:{_decision_color}11;margin:8px 0;cursor:help'>"
         f"<span style='font-size:10px;font-weight:700;color:{_decision_color};"
         f"letter-spacing:1.5px'>{_decision_icon} TRADING DECISION: {_decision_label}</span>"
         f"<div style='font-size:12px;color:rgba(255,255,255,0.7);margin-top:6px'>{_decision_text}</div>"
@@ -2003,8 +2190,14 @@ No future information is used. This is exactly what you'd have seen on that even
 
     # ── Signal type breakdown ─────────────────────────────────────────────────
     st.markdown(
-        "<div style='font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);"
-        "letter-spacing:1.5px;margin:12px 0 8px'>"
+        "<div title='Accuracy broken down by signal type. "
+        "UP SIGNALS: times system predicted market goes up — and was it right? "
+        "DOWN SIGNALS: times system predicted fall (rare — requires active fresh short-building). "
+        "SIDEWAYS: times system said no clear direction. "
+        "SQUEEZE RISK: accuracy on days with a squeeze setup active. "
+        "SHORT COVERING: accuracy on days FII was actively reducing massive short position.' "
+        "style='font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);"
+        "letter-spacing:1.5px;margin:12px 0 8px;cursor:help'>"
         "📊 ACCURACY BY SIGNAL TYPE</div>",
         unsafe_allow_html=True,
     )
@@ -2031,8 +2224,13 @@ No future information is used. This is exactly what you'd have seen on that even
     # ── Charts ────────────────────────────────────────────────────────────────
     st.divider()
     st.markdown(
-        "<div style='font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);"
-        "letter-spacing:1.5px;margin:4px 0 8px'>"
+        "<div title='Bar chart showing actual Nifty 50 % return on the day AFTER each signal. "
+        "Overlaid markers show what the signal predicted: ▲=UP, ▼=DOWN, ◆=SIDEWAYS. "
+        "Green marker = signal was CORRECT, Red = WRONG. "
+        "Dotted lines = ±threshold (the boundary between UP/SIDEWAYS/DOWN classification). "
+        "Use this to visually spot patterns — e.g. do squeeze+covering days cluster near big UP bars?' "
+        "style='font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);"
+        "letter-spacing:1.5px;margin:4px 0 8px;cursor:help'>"
         "📈 SIGNAL VERDICTS vs ACTUAL NIFTY RETURNS</div>",
         unsafe_allow_html=True,
     )
@@ -2048,8 +2246,14 @@ No future information is used. This is exactly what you'd have seen on that even
     )
 
     st.markdown(
-        "<div style='font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);"
-        "letter-spacing:1.5px;margin:4px 0 8px'>"
+        "<div title='Blue line: cumulative P&amp;L if you followed every signal — "
+        "long 1 unit Nifty on UP verdict, short on DOWN, flat on SIDEWAYS. "
+        "Grey dashed: buy and hold Nifty throughout the same period. "
+        "Blue beating grey = strategy outperforms passive. "
+        "1-unit unleveraged — with 5x leverage multiply all figures by 5. "
+        "No transaction costs or slippage included.' "
+        "style='font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);"
+        "letter-spacing:1.5px;margin:4px 0 8px;cursor:help'>"
         "💰 SIMULATED CUMULATIVE P&L — Strategy vs Buy &amp; Hold</div>",
         unsafe_allow_html=True,
     )
@@ -2070,8 +2274,13 @@ No future information is used. This is exactly what you'd have seen on that even
     # ── Full table ────────────────────────────────────────────────────────────
     st.divider()
     st.markdown(
-        "<div style='font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);"
-        "letter-spacing:1.5px;margin:4px 0 8px'>"
+        "<div title='Full chronological record of every signal evaluated in this backtest. "
+        "Sorted newest first. Hover column headers for per-column explanations. "
+        "Click any column header to sort by that column. "
+        "Look for patterns: do CORRECT calls cluster on squeeze+covering days? "
+        "Do WRONG calls happen when Squeeze is active but signal said SIDEWAYS?' "
+        "style='font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);"
+        "letter-spacing:1.5px;margin:4px 0 8px;cursor:help'>"
         "📋 COMPLETE SIGNAL HISTORY TABLE</div>",
         unsafe_allow_html=True,
     )
@@ -2133,6 +2342,9 @@ def render(selected_date: date) -> None:
         f"**{data_type}** data — as of **{data_date.strftime('%d %b %Y')}** "
         f"| Lookback: {lookback_opt} (from {start_date.strftime('%d %b %Y')})"
     )
+
+    # ── Data freshness check ──────────────────────────────────────────────────
+    _render_data_freshness(data_date, selected_date)
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECTION 1: TOMORROW'S VERDICT (Market Intelligence Engine)

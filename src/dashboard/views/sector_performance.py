@@ -24,6 +24,8 @@ from src.dashboard.cache.queries import (
     cached_subsector_stocks_performance,
     cached_all_stocks,
     cached_search_stocks,
+    cached_sector_signal_log,
+    cached_sector_accuracy_summary,
 )
 from src.dashboard.components.charts import outlook_bar_chart, period_comparison_chart, signal_bar_chart
 from src.dashboard.components.filters import (
@@ -328,47 +330,73 @@ def _master_table(
 
 # ── Outlook scoring ───────────────────────────────────────────────────────────
 def _compute_outlook(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Signal design principle: a "1-2 week" outlook requires SUSTAINED flow, not a single day's spike.
+
+    Two-layer evidence requirement:
+      Layer 1 — Sustained (primary):  5-day avg DV >= 1.3x AND today >= 1.0x
+                 → Sector has shown elevated institutional flow across multiple days
+      Layer 2 — Extreme fresh (exception): today z>=2.0 or dv>=2.0 AND 5-day avg >= 1.0x
+                 → An extreme single-day event is valid IF the recent background is neutral/positive
+                 → A sector that was distributing (5-day avg < 1.0x) CANNOT flip to Accumulating
+                    on a single spike day; it shows as Weak Rally or Neutral instead
+
+    This prevents the "flip in 2 days" problem: a sector distributing for a week
+    requires that the 5-day average genuinely recover before the signal upgrades.
+    """
     out = df.copy()
 
-    # Participation acceleration: is the normalized rate INCREASING toward the present?
     daily_100d = (out["100D_deliv_cr"] / 100).replace(0, float("nan"))
-    norm_1w = (out["1W_deliv_cr"] / 5)  / daily_100d
+    norm_1w = (out["1W_deliv_cr"] / 5)  / daily_100d   # 5-day avg vs own 100D daily mean
     norm_2w = (out["2W_deliv_cr"] / 10) / daily_100d
     norm_1m = (out["1M_deliv_cr"] / 22) / daily_100d
 
-    out["_dv"]  = out["dv_ratio"].fillna(1.0)          # RelativeDV  (35%)
-    out["_br"]  = out["breadth"].fillna(0.5)            # Breadth     (25%)
-    out["_z"]   = out["z_score"].fillna(0.0)            # RelativeStr (20%)
-    out["_pm"]  = out.get("2W_price_chg_pct", out["1W_price_chg_pct"])  # Trend (10%)
-    out["_acc"] = (                                     # Participation (10%)
+    # Keep 5-day avg as a named output column for tooltips and chart hover
+    out["dv_ratio_5d"] = norm_1w.round(2)
+
+    # Score inputs
+    out["_dv5d"] = norm_1w.fillna(1.0)              # 5-day avg DV (primary, 30%) — stable
+    out["_dv"]   = out["dv_ratio"].fillna(1.0)       # Today's DV  (freshness, 20%) — responsive
+    out["_br"]   = out["breadth"].fillna(0.5)         # Breadth today (20%)
+    out["_z"]    = out["z_score"].fillna(0.0)         # Z-Score today  (10%)
+    out["_pm"]   = out.get("2W_price_chg_pct", out["1W_price_chg_pct"])  # Price trend (10%)
+    out["_acc"]  = (                                  # Delivery acceleration (10%)
         (norm_1w > norm_2w).astype(float) +
         (norm_2w > norm_1m).astype(float)
     )
 
     out["Score"] = (
-        _normalize(out["_dv"])  * 35 +   # RelativeDV: today vs own 100D mean
-        _normalize(out["_br"])  * 25 +   # Breadth: how many stocks are above norm
-        _normalize(out["_z"])   * 20 +   # Z-Score: statistical abnormality
-        _normalize(out["_pm"])  * 10 +   # Trend: price direction confirmation
-        _normalize(out["_acc"]) * 10     # Participation: delivery acceleration
+        _normalize(out["_dv5d"]) * 30 +   # Sustained 5-day flow: primary driver
+        _normalize(out["_dv"])   * 20 +   # Today's DV: freshness/confirmation
+        _normalize(out["_br"])   * 20 +   # Breadth: sector-wide participation today
+        _normalize(out["_z"])    * 10 +   # Z-Score: statistical abnormality today
+        _normalize(out["_pm"])   * 10 +   # Price trend confirmation
+        _normalize(out["_acc"])  * 10     # Delivery acceleration
     ).round(1)
 
     def _sig(row) -> str:
-        z  = row["_z"]
-        dv = row["_dv"]
-        br = row["_br"]
-        pm = row["_pm"] if not pd.isna(row["_pm"]) else 0
-        # Abnormal flow = Z >= 1.5 OR DV >= 1.5x OR both moderate (Z>=1.0 + DV>=1.2)
-        # Broad = majority of stocks above their norm, OR signal is extreme
-        abnormal = z >= 1.5 or dv >= 1.5 or (z >= 1.0 and dv >= 1.2)
-        broad    = br >= 0.5 or z >= 2.0 or dv >= 2.0
+        z    = float(row["_z"])    if not pd.isna(row["_z"])    else 0.0
+        dv   = float(row["_dv"])   if not pd.isna(row["_dv"])   else 1.0
+        dv5d = float(row["_dv5d"]) if not pd.isna(row["_dv5d"]) else 1.0
+        br   = float(row["_br"])   if not pd.isna(row["_br"])   else 0.5
+        pm   = float(row["_pm"])   if not pd.isna(row.get("_pm")) else 0.0
+
+        # Layer 1 — Sustained: 5-day avg elevated AND today confirms it
+        sustained_confirmed = dv5d >= 1.3 and dv >= 1.0
+
+        # Layer 2 — Extreme fresh event (rare: z>=2.0 or dv>=2.0) but ONLY if
+        # recent 5-day background is neutral-to-positive (dv5d >= 1.0).
+        # A distributing sector (dv5d < 1.0) that spikes today → Weak Rally, not Accumulating.
+        extreme_fresh = (z >= 2.0 or dv >= 2.0) and dv5d >= 1.0
+
+        abnormal = sustained_confirmed or extreme_fresh
+        broad    = br >= 0.5 or z >= 2.0 or dv5d >= 1.8 or dv >= 2.0
         strong   = abnormal and broad
-        if strong and pm > 0:      return "🟢 Accumulating"
-        if strong:                  return "🟡 Buying Dips"
-        if dv >= 0.75 and pm > 0:  return "🟠 Weak Rally"
-        # Neutral: delivery near normal (0.6–0.75×) OR price flat — not actively distributing
-        # Distributing: delivery clearly below normal (<0.6×) OR price down with low delivery
-        if dv >= 0.60 and abs(pm) <= 1.5:   return "⚪ Neutral"
+
+        if strong and pm > 0:               return "🟢 Accumulating"
+        if strong:                          return "🟡 Buying Dips"
+        if dv5d >= 0.75 and pm > 0:         return "🟠 Weak Rally"
+        if dv5d >= 0.60 and abs(pm) <= 1.5: return "⚪ Neutral"
         return "🔴 Distributing"
 
     out["Signal"] = out.apply(_sig, axis=1)
@@ -397,34 +425,45 @@ def render(selected_date: date, min_turnover: float) -> None:
     # ── 1-2 Week Outlook ──────────────────────────────────────────────────────
     st.markdown("### 📈 1–2 Week Sector Outlook")
     st.caption(
-        "Score = **35% DV Ratio** (relative flow) + **25% Breadth** (stock participation) "
-        "+ **20% Z-Score** (statistical abnormality) + **10% Price Trend** + **10% Delivery Acceleration** "
-        "— relative rank within today's sector universe"
+        "Score = **30% 5-Day Avg DV** (sustained flow) + **20% Today's DV** (freshness) + "
+        "**20% Breadth** (stock participation) + **10% Z-Score** + **10% Price Trend** + **10% Delivery Acceleration.** "
+        "Signal requires sustained 5-day flow — a single-day spike alone cannot trigger Accumulating."
     )
     scored = _compute_outlook(sector_df)
 
     def _kpi_help(row) -> str:
-        dv = row.get("dv_ratio", float("nan"))
-        z  = row.get("z_score",  float("nan"))
-        br = row.get("breadth",  float("nan"))
-        sc = row.get("Score",    float("nan"))
+        dv   = row.get("dv_ratio",    float("nan"))   # today
+        dv5d = row.get("dv_ratio_5d", float("nan"))   # 5-day avg
+        z    = row.get("z_score",     float("nan"))
+        br   = row.get("breadth",     float("nan"))
+        sc   = row.get("Score",       float("nan"))
         lines = []
-        if not pd.isna(dv):
-            dv_note = ("significantly above norm — institutional surge" if dv >= 1.5
-                       else "above norm" if dv >= 1.0
-                       else "below norm — reduced participation")
-            lines.append(f"DV Ratio {dv:.2f}× — delivery today vs own 100D avg. {dv_note}.")
+        if not pd.isna(dv5d) and not pd.isna(dv):
+            dv5d_note = ("sustained surge — elevated for several days" if dv5d >= 1.3
+                         else "above norm" if dv5d >= 1.0
+                         else "below norm — recent flow weak")
+            align = ("today spike aligns with trend" if dv >= dv5d * 0.9
+                     else "today below recent trend — momentum fading" if dv < dv5d * 0.7
+                     else "today broadly in line with recent trend")
+            lines.append(
+                f"DV Ratio: Today {dv:.2f}× / 5-Day Avg {dv5d:.2f}×.\n"
+                f"5-Day: {dv5d_note}. {align}.\n"
+                "Signal requires 5-day avg >= 1.3x for Accumulating — single-day spikes alone don't qualify."
+            )
+        elif not pd.isna(dv):
+            dv_note = ("significantly above norm" if dv >= 1.5 else "above norm" if dv >= 1.0 else "below norm")
+            lines.append(f"DV Ratio Today {dv:.2f}× — {dv_note}.")
         if not pd.isna(z):
-            z_note  = ("rare extreme event (top ~2.5% of days)" if abs(z) >= 2.0
-                       else "elevated (top ~16% of days)" if abs(z) >= 1.0
-                       else "normal range")
-            lines.append(f"Z-Score {z:+.1f}σ — {z_note}.")
+            z_note = ("rare extreme event (top ~2.5% of days)" if abs(z) >= 2.0
+                      else "elevated (top ~16% of days)" if abs(z) >= 1.0
+                      else "normal range")
+            lines.append(f"Z-Score {z:+.1f}σ today — {z_note}.")
         if not pd.isna(br):
-            br_note = ("broad — sector-wide, not single-stock" if br >= 0.5
-                       else "narrow — dominated by 1–2 large-caps, not the whole sector")
-            lines.append(f"Breadth {br*100:.0f}% — {br_note}.")
+            br_note = ("broad — sector-wide participation" if br >= 0.5
+                       else "narrow — dominated by 1–2 large-caps")
+            lines.append(f"Breadth {br*100:.0f}% today — {br_note}.")
         if not pd.isna(sc):
-            lines.append(f"Composite Score {sc:.0f}/100 — relative rank today.")
+            lines.append(f"Composite Score {sc:.0f}/100 — relative rank within today's sector universe.")
         return "\n\n".join(lines)
 
     # Top 3 — strongest buy signals
@@ -710,3 +749,157 @@ def render(selected_date: date, min_turnover: float) -> None:
         **Key principle:** High absolute delivery ≠ strong signal. *Abnormal + Broad* delivery = strong signal.
         Banking doing ₹7,000 Cr is normal. Defence doing ₹800 Cr when it averages ₹300 Cr AND 70% of Defence stocks are above their own norm — that is the real signal.
         """)
+
+    st.markdown("---")
+
+    # ── Signal Accuracy & Backtest History ───────────────────────────────────
+    with st.expander("📊 Signal Accuracy & Backtest History", expanded=False):
+        st.caption(
+            "Walk-forward backtest — each historical signal is evaluated using ONLY data "
+            "available on that date (no look-ahead). Forward return = cumulative sector "
+            "price change over the next 5 trading days. "
+            "Directional signals (Accumulating / Buying Dips / Distributing) are scored; "
+            "Weak Rally and Neutral are non-directional and excluded from win-rate stats."
+        )
+
+        bt_left, bt_right = st.columns([1, 3])
+
+        with bt_left:
+            lookback_n = st.selectbox(
+                "History window (trading days)",
+                options=[20, 30, 45, 60],
+                index=1,
+                key="signal_bt_lookback",
+            )
+            sector_options = ["All Sectors"] + sorted(sector_df["sector"].dropna().unique().tolist())
+            sector_filter = st.selectbox(
+                "Filter by sector",
+                options=sector_options,
+                index=0,
+                key="signal_bt_sector",
+            )
+
+        with bt_right:
+            with st.spinner("Computing signal accuracy…"):
+                accuracy = cached_sector_accuracy_summary(selected_date, min_turnover, lookback_n)
+
+            if not accuracy:
+                st.info("Not enough history to compute accuracy stats (need 20+ trading days).")
+            else:
+                am1, am2, am3, am4 = st.columns(4)
+                overall = accuracy.get("__overall__", {})
+                if overall:
+                    pct = overall["win_rate"] * 100
+                    color = "normal" if pct >= 55 else "off"
+                    am1.metric(
+                        "Overall Accuracy",
+                        f"{pct:.0f}%",
+                        f"{overall['n']} signals scored",
+                        delta_color=color,
+                    )
+
+                for col, sig in zip([am2, am3, am4], ["Accumulating", "Buying Dips", "Distributing"]):
+                    stat = accuracy.get(sig)
+                    if stat:
+                        pct   = stat["win_rate"] * 100
+                        avg   = stat["avg_fwd_5d"]
+                        inv   = sig == "Distributing"
+                        col.metric(
+                            f"{sig}  ({stat['n']}x)",
+                            f"{pct:.0f}% win rate",
+                            f"Avg 5D: {avg:+.2f}%",
+                            delta_color="inverse" if inv else "normal",
+                            help=(
+                                f"Win rate for '{sig}' signals over the last {lookback_n} "
+                                "trading dates across all sectors. "
+                                f"Median 5D return: {stat['median_fwd_5d']:+.2f}%."
+                            ),
+                        )
+
+        st.markdown("")
+
+        with st.spinner("Loading signal log…"):
+            log_df = cached_sector_signal_log(selected_date, min_turnover, lookback_n)
+
+        if log_df.empty:
+            st.info(
+                "No signal history found. "
+                "Need at least 20 trading days of data with delivery records."
+            )
+        else:
+            if sector_filter != "All Sectors":
+                log_df = log_df[log_df["sector"] == sector_filter].copy()
+
+            if log_df.empty:
+                st.info(f"No signals for **{sector_filter}** in the selected window.")
+            else:
+                # Format for display
+                disp = log_df.copy()
+                disp["trade_date"] = pd.to_datetime(disp["trade_date"]).dt.strftime("%d %b %Y")
+
+                def _fmt_outcome(o: str) -> str:
+                    if o == "Correct":   return "✅ Correct"
+                    if o == "Wrong":     return "❌ Wrong"
+                    if o == "N/A":       return "— N/A"
+                    if "Pending" in o:   return f"⏳ {o}"
+                    if "Partial" in o:   return f"⏳ {o}"
+                    return o
+
+                disp["outcome"] = disp["outcome"].apply(_fmt_outcome)
+
+                col_cfg = {
+                    "trade_date": st.column_config.TextColumn("Date", width="small"),
+                    "sector":     st.column_config.TextColumn("Sector"),
+                    "signal":     st.column_config.TextColumn("Signal"),
+                    "dv_ratio":   st.column_config.NumberColumn(
+                        "DV Ratio", format="%.2fx",
+                        help="Today's delivery vs own 100D daily avg. >1.5x = abnormal flow."
+                    ),
+                    "z_score":    st.column_config.NumberColumn(
+                        "Z-Score", format="%.2f",
+                        help="Standard deviations above/below 100D mean. >1.5 = statistically elevated."
+                    ),
+                    "daily_price_chg_pct": st.column_config.NumberColumn(
+                        "Price Chg%", format="%.2f%%",
+                        help="Sector turnover-weighted avg price change on signal date."
+                    ),
+                    "fwd_5d_pct": st.column_config.NumberColumn(
+                        "Actual 5D Return%", format="%.2f%%",
+                        help="Cumulative sector return over next 5 trading days. NaN = still pending."
+                    ),
+                    "outcome":    st.column_config.TextColumn(
+                        "Outcome",
+                        help="✅ Correct = signal direction matched 5D return | "
+                             "❌ Wrong = opposite | ⏳ = return window not yet complete | "
+                             "— N/A = non-directional signal"
+                    ),
+                }
+
+                show_cols = [
+                    "trade_date", "sector", "signal",
+                    "dv_ratio", "z_score", "daily_price_chg_pct",
+                    "fwd_5d_pct", "outcome",
+                ]
+                show_cols = [c for c in show_cols if c in disp.columns]
+
+                st.dataframe(
+                    disp[show_cols],
+                    column_config=col_cfg,
+                    use_container_width=True,
+                    hide_index=True,
+                    height=420,
+                )
+
+                # Summary counts
+                n_total   = len(log_df[log_df["outcome"].isin(["Correct", "Wrong"])])
+                n_correct = (log_df["outcome"] == "Correct").sum()
+                n_pending = log_df["outcome"].str.startswith("Pending").sum() + \
+                            log_df["outcome"].str.startswith("Partial").sum()
+
+                st.caption(
+                    f"Showing {len(log_df)} signals across {log_df['trade_date'].nunique()} trading dates"
+                    f"{f' for {sector_filter}' if sector_filter != 'All Sectors' else ''}. "
+                    f"Completed: {n_total} scored  |  Correct: {n_correct}  |  "
+                    f"Pending/Partial: {n_pending}  |  "
+                    "Simplified signal omits breadth — slightly more conservative than live dashboard."
+                )

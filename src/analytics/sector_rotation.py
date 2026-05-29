@@ -166,48 +166,71 @@ def get_sector_rotation(
         if sector in ("ETF", "Others"):
             continue
 
-        dv_ratio = float(row.get("dv_ratio",          float("nan")))
-        z_score  = float(row.get("z_score",            float("nan")))
-        breadth  = float(row.get("breadth",            float("nan")))
-        p1w      = float(row.get("1W_price_chg_pct",   float("nan")))
-        p1m      = float(row.get("1M_price_chg_pct",   float("nan")))
-        p3m      = float(row.get("3M_price_chg_pct",   float("nan")))
-        today_dv = float(row.get("today_dv_cr",        float("nan")))
-        deliv_1w = float(row.get("1W_deliv_cr",        float("nan")))
+        dv_ratio  = float(row.get("dv_ratio",          float("nan")))
+        z_score   = float(row.get("z_score",            float("nan")))
+        breadth   = float(row.get("breadth",            float("nan")))
+        p1w       = float(row.get("1W_price_chg_pct",   float("nan")))
+        p1m       = float(row.get("1M_price_chg_pct",   float("nan")))
+        p3m       = float(row.get("3M_price_chg_pct",   float("nan")))
+        today_dv  = float(row.get("today_dv_cr",        float("nan")))
+        deliv_1w  = float(row.get("1W_deliv_cr",        float("nan")))
+        deliv_100d = float(row.get("100D_deliv_cr",     float("nan")))
 
         if pd.isna(dv_ratio) or pd.isna(z_score):
             continue
 
+        # ── 5-day average delivery ratio ──────────────────────────────────────
+        # dv_ratio_5d = (1W total delivery / 5 days) / (100D total delivery / 100 days)
+        # This is the 5-day average relative to the sector's own daily norm.
+        # Purpose: prevents single-day spikes or dips from flipping the signal category.
+        # A sector that was distributing yesterday cannot show "Confirmed Accumulation"
+        # today just because of one large block trade. It needs sustained flow.
+        if not pd.isna(deliv_1w) and not pd.isna(deliv_100d) and deliv_100d > 0:
+            dv_ratio_5d = round((deliv_1w / 5) / (deliv_100d / 100), 3)
+        else:
+            dv_ratio_5d = float("nan")
+        dv5d = dv_ratio_5d if not pd.isna(dv_ratio_5d) else 1.0  # fallback: neutral
+
         trend_slope = slope_map.get(sector, 0.0)
         dv1w_cr     = dv1w_cr_map.get(sector, float("nan"))
 
-        # ── Signal classification ──────────────────────────────────────────────
-        # Z-Score >= 1.0: delivery VALUE is statistically above normal (top ~16% of days)
-        # Z-Score <= -0.5: delivery VALUE below normal
-        # pct_surge: delivery PERCENTAGE above own 100D avg — the conviction quality check.
-        # When volume spikes (12–20× normal) with BELOW-AVERAGE delivery%, absolute
-        # delivery value rises mechanically, but institutions are NOT accumulating —
-        # speculators are trading intraday and squaring off. pct_surge catches this.
-        # Price: cumulative 1W return (not average daily — proper compounding)
+        # ── Signal classification — two-layer evidence model ──────────────────
+        #
+        # Layer 1 (today's snapshot): z_score >= 1.0 = delivery value statistically above norm.
+        # Layer 2 (sustained evidence): 5-day avg delivery ratio must also support the signal.
+        #
+        # ACCUMULATION requires BOTH today's z AND sustained 5-day flow:
+        #   Confirmed:  z >= 1.0  AND  dv5d >= 1.15  (today elevated + recent week elevated)
+        #   Extreme:    z >= 2.0  AND  dv5d >= 0.9   (exceptional event, background neutral+)
+        #   → Prevents: sector distributing for 5 days, single spike → "Confirmed Accumulation"
+        #
+        # DISTRIBUTION requires BOTH today's weakness AND sustained weakness:
+        #   Confirmed:  z <= -0.5 AND  dv5d <= 0.90  (today weak + recent week weak)
+        #   → Prevents: sector accumulating for 5 days, quiet session → "Distribution Trap"
+        #
+        # WEAKENING (mild warning) stays single-day — it's a caution, not a trade signal.
+        # VOLUME SPIKE stays single-day — by definition it's a one-session anomaly.
+        #
+        # pct_surge: delivery PERCENTAGE vs 100D avg — catches speculative intraday volume.
+        # When turnover surges but delivery% falls, institutions are NOT accumulating.
         today_wtd_pct = float(row.get("today_wtd_deliv_pct",   float("nan")))
         avg_wtd_pct   = float(row.get("avg_wtd_deliv_pct_100d", float("nan")))
 
         d_surge = z_score >= 1.0
         d_weak  = z_score <= -0.5
-        p_up    = (not pd.isna(p1w)) and p1w > 1.0    # 1W cumulative > +1%
-        p_down  = (not pd.isna(p1w)) and p1w < -1.0   # 1W cumulative < -1%
+        p_up    = (not pd.isna(p1w)) and p1w > 1.0
+        p_down  = (not pd.isna(p1w)) and p1w < -1.0
 
-        # pct_surge: delivery % has NOT fallen significantly below its 100D average.
-        # 15% tolerance buffer: only flag as Volume Spike when delivery% dropped
-        # MORE than 15% below avg (ratio < 0.85). Marginal deviations (e.g. 98% of avg)
-        # are treated as normal — not penalised as speculative.
-        # Falls back to True (benefit of doubt) when no baseline exists.
         if not pd.isna(today_wtd_pct) and not pd.isna(avg_wtd_pct) and avg_wtd_pct > 0:
             pct_surge = today_wtd_pct >= avg_wtd_pct * 0.85
         else:
             pct_surge = True
 
-        if d_surge and pct_surge:
+        # Two-layer signal gates
+        d_surge_confirmed = (d_surge and dv5d >= 1.15) or (z_score >= 2.0 and dv5d >= 0.9)
+        d_weak_confirmed  = d_weak and dv5d <= 0.90
+
+        if d_surge_confirmed and pct_surge:
             if p_down:
                 signal = "🔥 Secret Accumulation"
                 action = "STRONG BUY — Institutions loading while retail panics"
@@ -218,19 +241,21 @@ def get_sector_rotation(
                 signal = "👀 Early Accumulation"
                 action = "WATCH — Institutional flow above norm, price not confirmed yet"
         elif d_surge and not pct_surge:
-            # Delivery VALUE up but delivery PERCENTAGE down >15% — volume spike, not conviction
+            # Delivery VALUE surged but PERCENTAGE fell >15% — speculative volume, not conviction.
+            # Kept as single-day check by design: Volume Spike IS a one-session anomaly.
             pct_str  = f"{today_wtd_pct:.1f}%" if not pd.isna(today_wtd_pct) else "?"
             avg_str  = f"{avg_wtd_pct:.1f}%"   if not pd.isna(avg_wtd_pct)   else "?"
             drop_pct = (avg_wtd_pct - today_wtd_pct) / avg_wtd_pct * 100 if avg_wtd_pct > 0 else 0
             signal = "📊 Volume Spike"
             action = f"CAUTION — Delivery% ({pct_str}) is {drop_pct:.0f}% below 100D avg ({avg_str}); turnover surged but conviction fell; speculative, not institutional accumulation"
-        elif p_up and d_weak:
+        elif p_up and d_weak_confirmed:
             signal = "⚠️ Distribution Trap"
             action = "EXIT / AVOID — Institutions selling into retail rally"
-        elif p_down and d_weak:
+        elif p_down and d_weak_confirmed:
             signal = "❌ Active Selling"
             action = "AVOID — Broad institutional exit, no floor visible yet"
         elif d_weak:
+            # Single-day delivery weakness: mild caution only, not a reversal signal
             signal = "📉 Weakening"
             action = "REDUCE — Institutional flow below norm, conviction fading"
         else:
@@ -287,6 +312,7 @@ def get_sector_rotation(
             "horizon":              horizon,
             "coverage":             coverage,
             "dv_ratio":             round(dv_ratio,  3),
+            "dv_ratio_5d":          round(dv_ratio_5d, 3) if not pd.isna(dv_ratio_5d) else None,
             "z_score":              round(z_score,   2),
             "breadth":              round(breadth,   3) if not pd.isna(breadth)  else None,
             "trend_slope":          round(trend_slope, 3),
@@ -298,6 +324,7 @@ def get_sector_rotation(
             "deliv_val_1w_cr":      round(dv1w_cr,  1) if not pd.isna(dv1w_cr)  else None,
             "today_wtd_deliv_pct":  round(today_wtd_pct, 1) if not pd.isna(today_wtd_pct) else None,
             "avg_wtd_deliv_pct_100d": round(avg_wtd_pct, 1) if not pd.isna(avg_wtd_pct)  else None,
+            "_dv5d":                dv5d,
             "_dv":                  dv_ratio,
             "_z":                   z_score,
             "_br":                  breadth  if not pd.isna(breadth)  else 0.5,
@@ -330,12 +357,14 @@ def get_sector_rotation(
     result["nifty_1m"] = n50["1m"]
     result["nifty_3m"] = n50["3m"]
 
-    # ── Score: same 5-factor cross-sectional formula as Sector Performance ─────
-    # 35% DV Ratio + 25% Breadth + 20% Z-Score + 10% Price 1W + 10% Trend slope
+    # ── Score: consistent with Sector Performance 6-factor formula ──────────────
+    # 30% 5-day avg DV (sustained) + 20% today DV (freshness) + 20% Breadth +
+    # 10% Z-Score + 10% Price 1W + 10% Trend slope
     result["accum_score"] = (
-        _normalize(result["_dv"])    * 35 +
-        _normalize(result["_br"])    * 25 +
-        _normalize(result["_z"])     * 20 +
+        _normalize(result["_dv5d"])  * 30 +
+        _normalize(result["_dv"])    * 20 +
+        _normalize(result["_br"])    * 20 +
+        _normalize(result["_z"])     * 10 +
         _normalize(result["_pm"])    * 10 +
         _normalize(result["_slope"]) * 10
     ).round(1)
