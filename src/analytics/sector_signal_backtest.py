@@ -198,9 +198,12 @@ def get_sector_signal_log(
     df = _compute_forward_returns(df, fwd_days=fwd_days)
     df = _classify_outcomes(df, fwd_days=fwd_days)
 
-    # Keep only the `lookback_dates` most recent trading dates
+    # Keep only the `lookback_dates` most recent trading dates.
+    # df["trade_date"].unique() yields pandas Timestamps; as_of_date is a
+    # datetime.date — normalize to Timestamp so the comparison doesn't raise.
+    as_of_ts = pd.Timestamp(as_of_date)
     all_dates = sorted(df["trade_date"].unique())
-    eval_dates = [d for d in all_dates if d <= as_of_date]
+    eval_dates = [d for d in all_dates if d <= as_of_ts]
     eval_dates = set(eval_dates[-lookback_dates:])
 
     result = df[df["trade_date"].isin(eval_dates)].copy()

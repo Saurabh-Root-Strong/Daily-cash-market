@@ -425,7 +425,13 @@ def _trend_chart(hist: pd.DataFrame, sector: str, signal: str) -> go.Figure:
 _AVOID_SIGNAL_SET = {"⚠️ Distribution Trap", "❌ Active Selling", "📉 Weakening"}
 
 
-def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> None:
+# Per-stock drill-down list shows only stocks whose 7D turnover-weighted
+# delivery % exceeds this floor (user-defined cut for "real delivery").
+_MIN_STOCK_WTD_DELIV_PCT = 48.0
+
+
+def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
+                 deliv_threshold: float = _MIN_STOCK_WTD_DELIV_PCT) -> None:
     meta       = _SIGNAL_META.get(row["signal"], {})
     color      = meta.get("color", "#888")
     score      = row["accum_score"]
@@ -642,8 +648,19 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float) -> No
                             "deliv_value_cr", "turnover_cr", "price_chg_pct"]
             display_cols = [c for c in display_cols if c in stocks.columns]
 
+            # Show only stocks with 7D turnover-weighted delivery % above the floor.
+            # Conviction + dominance/top-3 context above stay on the full sector set.
+            shown = stocks[stocks["wtd_deliv_per"] > deliv_threshold]
+            n_hidden = len(stocks) - len(shown)
+            if n_hidden:
+                st.caption(
+                    f"Showing {len(shown)} of {len(stocks)} stocks — "
+                    f"Wtd Deliv % > {deliv_threshold:.0f}% "
+                    f"({n_hidden} below threshold hidden)."
+                )
+
             st.dataframe(
-                stocks[display_cols],
+                shown[display_cols],
                 hide_index=True,
                 use_container_width=True,
                 column_config={
@@ -920,6 +937,15 @@ def _render_custom_range(all_dates: list, min_turnover: float) -> None:
         "Sorted by delivery value (highest institutional activity first)."
     )
 
+    # Per-stock delivery filter for the drill-down tables below.
+    cr_deliv_threshold = st.slider(
+        "Min stock Avg Delivery % — filters the per-stock lists below",
+        min_value=0, max_value=100, value=int(_MIN_STOCK_WTD_DELIV_PCT), step=1,
+        key="cr_stock_deliv_threshold",
+        help="Hide stocks whose period turnover-weighted delivery % is at or below this value. "
+             "The Top Performers / Laggards summary still uses the full stock set.",
+    )
+
     phase_order = ["Leading", "Improving", "Neutral", "Weakening", "Lagging"]
     for phase in phase_order:
         grp = df[df["phase"] == phase].reset_index(drop=True)
@@ -984,8 +1010,19 @@ def _render_custom_range(all_dates: list, min_turnover: float) -> None:
                                 unsafe_allow_html=True,
                             )
 
+                # Filter the table by period delivery % (summary above uses full set).
+                cr_shown = stocks[stocks["wtd_deliv_per"] > cr_deliv_threshold] \
+                    if "wtd_deliv_per" in stocks.columns else stocks
+                cr_hidden = len(stocks) - len(cr_shown)
+                if cr_hidden:
+                    st.caption(
+                        f"Showing {len(cr_shown)} of {len(stocks)} stocks — "
+                        f"Avg Deliv % > {cr_deliv_threshold:.0f}% "
+                        f"({cr_hidden} below threshold hidden)."
+                    )
+
                 st.dataframe(
-                    stocks,
+                    cr_shown,
                     hide_index=True,
                     use_container_width=True,
                     column_config={
@@ -1625,6 +1662,16 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
 
     st.markdown("---")
 
+    # Per-stock delivery filter — controls every "View stocks in …" drill-down below.
+    deliv_threshold = st.slider(
+        "Min stock Wtd Delivery % — filters the per-stock lists below",
+        min_value=0, max_value=100, value=int(_MIN_STOCK_WTD_DELIV_PCT), step=1,
+        key="rotation_stock_deliv_threshold",
+        help="Hide stocks whose 7-day turnover-weighted delivery % is at or below this value "
+             "inside the 'View stocks in …' expanders. Sector-level stats (top-3 contributors, "
+             "single-stock dominance warning) still use the full stock set.",
+    )
+
     col_enter, col_avoid = st.columns(2)
 
     _HIGH_CONV = 70
@@ -1645,7 +1692,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                         unsafe_allow_html=True,
                     )
                     shown_divider = True
-                _sector_card(row, selected_date, min_turnover)
+                _sector_card(row, selected_date, min_turnover, deliv_threshold)
 
     with col_avoid:
         st.markdown("### 🔴 SECTORS TO AVOID / EXIT")
@@ -1663,7 +1710,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                         unsafe_allow_html=True,
                     )
                     shown_divider = True
-                _sector_card(row, selected_date, min_turnover)
+                _sector_card(row, selected_date, min_turnover, deliv_threshold)
 
     if not caution.empty:
         st.markdown("---")
@@ -1674,7 +1721,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             "Do not buy based on delivery value alone."
         )
         for _, row in caution.iterrows():
-            _sector_card(row, selected_date, min_turnover)
+            _sector_card(row, selected_date, min_turnover, deliv_threshold)
 
     st.markdown("---")
 
