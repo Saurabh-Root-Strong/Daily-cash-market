@@ -127,22 +127,11 @@ def _fmt(val, dec: int = 2) -> str:
     return f"{'+'if val>0 else ''}{val:.{dec}f}%"
 
 
-def _normalize(s: pd.Series) -> pd.Series:
-    mn, mx = s.min(), s.max()
-    return (s - mn) / (mx - mn + 1e-9)
-
-
-def _rank01(s: pd.Series) -> pd.Series:
-    """Cross-sectional percentile rank in [0,1]; missing → 0.5 (neutral).
-
-    Outlier-robust and comparable across days, unlike min-max. A 348-day factor
-    study (scripts/sector_score_compare.py) showed this rank blend with price
-    momentum up-weighted beats the old min-max score at every 5/10/20-day horizon.
-    Note: ranking absolute price momentum is identical to ranking RS-vs-Nifty
-    within a day (subtracting the same index return preserves order), so this
-    captures the relative-strength edge without needing an index fetch here.
-    """
-    return s.rank(pct=True).fillna(0.5)
+# Shared normalizers live in analytics.base (deduped). Note: ranking absolute
+# price momentum is identical to ranking RS-vs-Nifty within a day (subtracting
+# the same index return preserves order), so rank01 captures the relative-strength
+# edge here without an index fetch.
+from src.analytics.base import minmax01 as _normalize, rank01 as _rank01
 
 
 # ── Column header with hover tooltip ─────────────────────────────────────────

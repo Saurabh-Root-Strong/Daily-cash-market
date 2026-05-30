@@ -29,12 +29,7 @@ from src.dashboard.cache.queries import (
     cached_sector_stocks_rotation,
 )
 from src.dashboard.constants import NEGATIVE_COLOR, POSITIVE_COLOR, PLOT_BG, PAPER_BG, GRID_COLOR
-
-def _hex_to_rgba(hex_color: str, alpha: float = 0.12) -> str:
-    """Convert #rrggbb hex to rgba(r,g,b,alpha) for Plotly fillcolor."""
-    h = hex_color.lstrip("#")
-    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
-    return f"rgba({r},{g},{b},{alpha})"
+from src.dashboard.components.charts import hex_to_rgba as _hex_to_rgba  # deduped helper
 
 
 _SIGNAL_META = {

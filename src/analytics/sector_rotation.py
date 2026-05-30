@@ -82,20 +82,9 @@ def _slope(series: pd.Series) -> float:
     return float(slope / mean * 100)
 
 
-def _normalize(s: pd.Series) -> pd.Series:
-    mn, mx = s.min(), s.max()
-    return (s - mn) / (mx - mn + 1e-9)
-
-
-def _rank01(s: pd.Series) -> pd.Series:
-    """Cross-sectional percentile rank in [0,1]; missing values → 0.5 (neutral).
-
-    Distribution-free, so one outlier sector can't crush the rest toward 0 (the
-    min-max failure mode), and the score means the same thing every day. A factor
-    diagnostic on 348 days showed this rank blend + relative-strength beats the
-    old min-max score at every 5/10/20-day horizon (see scripts/sector_score_compare.py).
-    """
-    return s.rank(pct=True).fillna(0.5)
+# Shared normalizers live in analytics.base (deduped — were copied here and in
+# the Sector Performance view). Aliased to keep existing call sites unchanged.
+from src.analytics.base import minmax01 as _normalize, rank01 as _rank01  # noqa: E402
 
 
 def get_sector_rotation(
