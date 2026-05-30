@@ -792,16 +792,22 @@ def _sig_fii_institutional(ctx: MarketContext) -> Optional[IndexSignal]:
     tag  = f" [FAO {ctx.fao_date.strftime('%d %b')}{', ' + str(lag) + 'd lag' if lag else ''}]"
     dii_txt = f" | DII: {dii:+,}" if dii != 0 else ""
 
-    # Additional context: FII also long stocks = market-neutral overlay (softens bearish)
+    # Hedge awareness: an FII index-futures SHORT that is offset by net-long stock
+    # futures is a market-neutral HEDGE, not a directional bearish bet. The
+    # diagnostic showed FII-short signals firing bearish on ~100% of days (FIIs are
+    # structurally short index futs against cash longs), with no predictive edge.
+    # When the hedge pattern is present, dampen the bearish magnitude to 40%.
+    is_hedge = bool(ctx.fii_stock_fut_net_cr and ctx.fii_stock_fut_net_cr > 500)
+    bear_mult = 0.4 if is_hedge else 1.0
     neutral_note = ""
-    if ctx.fii_stock_fut_net_cr and ctx.fii_stock_fut_net_cr > 500:
+    if is_hedge:
         neutral_note = (f" Note: FII also net BUYING stock futures (+Rs{ctx.fii_stock_fut_net_cr:,.0f}Cr) "
-                        "= index short is partial hedge, not pure bearish directional.")
+                        "= index short is a hedge, not pure bearish — score dampened.")
 
     FII_T, CLI_T = 80_000, 100_000
     if fii < -FII_T and cli > CLI_T:
         return IndexSignal("FII Short vs Retail Long — Smart Money BEARISH",
-            "Institutional", -1, -3.0,
+            "Institutional", -1, round(-3.0 * bear_mult, 2),
             f"FII {fii:+,} | Client {cli:+,}{tag}",
             f"FII {abs(fii):,} net SHORT vs Client net LONG {cli:,}{dii_txt}. "
             "Institutional-retail divergence resolves in FII's direction (>90% historical rate). "
@@ -814,7 +820,7 @@ def _sig_fii_institutional(ctx: MarketContext) -> Optional[IndexSignal]:
             "Smart money bullish vs retail shorts — short squeeze setup.", "🐂")
     if fii < -FII_T:
         return IndexSignal("FII Net Short — Institutional Bearish Bias",
-            "Institutional", -1, -2.0,
+            "Institutional", -1, round(-2.0 * bear_mult, 2),
             f"FII Net {fii:+,} contracts (SHORT){tag}",
             f"FII carrying {abs(fii):,} net short index futures{dii_txt}.{neutral_note} "
             "Institutional short position creates overhead pressure on rallies.", "📉")
@@ -838,11 +844,15 @@ def _sig_fii_options_delta(ctx: MarketContext) -> Optional[IndexSignal]:
             f"FII net LONG {cn:,} calls vs LONG {pn:,} puts. "
             "Options delta +{delta:,} = institutional upside bias via options.", "📊")
     if delta < -150_000:
+        # Score 0.0 (context-only): FII run a permanent net-long-put book as
+        # downside insurance on cash holdings, so this fires ~every day (148/152
+        # in the diagnostic) with no directional edge — a constant, like the
+        # entropy bug. Display it for context but don't vote it into the sum.
         return IndexSignal("FII Options Bearish — Heavy Put Hedge",
-            "Institutional", -1, -1.5, f"FII Options Delta {delta:,}{tag}",
+            "Institutional", -1, 0.0, f"FII Options Delta {delta:,}{tag}",
             f"FII net LONG {pn:,} puts vs SHORT {abs(cn):,} calls. "
-            f"Options delta {delta:,} = FII deeply hedged against downside. "
-            "Institutional put loading signals expected decline.", "🛡️")
+            f"Options delta {delta:,} = FII structurally hedged against downside "
+            "(standing put book, not a fresh directional bet).", "🛡️")
     return None
 
 
@@ -1386,17 +1396,23 @@ def _sig_entropy_regime(regime) -> Optional[IndexSignal]:
     pe    = regime.perm_entropy
     label = regime.entropy_label
 
+    # Entropy is a CONFIDENCE modifier, not a directional vote. It is already
+    # applied to confidence via regime.entropy_conf in _compute_verdict. Its
+    # composite SCORE must be 0.0 — a non-zero score here silently votes a
+    # direction on every chaotic/ordered day (the diagnostic found it firing
+    # bearish 152/152 days, anchoring the whole engine bearish). Keep the signal
+    # for UI/context display, but contribute nothing to the directional sum.
     if label == "Ordered":
         return IndexSignal(
             "Entropy: Low — Ordered / Predictable Market", "Statistical Regime",
-            0, 0.8,   # slight positive: ordered markets have persistent structure
+            0, 0.0,
             f"PE={pe:.4f} — High Predictability (Ordered Patterns)",
             regime.entropy_note, "🎯",
         )
     if label == "Chaotic":
         return IndexSignal(
             "Entropy: High — Chaotic / Unpredictable Market", "Statistical Regime",
-            0, -0.8,  # slight negative: uncertainty raises risk premium
+            0, 0.0,
             f"PE={pe:.4f} — Low Predictability (Disordered Patterns)",
             regime.entropy_note, "🌪️",
         )
@@ -1458,6 +1474,34 @@ def _sig_memory_engine(mem) -> Optional[IndexSignal]:
             f"{mem.memory_note}  Historical accuracy: {acc:.0%}.", "⚠️",
         )
     return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# COMPOSITE AGGREGATION
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# Seven "Institutional" signals (FII institutional / options-delta / flow /
+# 5D-cumulative / OI-buildup / position-change / short-squeeze) all read the same
+# underlying fact: FII index-futures positioning. FIIs are structurally net-short
+# index futures as a hedge on their cash longs, so these signals are highly
+# collinear and almost always fire together in the same direction. Summing them
+# raw over-counts ONE fact up to 7× and anchors the engine permanently bearish
+# (the per-signal diagnostic confirmed several firing 100% of days, all bearish).
+# We cap the NET institutional contribution so it counts as one strong vote.
+_INSTITUTIONAL_CAP = 3.0
+
+
+def _aggregate_composite(signals: list[IndexSignal]) -> float:
+    """Composite directional score with the collinear Institutional block capped.
+
+    Non-institutional signals sum normally; the institutional signals are summed
+    then clamped to ±_INSTITUTIONAL_CAP before being added. This removes the
+    structural over-counting without discarding institutional information.
+    """
+    inst  = sum(s.score for s in signals if s.category == "Institutional")
+    other = sum(s.score for s in signals if s.category != "Institutional")
+    inst_capped = max(-_INSTITUTIONAL_CAP, min(_INSTITUTIONAL_CAP, inst))
+    return float(other + inst_capped)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1798,7 +1842,7 @@ def _compute_prediction(
     #         This gives us the actual direction to pass to the memory engine
     #         so confirms_prediction is meaningful.
     entropy_conf = float(regime.entropy_conf) if regime and not regime.error else 1.0
-    composite_prelim = float(sum(s.score for s in sigs))
+    composite_prelim = _aggregate_composite(sigs)
     direction_prelim, _, _, _, _, _ = _compute_verdict(
         composite_prelim, sigs, pcr, carry_pct_ann, dte_options,
         spot_close, levels, market_ctx, entropy_conf=entropy_conf,
@@ -1829,7 +1873,7 @@ def _compute_prediction(
         pass   # Memory engine is supplementary — never blocks core prediction
 
     # Pass 2: recompute composite + final verdict including Signal 24
-    composite = float(sum(s.score for s in sigs))
+    composite = _aggregate_composite(sigs)
     sigs.sort(key=lambda s: abs(s.score), reverse=True)
 
     direction, confidence, color, headline, driver, risk = _compute_verdict(
