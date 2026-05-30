@@ -27,6 +27,16 @@ from src.dashboard.constants import (
 
 
 # ── Color helpers ─────────────────────────────────────────────────────────────
+def hex_to_rgba(hex_color: str, alpha: float = 0.12) -> str:
+    """Convert #rrggbb hex to rgba(r,g,b,alpha) for Plotly fillcolor.
+
+    Shared home for this helper (was duplicated in the sector_rotation view).
+    """
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
+
+
 def _sign_color(val) -> str:
     if val is None or (hasattr(val, "__float__") and pd.isna(float(val))):
         return NEUTRAL_COLOR
