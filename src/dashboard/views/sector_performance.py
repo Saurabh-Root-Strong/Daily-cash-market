@@ -132,6 +132,19 @@ def _normalize(s: pd.Series) -> pd.Series:
     return (s - mn) / (mx - mn + 1e-9)
 
 
+def _rank01(s: pd.Series) -> pd.Series:
+    """Cross-sectional percentile rank in [0,1]; missing → 0.5 (neutral).
+
+    Outlier-robust and comparable across days, unlike min-max. A 348-day factor
+    study (scripts/sector_score_compare.py) showed this rank blend with price
+    momentum up-weighted beats the old min-max score at every 5/10/20-day horizon.
+    Note: ranking absolute price momentum is identical to ranking RS-vs-Nifty
+    within a day (subtracting the same index return preserves order), so this
+    captures the relative-strength edge without needing an index fetch here.
+    """
+    return s.rank(pct=True).fillna(0.5)
+
+
 # ── Column header with hover tooltip ─────────────────────────────────────────
 def _header_cell(col, label: str, tooltip: str | None = None, bold: bool = True) -> None:
     if tooltip:
@@ -348,8 +361,6 @@ def _compute_outlook(df: pd.DataFrame) -> pd.DataFrame:
 
     daily_100d = (out["100D_deliv_cr"] / 100).replace(0, float("nan"))
     norm_1w = (out["1W_deliv_cr"] / 5)  / daily_100d   # 5-day avg vs own 100D daily mean
-    norm_2w = (out["2W_deliv_cr"] / 10) / daily_100d
-    norm_1m = (out["1M_deliv_cr"] / 22) / daily_100d
 
     # Keep 5-day avg as a named output column for tooltips and chart hover
     out["dv_ratio_5d"] = norm_1w.round(2)
@@ -359,19 +370,18 @@ def _compute_outlook(df: pd.DataFrame) -> pd.DataFrame:
     out["_dv"]   = out["dv_ratio"].fillna(1.0)       # Today's DV  (freshness, 20%) — responsive
     out["_br"]   = out["breadth"].fillna(0.5)         # Breadth today (20%)
     out["_z"]    = out["z_score"].fillna(0.0)         # Z-Score today  (10%)
-    out["_pm"]   = out.get("2W_price_chg_pct", out["1W_price_chg_pct"])  # Price trend (10%)
-    out["_acc"]  = (                                  # Delivery acceleration (10%)
-        (norm_1w > norm_2w).astype(float) +
-        (norm_2w > norm_1m).astype(float)
-    )
+    out["_pm"]   = out.get("2W_price_chg_pct", out["1W_price_chg_pct"])  # Price/RS momentum
 
+    # Cross-sectional rank blend (rebuilt from a 348-day factor study):
+    #   30% price momentum (≡ relative-strength rank intraday — strongest predictor),
+    #   25% sustained 5-day delivery, 15% today's delivery, 15% breadth, 15% z-score.
+    # Replaces the old min-max blend; drops delivery-acceleration (unvalidated, weak).
     out["Score"] = (
-        _normalize(out["_dv5d"]) * 30 +   # Sustained 5-day flow: primary driver
-        _normalize(out["_dv"])   * 20 +   # Today's DV: freshness/confirmation
-        _normalize(out["_br"])   * 20 +   # Breadth: sector-wide participation today
-        _normalize(out["_z"])    * 10 +   # Z-Score: statistical abnormality today
-        _normalize(out["_pm"])   * 10 +   # Price trend confirmation
-        _normalize(out["_acc"])  * 10     # Delivery acceleration
+        _rank01(out["_pm"])   * 30 +   # Price/relative-strength momentum: top driver
+        _rank01(out["_dv5d"]) * 25 +   # Sustained 5-day flow (differentiated edge)
+        _rank01(out["_dv"])   * 15 +   # Today's DV: freshness/confirmation
+        _rank01(out["_br"])   * 15 +   # Breadth: sector-wide participation today
+        _rank01(out["_z"])    * 15     # Z-Score: statistical abnormality today
     ).round(1)
 
     def _sig(row) -> str:

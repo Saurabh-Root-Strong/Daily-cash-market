@@ -87,6 +87,17 @@ def _normalize(s: pd.Series) -> pd.Series:
     return (s - mn) / (mx - mn + 1e-9)
 
 
+def _rank01(s: pd.Series) -> pd.Series:
+    """Cross-sectional percentile rank in [0,1]; missing values → 0.5 (neutral).
+
+    Distribution-free, so one outlier sector can't crush the rest toward 0 (the
+    min-max failure mode), and the score means the same thing every day. A factor
+    diagnostic on 348 days showed this rank blend + relative-strength beats the
+    old min-max score at every 5/10/20-day horizon (see scripts/sector_score_compare.py).
+    """
+    return s.rank(pct=True).fillna(0.5)
+
+
 def get_sector_rotation(
     as_of_date: date,
     min_turnover_lacs: Optional[float] = None,
@@ -357,16 +368,24 @@ def get_sector_rotation(
     result["nifty_1m"] = n50["1m"]
     result["nifty_3m"] = n50["3m"]
 
-    # ── Score: consistent with Sector Performance 6-factor formula ──────────────
-    # 30% 5-day avg DV (sustained) + 20% today DV (freshness) + 20% Breadth +
-    # 10% Z-Score + 10% Price 1W + 10% Trend slope
+    # ── Score: cross-sectional rank blend, relative-strength-aware ──────────────
+    # Rebuilt from a 348-day factor study (scripts/sector_score_compare.py):
+    #   • RS vs Nifty is the single strongest predictor — it was computed here but
+    #     previously DISCARDED from the score. Now the top weight (30%).
+    #   • Rank (not min-max) normalization → outlier-robust + comparable across days.
+    #   • Trend slope dropped — it had ~0 information coefficient at every horizon.
+    # New IC beat the old min-max score at 5/10/20d (e.g. 20d: +0.165 vs +0.140).
+    #
+    # 30% RS vs Nifty (2W) + 25% 5-day avg DV + 15% today DV +
+    # 15% Breadth + 15% Z-Score
+    # RS falls back to raw 1W price momentum when index data is unavailable.
+    rs_col = result["rs_2w"] if result["rs_2w"].notna().any() else result["_pm"]
     result["accum_score"] = (
-        _normalize(result["_dv5d"])  * 30 +
-        _normalize(result["_dv"])    * 20 +
-        _normalize(result["_br"])    * 20 +
-        _normalize(result["_z"])     * 10 +
-        _normalize(result["_pm"])    * 10 +
-        _normalize(result["_slope"]) * 10
+        _rank01(rs_col)            * 30 +
+        _rank01(result["_dv5d"])   * 25 +
+        _rank01(result["_dv"])     * 15 +
+        _rank01(result["_br"])     * 15 +
+        _rank01(result["_z"])      * 15
     ).round(1)
 
     result = result.drop(columns=[c for c in result.columns if c.startswith("_")])
