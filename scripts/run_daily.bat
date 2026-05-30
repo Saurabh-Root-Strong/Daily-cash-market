@@ -27,6 +27,6 @@ python -c "from src.data.repository import query_dataframe; from datetime import
 REM ── Upload snapshot to GitHub Releases (for mobile / Streamlit Cloud access) ─
 REM   Requires GITHUB_TOKEN and GITHUB_REPO in Windows Environment Variables.
 REM   Skip silently if not configured (upload_snapshot.py handles missing vars).
-echo [%date% %time%] Uploading snapshot to GitHub... >> logs\scheduler.log
-python scripts\upload_snapshot.py >> logs\scheduler.log 2>&1
+echo [%date% %time%] Uploading slim snapshot to GitHub... >> logs\scheduler.log
+python scripts\upload_snapshot.py --days 120 >> logs\scheduler.log 2>&1
 echo [%date% %time%] Done. >> logs\scheduler.log
