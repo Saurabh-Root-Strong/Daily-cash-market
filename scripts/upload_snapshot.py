@@ -9,7 +9,13 @@ Environment variables (set in Windows Environment Variables or .env):
   GITHUB_REPO   — "username/repo-name"  (can be a separate public data repo)
 
 Run manually:
-  python scripts/upload_snapshot.py
+  python scripts/upload_snapshot.py                 # full DB
+  python scripts/upload_snapshot.py --days 120      # slim: last 120 days only
+
+SLIM MODE (--days N): the full DuckDB is ~500 MB and would OOM Streamlit
+Community Cloud's ~1 GB RAM container. --days builds a compact copy containing
+only the last N days of each time-series table (reference/log tables kept whole),
+which compresses to well under 100 MB. Recommended for cloud deployment.
 """
 from __future__ import annotations
 
@@ -17,6 +23,7 @@ import gzip
 import io
 import os
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -26,6 +33,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
 _RELEASE_TAG = "latest-data"
 _ASSET_NAME  = "market.duckdb.gz"
+
+# Tables copied in FULL even in slim mode (small reference/learning data).
+# prediction_log is the memory engine's history — tiny but must stay complete.
+_KEEP_FULL_TABLES = {"sector_master", "prediction_log", "run_log"}
 
 
 def _find_db() -> Path | None:
@@ -54,7 +65,77 @@ def _find_db() -> Path | None:
     return None
 
 
-def upload_snapshot(quiet: bool = False) -> bool:
+def _build_slim_db(src_path: Path, days: int, quiet: bool) -> Path | None:
+    """
+    Build a compact copy of the DuckDB holding only the last `days` calendar days
+    of each time-series table (per-table cutoff = that table's own MAX(trade_date)
+    − days). Reference/log tables in _KEEP_FULL_TABLES are copied whole.
+
+    Source is attached READ_ONLY so this is safe to run alongside the dashboard.
+    Returns the slim file path, or None on failure.
+    """
+    try:
+        import duckdb
+    except ImportError:
+        if not quiet:
+            print("[snapshot] duckdb not available — cannot build slim snapshot")
+        return None
+
+    slim_path = Path(tempfile.gettempdir()) / "market_slim.duckdb"
+    if slim_path.exists():
+        slim_path.unlink()
+
+    con = None
+    try:
+        con = duckdb.connect(str(slim_path))
+        con.execute(f"ATTACH '{src_path.as_posix()}' AS src (READ_ONLY)")
+
+        tables = [r[0] for r in con.execute(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_catalog = 'src' AND table_schema = 'main'"
+        ).fetchall()]
+
+        for t in tables:
+            cols = [r[0] for r in con.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_catalog = 'src' AND table_schema = 'main' "
+                "AND table_name = ?", [t],
+            ).fetchall()]
+
+            if t in _KEEP_FULL_TABLES or "trade_date" not in cols:
+                con.execute(f'CREATE TABLE main."{t}" AS SELECT * FROM src.main."{t}"')
+                kept = "full"
+            else:
+                con.execute(
+                    f'CREATE TABLE main."{t}" AS SELECT * FROM src.main."{t}" '
+                    f'WHERE trade_date >= '
+                    f'(SELECT MAX(trade_date) FROM src.main."{t}") - INTERVAL {int(days)} DAY'
+                )
+                kept = f"last {days}d"
+            if not quiet:
+                n = con.execute(f'SELECT COUNT(*) FROM main."{t}"').fetchone()[0]
+                print(f"[snapshot]   {t:<26} {kept:<10} {n:>10,} rows")
+
+        con.execute("DETACH src")
+        con.close()
+        con = None
+
+        # Reclaim free pages so the file on disk is actually compact
+        con2 = duckdb.connect(str(slim_path))
+        con2.execute("CHECKPOINT")
+        con2.close()
+
+        return slim_path
+    except Exception as exc:
+        if not quiet:
+            print(f"[snapshot] Slim build failed: {exc}")
+        if con is not None:
+            try: con.close()
+            except Exception: pass
+        return None
+
+
+def upload_snapshot(quiet: bool = False, days: int | None = None) -> bool:
     token = os.environ.get("GITHUB_TOKEN", "")
     repo  = os.environ.get("GITHUB_REPO", "")
 
@@ -63,11 +144,24 @@ def upload_snapshot(quiet: bool = False) -> bool:
             print("[snapshot] GITHUB_TOKEN or GITHUB_REPO not set — skipping upload")
         return False
 
-    db_path = _find_db()
-    if not db_path:
+    source_db = _find_db()
+    if not source_db:
         if not quiet:
             print("[snapshot] DuckDB file not found — skipping upload")
         return False
+
+    # Slim mode: build a compact last-N-days copy to fit cloud RAM limits.
+    slim_tmp: Path | None = None
+    if days is not None:
+        if not quiet:
+            print(f"[snapshot] Building slim snapshot (last {days} days)...")
+        slim_tmp = _build_slim_db(source_db, days, quiet)
+        if slim_tmp is None:
+            print("[snapshot] Slim build failed — aborting (not uploading full DB).")
+            return False
+        db_path = slim_tmp
+    else:
+        db_path = source_db
 
     db_mb = db_path.stat().st_size / 1024 / 1024
     if not quiet:
@@ -80,6 +174,11 @@ def upload_snapshot(quiet: bool = False) -> bool:
             gz.write(fh.read())
     compressed = buf.getvalue()
     comp_mb = len(compressed) / 1024 / 1024
+
+    # Slim temp file no longer needed once compressed into memory
+    if slim_tmp is not None:
+        try: slim_tmp.unlink()
+        except Exception: pass
 
     if not quiet:
         print(f"[snapshot] Compressed to {comp_mb:.1f} MB "
@@ -158,7 +257,20 @@ def upload_snapshot(quiet: bool = False) -> bool:
         return False
 
 
+def _parse_days(argv: list[str]) -> int | None:
+    """Parse --days N (or --days=N). Returns None if absent (full upload)."""
+    for i, a in enumerate(argv):
+        if a == "--days" and i + 1 < len(argv):
+            try: return int(argv[i + 1])
+            except ValueError: return None
+        if a.startswith("--days="):
+            try: return int(a.split("=", 1)[1])
+            except ValueError: return None
+    return None
+
+
 if __name__ == "__main__":
     quiet = "--quiet" in sys.argv
-    success = upload_snapshot(quiet=quiet)
+    days  = _parse_days(sys.argv)
+    success = upload_snapshot(quiet=quiet, days=days)
     sys.exit(0 if success else 1)
