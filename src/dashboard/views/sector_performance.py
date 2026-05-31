@@ -424,8 +424,9 @@ def render(selected_date: date, min_turnover: float) -> None:
     # ── 1-2 Week Outlook ──────────────────────────────────────────────────────
     st.markdown("### 📈 1–2 Week Sector Outlook")
     st.caption(
-        "Score = **30% 5-Day Avg DV** (sustained flow) + **20% Today's DV** (freshness) + "
-        "**20% Breadth** (stock participation) + **10% Z-Score** + **10% Price Trend** + **10% Delivery Acceleration.** "
+        "Score = **30% Price/RS Momentum** (strongest predictor) + **25% 5-Day Avg DV** (sustained flow) + "
+        "**15% Today's DV** (freshness) + **15% Breadth** (stock participation) + **15% Z-Score.** "
+        "Cross-sectional rank — sectors scored relative to each other. "
         "Signal requires sustained 5-day flow — a single-day spike alone cannot trigger Accumulating."
     )
     scored = _compute_outlook(sector_df)
