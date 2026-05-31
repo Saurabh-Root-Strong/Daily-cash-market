@@ -1805,8 +1805,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 "signal":         st.column_config.TextColumn("Signal"),
                 "accum_score":    st.column_config.ProgressColumn(
                     "Score", max_value=100, format="%.0f",
-                    help="Score = 30% 5D Avg DV + 20% DV Today + 20% Breadth + 10% Z-Score + 10% Price 1W + 10% Trend slope\n"
-                         "Cross-sectional: ranks sectors relative to each other on today's data"),
+                    help="Score = 30% RS vs Nifty + 25% 5D Avg DV + 15% DV Today + 15% Breadth + 15% Z-Score\n"
+                         "Cross-sectional rank: ranks sectors relative to each other on today's data"),
                 "coverage":       st.column_config.TextColumn(
                     "Coverage",
                     help="Swing (3–15 days): Z-Score ≥ 2σ + Breadth ≥ 50%\n"
