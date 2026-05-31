@@ -1504,7 +1504,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
 
 **Breadth** — fraction of stocks in the sector where today's delivery exceeds their own 100D average. 70%+ = broad institutional participation.
 
-**Score (0–100):** 30% 5D Avg DV + 20% DV Today + 20% Breadth + 10% Z-Score + 10% 1W Price + 10% Trend slope. Cross-sectional — ranks sectors relative to each other.
+**Score (0–100):** 30% RS vs Nifty + 25% 5D Avg DV + 15% DV Today + 15% Breadth + 15% Z-Score. Cross-sectional — ranks sectors relative to each other.
         """)
 
     with st.spinner("Computing 100-day rotation signals…"):
@@ -1691,20 +1691,40 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
 
     with col_avoid:
         st.markdown("### 🔴 SECTORS TO AVOID / EXIT")
-        st.caption("All distribution/selling signals — highest danger first (lowest score).")
-        if exiting.empty:
-            st.info("No sectors with distribution or selling signal today.")
-        else:
-            shown_divider = False
+        st.caption(
+            "Active distribution/selling signals first; then relative laggards — "
+            "the weakest sectors by score when no genuine distribution exists."
+        )
+
+        # Tier 1 — genuine distribution / selling (real institutional exit, red).
+        if not exiting.empty:
+            st.markdown(
+                "<div style='font-size:11px;font-weight:600;color:#d50000;"
+                "margin-bottom:4px'>ACTIVE DISTRIBUTION / SELLING</div>",
+                unsafe_allow_html=True,
+            )
             for _, row in exiting.iterrows():
-                if not shown_divider and row["accum_score"] > (100 - _HIGH_CONV):
-                    st.markdown(
-                        "<div style='margin:10px 0 6px 0;border-top:1px solid rgba(255,255,255,0.08);"
-                        "padding-top:6px;font-size:11px;color:rgba(255,255,255,0.35);"
-                        "letter-spacing:0.5px'>MILDER SIGNAL</div>",
-                        unsafe_allow_html=True,
-                    )
-                    shown_divider = True
+                _sector_card(row, selected_date, min_turnover, deliv_threshold)
+
+        # Tier 2 — relative laggards: weakest sectors by score, excluding any
+        # already shown in the invest / caution / distribution lists. The absolute
+        # z<=-0.5 distribution gate cannot fire in a strong-delivery regime (z is
+        # positive market-wide), so without this the column would be empty even
+        # when clear underweight candidates exist. These are NOT active selling —
+        # they are the relative weakest in today's cross-section.
+        shown = set(entering["sector"]) | set(caution["sector"]) | set(exiting["sector"])
+        laggards = rot[~rot["sector"].isin(shown)].nsmallest(5, "accum_score")
+
+        if laggards.empty and exiting.empty:
+            st.info("No distribution signals and no clear laggards today.")
+        elif not laggards.empty:
+            st.markdown(
+                "<div style='font-size:11px;font-weight:600;color:#ff9100;"
+                "margin:10px 0 4px 0'>RELATIVE LAGGARDS — weakest by score "
+                "(underweight, not active selling)</div>",
+                unsafe_allow_html=True,
+            )
+            for _, row in laggards.iterrows():
                 _sector_card(row, selected_date, min_turnover, deliv_threshold)
 
     if not caution.empty:
@@ -1769,7 +1789,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
     with st.expander("📋 Full Rotation Table — All Sectors", expanded=False):
         st.caption(
             "All sectors ranked by accumulation score.  "
-            "Score = 30% 5D Avg DV + 20% DV Today + 20% Breadth + 10% Z-Score + 10% 1W Price + 10% Trend slope"
+            "Score = 30% RS vs Nifty + 25% 5D Avg DV + 15% DV Today + 15% Breadth + 15% Z-Score"
         )
         display_cols = ["sector", "signal", "accum_score", "coverage", "horizon",
                         "dv_ratio", "dv_ratio_5d", "z_score", "breadth", "trend_slope",
