@@ -159,12 +159,25 @@ def get_sector_rotation(
         else:
             price_2w_map[sector] = float("nan")
 
+    # ── Cross-sectional z-percentile (regime-proof gate input) ──────────────────
+    # Raw z is INFLATED in a trending-delivery regime (integrity audit: median
+    # ~+3.6, 79% of sectors above z=1, |z|>2 for 74% — vs a healthy ~5%). So the
+    # old absolute gates (z>=1 surge, z<=-0.5 weak) fired for almost everything
+    # and NEVER flagged weakness (empty "Avoid"). Percentile rank across today's
+    # tradable sectors always discriminates and is immune to the trend. The dv5d
+    # ratio (well-behaved) stays as the absolute strength/weakness anchor.
+    _tradable = perf[~perf["sector"].isin(("ETF", "Others"))]
+    _z_pct_map = dict(zip(
+        _tradable["sector"], _tradable["z_score"].rank(pct=True),
+    ))
+
     # ── Build one record per sector ────────────────────────────────────────────
     records = []
     for _, row in perf.iterrows():
         sector = str(row["sector"])
         if sector in ("ETF", "Others"):
             continue
+        z_pct = float(_z_pct_map.get(sector, 0.5))   # 0..1 rank of this sector's z
 
         dv_ratio  = float(row.get("dv_ratio",          float("nan")))
         z_score   = float(row.get("z_score",            float("nan")))
@@ -216,8 +229,12 @@ def get_sector_rotation(
         today_wtd_pct = float(row.get("today_wtd_deliv_pct",   float("nan")))
         avg_wtd_pct   = float(row.get("avg_wtd_deliv_pct_100d", float("nan")))
 
-        d_surge = z_score >= 1.0
-        d_weak  = z_score <= -0.5
+        # Gates use the cross-sectional z-PERCENTILE, not raw z (see note above).
+        #   z_pct >= 0.50  ≈ old "z >= 1.0"   (above-median delivery abnormality)
+        #   z_pct >= 0.90  ≈ old "z >= 2.0"   (extreme — top 10% of sectors today)
+        #   z_pct <= 0.25  ≈ old "z <= -0.5"  (bottom quartile — now actually fires)
+        d_surge = z_pct >= 0.50
+        d_weak  = z_pct <= 0.25
         p_up    = (not pd.isna(p1w)) and p1w > 1.0
         p_down  = (not pd.isna(p1w)) and p1w < -1.0
 
@@ -226,8 +243,9 @@ def get_sector_rotation(
         else:
             pct_surge = True
 
-        # Two-layer signal gates
-        d_surge_confirmed = (d_surge and dv5d >= 1.15) or (z_score >= 2.0 and dv5d >= 0.9)
+        # Two-layer gate: percentile z (relative strength) AND dv5d (absolute,
+        # well-behaved ratio — the genuine sustained-flow anchor, unchanged).
+        d_surge_confirmed = (d_surge and dv5d >= 1.15) or (z_pct >= 0.90 and dv5d >= 0.9)
         d_weak_confirmed  = d_weak and dv5d <= 0.90
 
         if d_surge_confirmed and pct_surge:
@@ -254,17 +272,20 @@ def get_sector_rotation(
         elif p_down and d_weak_confirmed:
             signal = "❌ Active Selling"
             action = "AVOID — Broad institutional exit, no floor visible yet"
-        elif d_weak:
-            # Single-day delivery weakness: mild caution only, not a reversal signal
+        elif d_weak and dv5d < 1.05:
+            # Relatively weakest (bottom-quartile z-rank) AND recent flow not above
+            # its own norm. The dv5d<1.05 guard prevents flagging a sector that
+            # happens to rank low on z but still has genuinely strong sustained
+            # delivery — mild caution only, not a reversal signal.
             signal = "📉 Weakening"
-            action = "REDUCE — Institutional flow below norm, conviction fading"
+            action = "REDUCE — Relatively weakest flow, conviction fading"
         else:
             signal = "⚖️ Neutral"
             action = "HOLD — Flow within normal range, no clear directional bias"
 
         # ── Investment horizon ─────────────────────────────────────────────────
-        # Short term: strong Z-Score surge (top 5%) + positive breadth
-        short_term = z_score >= 2.0 and (not pd.isna(breadth)) and breadth >= 0.5
+        # Short term: top-decile delivery abnormality (z-percentile) + breadth
+        short_term = z_pct >= 0.90 and (not pd.isna(breadth)) and breadth >= 0.5
         # Long term: trend slope positive + DV Ratio above average + broad participation
         long_term  = (trend_slope > 0.05 and dv_ratio > 1.1
                       and (not pd.isna(breadth)) and breadth >= 0.4)
@@ -283,8 +304,8 @@ def get_sector_rotation(
         cov = []
 
         if signal in _buy_signals:
-            # Swing (3–15 days): extreme Z-Score burst + broad participation
-            if z_score >= 2.0 and (not pd.isna(breadth)) and breadth >= 0.5:
+            # Swing (3–15 days): top-decile delivery abnormality + broad participation
+            if z_pct >= 0.90 and (not pd.isna(breadth)) and breadth >= 0.5:
                 cov.append("Swing (3–15 days)")
             # Positional (1–2 months): DV Ratio elevated + positive slope + breadth
             if (dv_ratio > 1.2 and trend_slope > 0.03
@@ -296,7 +317,7 @@ def get_sector_rotation(
                 cov.append("Mid Term (3–4 months)")
         else:
             # Avoid signals — how long the weakness may persist
-            if z_score <= -1.5 and (not pd.isna(breadth)) and breadth <= 0.3:
+            if z_pct <= 0.10 and (not pd.isna(breadth)) and breadth <= 0.3:
                 cov.append("Swing (3–15 days)")
             if dv_ratio < 0.8 and trend_slope < -0.03:
                 cov.append("Positional (4–8 weeks)")
@@ -436,8 +457,13 @@ def get_sector_stocks_rotation(
             GROUP BY b.symbol, s.company_name, s.industry
         ),
         hist_avg AS (
+            -- Turnover-WEIGHTED 100D delivery % so the baseline is in the same
+            -- units as `recent.wtd_deliv_per` (also turnover-weighted). Previously
+            -- a simple AVG(deliv_per), which made the conviction comparison
+            -- apples-to-oranges and could flip a stock's buy/weak label.
             SELECT b.symbol,
-                   AVG(b.deliv_per) AS avg_deliv_per_100d
+                   SUM(b.deliv_per * b.turnover_lacs)
+                       / NULLIF(SUM(b.turnover_lacs), 0) AS avg_deliv_per_100d
             FROM daily_data b
             INNER JOIN sector_master s ON b.symbol = s.symbol
             WHERE b.series IN ('EQ', 'SM', 'ST')
