@@ -348,6 +348,7 @@ def get_sector_rotation(
             "dv_ratio":             round(dv_ratio,  3),
             "dv_ratio_5d":          round(dv_ratio_5d, 3) if not pd.isna(dv_ratio_5d) else None,
             "z_score":              round(z_score,   2),
+            "z_pct":                round(z_pct, 3),   # cross-sectional rank of z (0..1)
             "breadth":              round(breadth,   3) if not pd.isna(breadth)  else None,
             "trend_slope":          round(trend_slope, 3),
             "price_1w":             round(p1w, 2)  if not pd.isna(p1w)  else None,

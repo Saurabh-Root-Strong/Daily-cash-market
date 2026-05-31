@@ -149,14 +149,14 @@ def _quadrant_chart(df: pd.DataFrame) -> go.Figure:
             ),
             customdata=grp[["sector", "action", "accum_score",
                              "dv_ratio", "z_score", "breadth", "horizon",
-                             "dv_ratio_5d"]].values,
+                             "dv_ratio_5d", "z_pct"]].values,
             hovertemplate=(
                 "<b>%{customdata[0]}</b><br>"
                 f"<span style='color:{color}'>{signal}</span><br>"
                 "─────────────────────<br>"
                 "Score: <b>%{customdata[2]:.0f}</b>/100<br>"
                 "Price 1W: <b>%{x:+.2f}%</b><br>"
-                "Z-Score: <b>%{y:+.2f}σ</b><br>"
+                "Z-Rank: <b>%{customdata[8]:.0%}ile</b>  (%{y:+.1f}σ)<br>"
                 "DV Today: %{customdata[3]:.2f}×  ·  5D Avg: %{customdata[7]:.2f}×<br>"
                 "Breadth: %{customdata[5]:.0%}<br>"
                 "Horizon: %{customdata[6]}<br>"
@@ -453,7 +453,18 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
 
     dv_str   = _fmt(dv,   "{:.2f}×")
     dv5d_str = _fmt(dv5d, "{:.2f}×")
-    z_str    = _fmt(z,    "{:+.2f}σ")
+    # Show the cross-sectional RANK of z (what the gates actually use), with raw
+    # σ in parentheses for reference. Raw σ alone is misleading — delivery value
+    # trends up so a "+12σ" is routine here, not a once-in-history event. The
+    # rank says plainly "Nth percentile among today's sectors".
+    z_pct = row.get("z_pct")
+    if z is not None and not (isinstance(z, float) and pd.isna(z)):
+        if z_pct is not None and not (isinstance(z_pct, float) and pd.isna(z_pct)):
+            z_str = f"{z_pct*100:.0f}%ile ({z:+.1f}σ)"
+        else:
+            z_str = f"{z:+.2f}σ"
+    else:
+        z_str = "—"
     p1w_str  = _fmt(p1w,  "{:+.2f}%")
     br_str   = f"{br * 100:.0f}%" if (br is not None and not (isinstance(br, float) and pd.isna(br))) else "—"
     dv1w_str = f"₹{dv1w:,.0f} Cr" if (dv1w is not None and not (isinstance(dv1w, float) and pd.isna(dv1w))) else "—"
@@ -464,9 +475,15 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
         else (NEGATIVE_COLOR if (dv5d is not None and not pd.isna(dv5d) and dv5d <= 0.90)
         else "#888888")
     )
-    z_color   = (POSITIVE_COLOR if (z is not None and not pd.isna(z) and z >= 1.0)
-                 else (NEGATIVE_COLOR if (z is not None and not pd.isna(z) and z <= -0.5)
-                 else "#888888"))
+    # Color by z-PERCENTILE (the gate input), not raw z: top-half green,
+    # bottom-quartile red, middle grey. Falls back to raw z if rank absent.
+    if z_pct is not None and not (isinstance(z_pct, float) and pd.isna(z_pct)):
+        z_color = (POSITIVE_COLOR if z_pct >= 0.50
+                   else (NEGATIVE_COLOR if z_pct <= 0.25 else "#888888"))
+    else:
+        z_color = (POSITIVE_COLOR if (z is not None and not pd.isna(z) and z >= 1.0)
+                   else (NEGATIVE_COLOR if (z is not None and not pd.isna(z) and z <= -0.5)
+                   else "#888888"))
     p1w_color = POSITIVE_COLOR if (p1w is not None and not pd.isna(p1w) and p1w > 0) else NEGATIVE_COLOR
 
     if is_avoid:
@@ -503,7 +520,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
         f"<div style='display:flex;gap:16px;margin-top:4px;font-size:12px'>"
         f"<span>DV Today: <b>{dv_str}</b></span>"
         f"<span>5D Avg: <b style='color:{dv5d_color}'>{dv5d_str}</b></span>"
-        f"<span>Z-Score: <b style='color:{z_color}'>{z_str}</b></span>"
+        f"<span>Z-Rank: <b style='color:{z_color}'>{z_str}</b></span>"
         f"<span>Breadth: <b>{br_str}</b></span>"
         f"<span>1W Price: <b style='color:{p1w_color}'>{p1w_str}</b></span>"
         f"</div>"
