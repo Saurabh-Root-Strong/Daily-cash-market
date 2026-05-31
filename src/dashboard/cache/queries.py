@@ -210,6 +210,20 @@ def cached_sector_oi_summary(trade_date: date, min_fut_oi: int = 50_000) -> pd.D
 
 
 @st.cache_data(ttl=_TTL)
+def cached_fno_positioning_by_symbol(trade_date: date) -> pd.DataFrame:
+    """Per-symbol F&O futures/options positioning — overlay for Sector Rotation."""
+    from src.analytics.fno_stocks import get_fno_positioning_by_symbol
+    return get_fno_positioning_by_symbol(trade_date)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_sector_fno_aggregate(trade_date: date) -> pd.DataFrame:
+    """Sector-level F&O bias badge — overlay for Sector Rotation cards."""
+    from src.analytics.fno_stocks import get_sector_fno_aggregate
+    return get_sector_fno_aggregate(trade_date)
+
+
+@st.cache_data(ttl=_TTL)
 def cached_fno_composite_signals(trade_date: date, min_fut_oi: int = 50_000) -> pd.DataFrame:
     from src.analytics.fno_signals import get_fno_composite_signals
     return get_fno_composite_signals(trade_date, min_fut_oi=min_fut_oi)

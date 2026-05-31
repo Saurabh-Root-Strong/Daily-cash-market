@@ -27,6 +27,8 @@ from src.dashboard.cache.queries import (
     cached_sector_rs_custom_range,
     cached_sector_stocks_custom_range,
     cached_sector_stocks_rotation,
+    cached_fno_positioning_by_symbol,
+    cached_sector_fno_aggregate,
 )
 from src.dashboard.constants import NEGATIVE_COLOR, POSITIVE_COLOR, PLOT_BG, PAPER_BG, GRID_COLOR
 from src.dashboard.components.charts import hex_to_rgba as _hex_to_rgba  # deduped helper
@@ -589,6 +591,22 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
             stocks = stocks.copy()
             stocks["conviction"] = stocks.apply(_stock_signal, axis=1)
 
+            # ── F&O overlay: merge per-symbol futures/options positioning ──────
+            # Cached (@st.cache_data), so calling per-card is a cache hit. Non-F&O
+            # stocks get NaN → rendered blank, exactly as intended. fut_signal is
+            # the OI-price read (or "OI settling (post-expiry)"); opt_signal is the
+            # PCR read. These are SHORT-TERM (daily OI) reads — complementary to the
+            # swing delivery conviction, not a replacement.
+            _fno = cached_fno_positioning_by_symbol(selected_date)
+            if not _fno.empty:
+                stocks = stocks.merge(
+                    _fno[["symbol", "fut_signal", "opt_signal"]],
+                    on="symbol", how="left",
+                )
+            else:
+                stocks["fut_signal"] = None
+                stocks["opt_signal"] = None
+
             if invest_signal:
                 _rank = {"🔥 Strong": 0, "✅ Buying": 1, "👀 Watch": 2, "⚪ Weak": 3}
             else:
@@ -656,6 +674,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                 )
 
             display_cols = ["symbol", "company_name", "industry", "ltp", "conviction",
+                            "fut_signal", "opt_signal",
                             "wtd_deliv_per", "avg_deliv_per_100d",
                             "deliv_value_cr", "turnover_cr", "price_chg_pct"]
             display_cols = [c for c in display_cols if c in stocks.columns]
@@ -699,6 +718,21 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                              "📉 Fading    = price rising but delivery not below avg\n"
                              "⚪ Neutral   = no clear signal\n\n"
                              "Falls back to sector-relative percentile for stocks with no 100D history"),
+                    "fut_signal":    st.column_config.TextColumn(
+                        "Futures",
+                        help="Stock-FUTURES positioning (near-month OI vs price, daily):\n"
+                             "🟢 Long Buildup = OI↑ + price↑ (fresh longs)\n"
+                             "🔴 Short Buildup = OI↑ + price↓ (fresh shorts)\n"
+                             "Short Covering = OI↓ + price↑ | Long Unwinding = OI↓ + price↓\n"
+                             "Blank = not an F&O stock. 'OI settling (post-expiry)' = "
+                             "2-3 days after monthly expiry, OI still rolling — not reliable.\n"
+                             "SHORT-TERM read — confirms/diverges from the swing delivery signal."),
+                    "opt_signal":    st.column_config.TextColumn(
+                        "Options",
+                        help="Stock-OPTIONS positioning (near-month PCR, contrarian):\n"
+                             "Put Heavy (PCR>1.3) = downside hedged → contrarian bullish\n"
+                             "Call Heavy (PCR<0.6) = complacent calls → contrarian bearish\n"
+                             "Neutral = balanced. Blank = not an F&O stock."),
                     "avg_deliv_per_100d": st.column_config.NumberColumn(
                         "100D Avg Del%", format="%.1f%%",
                         help="Stock's own 100-trading-day average delivery %\n\n"
