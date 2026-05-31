@@ -28,7 +28,6 @@ from src.dashboard.cache.queries import (
     cached_sector_stocks_custom_range,
     cached_sector_stocks_rotation,
     cached_fno_positioning_by_symbol,
-    cached_sector_fno_aggregate,
 )
 from src.dashboard.constants import NEGATIVE_COLOR, POSITIVE_COLOR, PLOT_BG, PAPER_BG, GRID_COLOR
 from src.dashboard.components.charts import hex_to_rgba as _hex_to_rgba  # deduped helper
@@ -436,23 +435,13 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
     is_avoid   = row["signal"] in _AVOID_SIGNAL_SET
     invest_signal = meta.get("invest", False)
 
-    # ── F&O bias badge (futures OI buildup + options PCR across the sector's
-    # F&O stocks). SHORT-TERM derivatives read — a confirmation layer beside the
-    # swing delivery signal, NOT part of the score. Absent when the sector has no
-    # F&O stocks. Independent confirmation when it agrees with the delivery call,
-    # a caution flag when it diverges.
-    fno_badge = ""
-    if fno_row is not None and not (isinstance(fno_row, float) and pd.isna(fno_row)):
-        f_bias = str(fno_row.get("fno_bias", "")) if hasattr(fno_row, "get") else ""
-        f_n    = int(fno_row.get("fno_stock_count", 0)) if hasattr(fno_row, "get") else 0
-        f_pcr  = fno_row.get("sector_pcr") if hasattr(fno_row, "get") else None
-        if f_bias:
-            pcr_txt = f" · PCR {f_pcr:.2f}" if (f_pcr is not None and not pd.isna(f_pcr)) else ""
-            fno_badge = (
-                f"<div style='margin-top:4px;font-size:11px;color:rgba(255,255,255,0.6)'>"
-                f"<b style='color:rgba(120,180,255,0.9)'>F&amp;O:</b> {f_bias} "
-                f"<span style='color:rgba(255,255,255,0.4)'>({f_n} F&amp;O stk{pcr_txt})</span></div>"
-            )
+    # NOTE: the sector-level F&O BADGE was removed after Phase-3 IC validation —
+    # the sector F&O aggregate showed no measurable edge for sector SELECTION
+    # (RS/delivery dominate; aggregate too lumpy with 1-2 F&O stocks/sector). The
+    # F&O read lives ONLY at the per-stock level (Futures/Options columns in the
+    # drill-down), which is the intended use: confirm a stock AFTER the sector is
+    # picked on delivery/RS. fno_row is accepted for signature stability but unused.
+    _ = fno_row
 
     bar_html = (
         f"<div style='background:rgba(255,255,255,0.1);border-radius:4px;height:6px;margin:4px 0 6px 0'>"
@@ -545,7 +534,6 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
         f"<span>Breadth: <b>{br_str}</b></span>"
         f"<span>1W Price: <b style='color:{p1w_color}'>{p1w_str}</b></span>"
         f"</div>"
-        f"{fno_badge}"
         f"<div style='margin-top:4px;font-size:11px;color:rgba(255,255,255,0.5)'>"
         f"{bottom_row}</div>"
         f"</div>",
@@ -749,10 +737,11 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                              "SHORT-TERM read — confirms/diverges from the swing delivery signal."),
                     "opt_signal":    st.column_config.TextColumn(
                         "Options",
-                        help="Stock-OPTIONS positioning (near-month PCR, contrarian):\n"
-                             "Put Heavy (PCR>1.3) = downside hedged → contrarian bullish\n"
-                             "Call Heavy (PCR<0.6) = complacent calls → contrarian bearish\n"
-                             "Neutral = balanced. Blank = not an F&O stock."),
+                        help="Stock-OPTIONS positioning — near-month put/call OI (DESCRIPTIVE):\n"
+                             "Put Heavy (PCR>1.3) = heavy put OI | Call Heavy (PCR<0.6) = heavy call OI\n"
+                             "Balanced = in between. Blank = not an F&O stock.\n"
+                             "NOTE: shown as context only — the contrarian read did NOT validate "
+                             "(IC test: high PCR went with lower forward returns). Do not trade off it alone."),
                     "avg_deliv_per_100d": st.column_config.NumberColumn(
                         "100D Avg Del%", format="%.1f%%",
                         help="Stock's own 100-trading-day average delivery %\n\n"
@@ -1738,11 +1727,6 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
              "single-stock dominance warning) still use the full stock set.",
     )
 
-    # F&O aggregate per sector — computed once (cached), looked up per card.
-    # Keyed by sector → row. Sectors without F&O stocks simply won't be in the map.
-    _fno_agg = cached_sector_fno_aggregate(selected_date)
-    _fno_map = {r["sector"]: r for _, r in _fno_agg.iterrows()} if not _fno_agg.empty else {}
-
     col_enter, col_avoid = st.columns(2)
 
     _HIGH_CONV = 70
@@ -1763,8 +1747,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                         unsafe_allow_html=True,
                     )
                     shown_divider = True
-                _sector_card(row, selected_date, min_turnover, deliv_threshold,
-                     fno_row=_fno_map.get(row["sector"]))
+                _sector_card(row, selected_date, min_turnover, deliv_threshold)
 
     with col_avoid:
         st.markdown("### 🔴 SECTORS TO AVOID / EXIT")
@@ -1781,8 +1764,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 unsafe_allow_html=True,
             )
             for _, row in exiting.iterrows():
-                _sector_card(row, selected_date, min_turnover, deliv_threshold,
-                     fno_row=_fno_map.get(row["sector"]))
+                _sector_card(row, selected_date, min_turnover, deliv_threshold)
 
         # Tier 2 — relative laggards: weakest sectors by score, excluding any
         # already shown in the invest / caution / distribution lists. The absolute
@@ -1803,8 +1785,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 unsafe_allow_html=True,
             )
             for _, row in laggards.iterrows():
-                _sector_card(row, selected_date, min_turnover, deliv_threshold,
-                     fno_row=_fno_map.get(row["sector"]))
+                _sector_card(row, selected_date, min_turnover, deliv_threshold)
 
     if not caution.empty:
         st.markdown("---")
@@ -1815,8 +1796,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             "Do not buy based on delivery value alone."
         )
         for _, row in caution.iterrows():
-            _sector_card(row, selected_date, min_turnover, deliv_threshold,
-                     fno_row=_fno_map.get(row["sector"]))
+            _sector_card(row, selected_date, min_turnover, deliv_threshold)
 
     st.markdown("---")
 

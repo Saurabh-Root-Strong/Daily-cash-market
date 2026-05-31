@@ -341,13 +341,19 @@ def _fut_signal(price_chg: float | None, oi_chg_pct: float | None) -> str:
 
 
 def _opt_signal(pcr: float | None) -> str:
-    """Near-month stock PCR, contrarian. PCR>1.3 = put-heavy (downside hedged →
-    contrarian bullish); PCR<0.6 = call-heavy (complacent → contrarian bearish)."""
+    """Near-month stock PCR — DESCRIPTIVE only, no directional claim.
+
+    The contrarian reading (high PCR = bullish) was tested in the Phase-3 IC
+    diagnostic and came out NEGATIVE (IC ~-0.08 at 5/20d) — i.e. on this data
+    high PCR went with LOWER forward returns, not a contrarian bounce. The sign
+    is unstable on a small sample, so we make no directional call here and just
+    report the raw positioning. Read it as context, not a buy/sell signal.
+    """
     if pcr is None or pd.isna(pcr):
         return "—"
     if pcr > 1.3:  return "Put Heavy"
     if pcr < 0.6:  return "Call Heavy"
-    return "Neutral"
+    return "Balanced"
 
 
 def get_fno_positioning_by_symbol(as_of_date: date) -> pd.DataFrame:
