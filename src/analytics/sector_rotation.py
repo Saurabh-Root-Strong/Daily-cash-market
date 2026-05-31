@@ -116,6 +116,19 @@ def get_sector_rotation(
     if perf.empty:
         return pd.DataFrame()
 
+    # Actual trading days in the trailing 1-week window — the divisor for the
+    # 5-day delivery ratio, instead of a hardcoded 5. On a normal week this is 5;
+    # on a holiday-shortened week it is 3-4, where dividing by a fixed 5 would
+    # understate the recent daily average by up to ~20% and could miss the
+    # dv5d>=1.15 accumulation gate. The 100D side already divides by an exact
+    # trading-day count (100) by construction, so this makes both sides honest.
+    _n1w = query_dataframe(
+        "SELECT COUNT(DISTINCT trade_date) AS n FROM daily_data "
+        "WHERE trade_date > ? AND trade_date <= ?",
+        [as_of_date - timedelta(days=7), as_of_date],
+    )
+    n_1w_days = int(_n1w["n"].iloc[0]) if not _n1w.empty and _n1w["n"].iloc[0] else 5
+
     # ── 100-day daily delivery % series — for trend slope only ────────────────
     start = as_of_date - timedelta(days=lookback_days)
     hist_sql = """
@@ -199,7 +212,7 @@ def get_sector_rotation(
         # A sector that was distributing yesterday cannot show "Confirmed Accumulation"
         # today just because of one large block trade. It needs sustained flow.
         if not pd.isna(deliv_1w) and not pd.isna(deliv_100d) and deliv_100d > 0:
-            dv_ratio_5d = round((deliv_1w / 5) / (deliv_100d / 100), 3)
+            dv_ratio_5d = round((deliv_1w / n_1w_days) / (deliv_100d / 100), 3)
         else:
             dv_ratio_5d = float("nan")
         dv5d = dv_ratio_5d if not pd.isna(dv_ratio_5d) else 1.0  # fallback: neutral

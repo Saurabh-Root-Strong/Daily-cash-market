@@ -11,7 +11,7 @@ Imports:
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -26,6 +26,7 @@ from src.dashboard.cache.queries import (
     cached_search_stocks,
     cached_sector_signal_log,
     cached_sector_accuracy_summary,
+    cached_available_dates,
 )
 from src.dashboard.components.charts import outlook_bar_chart, period_comparison_chart, signal_bar_chart
 from src.dashboard.components.filters import (
@@ -331,7 +332,7 @@ def _master_table(
 
 
 # ── Outlook scoring ───────────────────────────────────────────────────────────
-def _compute_outlook(df: pd.DataFrame) -> pd.DataFrame:
+def _compute_outlook(df: pd.DataFrame, n_1w_days: int = 5) -> pd.DataFrame:
     """
     Signal design principle: a "1-2 week" outlook requires SUSTAINED flow, not a single day's spike.
 
@@ -348,8 +349,11 @@ def _compute_outlook(df: pd.DataFrame) -> pd.DataFrame:
     """
     out = df.copy()
 
+    # Divide by the ACTUAL trading days in the 1W window (not a fixed 5) so a
+    # holiday-shortened week is not understated. 100D side divides by an exact
+    # count by construction.
     daily_100d = (out["100D_deliv_cr"] / 100).replace(0, float("nan"))
-    norm_1w = (out["1W_deliv_cr"] / 5)  / daily_100d   # 5-day avg vs own 100D daily mean
+    norm_1w = (out["1W_deliv_cr"] / max(n_1w_days, 1))  / daily_100d   # 5-day avg vs own 100D daily mean
 
     # Keep 5-day avg as a named output column for tooltips and chart hover
     out["dv_ratio_5d"] = norm_1w.round(2)
@@ -429,7 +433,11 @@ def render(selected_date: date, min_turnover: float) -> None:
         "Cross-sectional rank — sectors scored relative to each other. "
         "Signal requires sustained 5-day flow — a single-day spike alone cannot trigger Accumulating."
     )
-    scored = _compute_outlook(sector_df)
+    # Actual trading days in the trailing week → honest 5-day-avg divisor.
+    _all_dates = cached_available_dates()
+    _wk_start = selected_date - timedelta(days=7)
+    n_1w_days = sum(1 for d in _all_dates if _wk_start < d <= selected_date) or 5
+    scored = _compute_outlook(sector_df, n_1w_days=n_1w_days)
 
     def _kpi_help(row) -> str:
         dv   = row.get("dv_ratio",    float("nan"))   # today
