@@ -801,7 +801,7 @@ def get_fno_expiry_breakdown_by_symbol(as_of_date: date) -> pd.DataFrame:
                MAX(CASE WHEN exp_rank=3 THEN put_oi        END) AS far_put_oi
         FROM combined
         GROUP BY symbol
-    """, [as_of_date, as_of_date, as_of_date, as_of_date, as_of_date, as_of_date])
+    """, [as_of_date, as_of_date, as_of_date, as_of_date, as_of_date])
 
     if df.empty:
         return df
