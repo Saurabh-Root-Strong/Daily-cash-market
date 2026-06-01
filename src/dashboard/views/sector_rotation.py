@@ -612,25 +612,19 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                 )
 
             # ── F&O overlay: per-expiry futures OI + options PCR ────────────
-            # Both calls are @st.cache_data — cache hits per sector card.
-            # Non-F&O stocks get NaN → rendered blank, as intended.
-            # near/next/far gives context across the 3 monthly contracts:
-            #   - Near collapsing on expiry day = rollover, NOT selling
-            #   - Next surging on expiry day = fresh positioning (real signal)
-            #   - PCR per expiry filters near-month options noise at expiry
-            _fno_exp = cached_fno_expiry_breakdown(selected_date)
-            if not _fno_exp.empty:
-                exp_cols = [c for c in [
-                    "symbol",
-                    "near_fut_label", "next_fut_label", "far_fut_label",
-                    "near_opt_label", "next_opt_label",
-                    "near_pcr", "next_pcr", "far_pcr_label",
-                ] if c in _fno_exp.columns]
-                stocks = stocks.merge(_fno_exp[exp_cols], on="symbol", how="left")
-            else:
-                for c in ["near_fut_label", "next_fut_label", "far_fut_label",
-                          "near_opt_label", "next_opt_label",
-                          "near_pcr", "next_pcr", "far_pcr_label"]:
+            _FNO_EXP_COLS = ["near_fut_label", "next_fut_label", "far_fut_label",
+                             "near_opt_label", "next_opt_label",
+                             "near_pcr", "next_pcr", "far_pcr_label"]
+            try:
+                _fno_exp = cached_fno_expiry_breakdown(selected_date)
+                if not _fno_exp.empty:
+                    exp_cols = [c for c in ["symbol"] + _FNO_EXP_COLS if c in _fno_exp.columns]
+                    stocks = stocks.merge(_fno_exp[exp_cols], on="symbol", how="left")
+                else:
+                    for c in _FNO_EXP_COLS:
+                        stocks[c] = None
+            except Exception:
+                for c in _FNO_EXP_COLS:
                     stocks[c] = None
 
             if invest_signal:

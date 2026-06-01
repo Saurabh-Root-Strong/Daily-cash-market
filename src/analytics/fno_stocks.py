@@ -24,6 +24,7 @@ __all__ = [
     "get_sector_oi_summary",
     "get_fno_positioning_by_symbol",
     "get_sector_fno_aggregate",
+    "get_fno_expiry_breakdown_by_symbol",
 ]
 
 _SIGNAL_SCORE = {
