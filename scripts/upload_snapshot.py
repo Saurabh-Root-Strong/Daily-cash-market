@@ -216,19 +216,18 @@ def upload_snapshot(quiet: bool = False, days: int | None = None) -> bool:
     release    = r.json()
     release_id = release["id"]
 
-    # Delete existing asset (if any) before uploading new one
+    # Delete existing assets (DB + version file) before uploading new ones
     for asset in release.get("assets", []):
-        if asset["name"] == _ASSET_NAME:
-            if not quiet:
+        if asset["name"] in (_ASSET_NAME, "version.txt"):
+            if not quiet and asset["name"] == _ASSET_NAME:
                 print(f"[snapshot] Replacing existing asset...")
             requests.delete(
                 f"https://api.github.com/repos/{repo}/releases/assets/{asset['id']}",
                 headers=headers,
                 timeout=30,
             )
-            break
 
-    # Upload
+    # Upload DB snapshot
     upload_url = (
         f"https://uploads.github.com/repos/{repo}/releases"
         f"/{release_id}/assets?name={_ASSET_NAME}"
@@ -243,18 +242,39 @@ def upload_snapshot(quiet: bool = False, days: int | None = None) -> bool:
         upload_url,
         headers=upload_headers,
         data=compressed,
-        timeout=300,   # 5 min max for upload
+        timeout=300,
     )
 
-    if r.status_code == 201:
-        elapsed = time.time() - t0
-        if not quiet:
-            print(f"[snapshot] Upload complete in {elapsed:.1f}s — "
-                  f"mobile dashboard will use this data.")
-        return True
-    else:
+    if r.status_code != 201:
         print(f"[snapshot] Upload failed: {r.status_code} {r.text[:300]}")
         return False
+
+    elapsed = time.time() - t0
+    if not quiet:
+        print(f"[snapshot] Upload complete in {elapsed:.1f}s")
+
+    # Upload version.txt — a tiny timestamp file the Cloud app polls to detect
+    # new snapshots without downloading the full 27 MB every time.
+    # Format: ISO-8601 UTC timestamp of this upload.
+    version_ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    version_url = (
+        f"https://uploads.github.com/repos/{repo}/releases"
+        f"/{release_id}/assets?name=version.txt"
+    )
+    rv = requests.post(
+        version_url,
+        headers={**headers, "Content-Type": "text/plain"},
+        data=version_ts.encode(),
+        timeout=30,
+    )
+    if rv.status_code == 201 and not quiet:
+        print(f"[snapshot] Version marker uploaded: {version_ts}")
+    elif not quiet:
+        print(f"[snapshot] Warning: version marker upload failed ({rv.status_code})")
+
+    if not quiet:
+        print(f"[snapshot] Done — Cloud app will auto-refresh on next load.")
+    return True
 
 
 def _parse_days(argv: list[str]) -> int | None:

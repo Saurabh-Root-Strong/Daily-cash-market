@@ -91,26 +91,41 @@ def _inject_streamlit_secrets() -> None:
         pass   # No secrets file — local mode
 
 
+_CLOUD_CHECK_INTERVAL = 1800   # re-check for new snapshot every 30 minutes
+
+
 def _cloud_startup() -> None:
     """
-    Cloud mode initialisation — runs once per cold start.
-    Downloads DuckDB snapshot from GitHub Releases before anything else loads.
-    Shows a spinner so mobile users know what's happening.
+    Cloud mode: ensure the DuckDB snapshot is downloaded and up to date.
+
+    Runs on every app load but only hits GitHub API once per 30 minutes.
+    When a new snapshot is detected (your laptop uploaded after the 6:30 PM fetch),
+    it re-downloads automatically — no manual "Refresh Data" needed.
     """
+    import time as _time
     from src.core.cloud import is_cloud, ensure_database, get_snapshot_info
     if not is_cloud():
         return
 
-    if not st.session_state.get("_cloud_db_ready"):
-        with st.spinner("Downloading latest market data snapshot..."):
-            ok = ensure_database()
+    now = _time.time()
+    last_check = st.session_state.get("_cloud_last_check", 0)
+    needs_check = (now - last_check) >= _CLOUD_CHECK_INTERVAL
+
+    if needs_check:
+        with st.spinner("Checking for latest market data..."):
+            ok, newly_downloaded = ensure_database()
         if not ok:
             st.error(
                 "Could not download market data from GitHub Releases. "
                 "Check that GITHUB_REPO and GITHUB_TOKEN are set in Streamlit secrets."
             )
             st.stop()
-        st.session_state["_cloud_db_ready"] = True
+        st.session_state["_cloud_last_check"] = now
+        st.session_state["_cloud_db_ready"]   = True
+        if newly_downloaded:
+            # New snapshot → clear all cached query results so pages show fresh data
+            st.cache_data.clear()
+            st.toast("Market data updated! Showing latest data.", icon="✅")
 
     # Cloud info banner
     info = get_snapshot_info()
@@ -119,7 +134,7 @@ def _cloud_startup() -> None:
         last_str = last.strftime("%d %b %Y") if hasattr(last, "strftime") else str(last)
         st.info(
             f"**Cloud mode** — data as of **{last_str}** ({info['db_size_mb']:.0f} MB snapshot). "
-            "Updated after each evening market fetch on the host machine.",
+            "Auto-refreshes within 30 min of each evening fetch on the host machine.",
             icon="📱",
         )
 
@@ -268,14 +283,16 @@ def main() -> None:
             st.cache_data.clear()
             # Cloud: force re-download of the latest snapshot so new data
             # (fno_bhavcopy, daily_data, etc.) is picked up without a manual reboot.
-            from src.core.cloud import is_cloud, _CLOUD_DB_PATH
+            from src.core.cloud import is_cloud, _CLOUD_DB_PATH, _CLOUD_VER_PATH
             if is_cloud():
                 st.session_state.pop("_cloud_db_ready", None)
-                try:
-                    if _CLOUD_DB_PATH.exists():
-                        _CLOUD_DB_PATH.unlink()
-                except Exception:
-                    pass
+                st.session_state.pop("_cloud_last_check", None)
+                for p in [_CLOUD_DB_PATH, _CLOUD_VER_PATH]:
+                    try:
+                        if p.exists():
+                            p.unlink()
+                    except Exception:
+                        pass
             st.rerun()
 
         # ── Data Health Widget ─────────────────────────────────────────────
