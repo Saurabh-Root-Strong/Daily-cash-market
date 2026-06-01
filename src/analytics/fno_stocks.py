@@ -868,22 +868,21 @@ def get_fno_expiry_breakdown_by_symbol(as_of_date: date) -> pd.DataFrame:
             ), axis=1,
         )
 
-    # Far-month PCR (OI ratio only — no premium analysis, too thin)
+    # Far-month: PCR only (volume too thin for reliable OI-premium matrix)
+    # Displayed as "Opt Far" to keep column naming consistent with Near/Next
     far_call = df.get("far_call_oi", pd.Series(0, index=df.index)).fillna(0)
     far_put  = df.get("far_put_oi",  pd.Series(0, index=df.index)).fillna(0)
-    df["far_pcr"] = (far_put / far_call.replace(0, float("nan"))).round(2)
-    df["far_pcr_label"] = df["far_pcr"].apply(_compact_pcr_label)
+    df["far_pcr"]     = (far_put / far_call.replace(0, float("nan"))).round(2)
+    df["far_opt_label"] = df["far_pcr"].apply(_compact_pcr_label)
 
     keep = [
         "symbol", "post_expiry",
         # Futures per expiry
         "near_fut_label", "next_fut_label", "far_fut_label",
         "near_oi_chg_pct", "next_oi_chg_pct", "far_oi_chg_pct",
-        # Options combined OI-premium signal
-        "near_opt_label", "next_opt_label",
-        # Supporting PCR numbers
-        "near_pcr", "next_pcr", "far_pcr", "far_pcr_label",
-        # Raw sub-signals for tooltip/help reference
+        # Options signals (near/next = full OI-premium matrix; far = PCR only)
+        "near_opt_label", "next_opt_label", "far_opt_label",
+        # Raw sub-signals (reference)
         "near_call_sig", "near_put_sig", "next_call_sig", "next_put_sig",
     ]
     return df[[c for c in keep if c in df.columns]].reset_index(drop=True)

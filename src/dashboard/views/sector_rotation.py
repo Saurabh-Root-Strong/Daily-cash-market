@@ -613,12 +613,12 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
 
             # ── F&O overlay: per-expiry futures OI + options PCR ────────────
             _FNO_EXP_COLS = ["near_fut_label", "next_fut_label", "far_fut_label",
-                             "near_opt_label", "next_opt_label",
-                             "near_pcr", "next_pcr", "far_pcr_label"]
+                             "near_opt_label", "next_opt_label", "far_opt_label"]
             try:
                 _fno_exp = cached_fno_expiry_breakdown(selected_date)
                 if not _fno_exp.empty:
-                    exp_cols = [c for c in ["symbol"] + _FNO_EXP_COLS if c in _fno_exp.columns]
+                    exp_cols = [c for c in ["symbol"] + _FNO_EXP_COLS
+                            if c in _fno_exp.columns]
                     stocks = stocks.merge(_fno_exp[exp_cols], on="symbol", how="left")
                 else:
                     for c in _FNO_EXP_COLS:
@@ -695,8 +695,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
 
             display_cols = ["symbol", "company_name", "industry", "ltp", "conviction",
                             "near_fut_label", "next_fut_label", "far_fut_label",
-                            "near_opt_label", "next_opt_label",
-                            "near_pcr", "next_pcr", "far_pcr_label",
+                            "near_opt_label", "next_opt_label", "far_opt_label",
                             "wtd_deliv_per", "deliv_vs_100d_pct", "avg_deliv_per_100d",
                             "deliv_value_cr", "turnover_cr", "price_chg_pct"]
             display_cols = [c for c in display_cols if c in stocks.columns]
@@ -827,24 +826,15 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                              "Compare with Fut Next (futures OI direction) for confirmation:\n"
                              "Fut Next = 🟢 LB + Opt Next = 🔥 Bull → HIGH CONVICTION LONG\n"
                              "Fut Next = 🔴 SB + Opt Next = ❄️ Bear → HIGH CONVICTION SHORT"),
-                    # ── Supporting PCR numbers ───────────────────────────────────
-                    "near_pcr": st.column_config.NumberColumn(
-                        "PCR Near", format="%.2f",
-                        help="Near-month Put/Call OI ratio (descriptive context).\n"
-                             "> 1.3 = Put heavy  |  < 0.6 = Call heavy  |  0.6–1.3 = Balanced\n"
-                             "Use Opt Near column for the actual directional read —\n"
-                             "PCR alone cannot distinguish buying from writing."),
-                    "next_pcr": st.column_config.NumberColumn(
-                        "PCR Next", format="%.2f",
-                        help="Next-month Put/Call OI ratio.\n"
-                             "More reliable near expiry than near-month PCR.\n"
-                             "Use Opt Next column for the full buying-vs-writing signal."),
-                    "far_pcr_label": st.column_config.TextColumn(
-                        "PCR Far",
-                        help="Far-month (3rd expiry) PCR — OI ratio only, no premium analysis\n"
-                             "(far-month options have low volume, premium signal unreliable).\n"
-                             "Put↑ = PCR>1.3 | Call↑ = PCR<0.6 | Bal = between\n"
-                             "Treat as macro/structural sentiment, not a short-term signal"),
+                    "far_opt_label": st.column_config.TextColumn(
+                        "Opt Far",
+                        help="OPTIONS — Far-month (3rd expiry) PCR-based signal:\n"
+                             "Far-month options have thin volume — OI-premium matrix is unreliable.\n"
+                             "Shows PCR ratio only: Put↑ (>1.3) | Call↑ (<0.6) | Bal (0.6–1.3)\n\n"
+                             "Use as macro/structural sentiment context:\n"
+                             "Heavy put buying in far month = institutions hedging for next 2–3 months\n"
+                             "Heavy call buying in far month = speculative bullish positioning\n"
+                             "— = no far-month options activity for this stock"),
                     "deliv_vs_100d_pct": st.column_config.NumberColumn(
                         "vs 100D", format="%+.1f%%",
                         help="(7D Wtd Delivery % ÷ 100D avg − 1) × 100\n\n"
