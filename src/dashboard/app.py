@@ -257,8 +257,25 @@ def main() -> None:
             st.caption(f"Last fetched: {last_updated}")
         st.caption(f"History: {len(all_dates)} trading days")
 
-        if st.button("Refresh Data", help="Clear cached queries and reload latest data from DB"):
+        if st.button(
+            "🔄 Refresh Data",
+            help=(
+                "Clears cached queries and reloads from DB.\n"
+                "On Cloud: also re-downloads the latest market snapshot from GitHub Releases "
+                "so you always get the most recent data without rebooting."
+            ),
+        ):
             st.cache_data.clear()
+            # Cloud: force re-download of the latest snapshot so new data
+            # (fno_bhavcopy, daily_data, etc.) is picked up without a manual reboot.
+            from src.core.cloud import is_cloud, _CLOUD_DB_PATH
+            if is_cloud():
+                st.session_state.pop("_cloud_db_ready", None)
+                try:
+                    if _CLOUD_DB_PATH.exists():
+                        _CLOUD_DB_PATH.unlink()
+                except Exception:
+                    pass
             st.rerun()
 
         # ── Data Health Widget ─────────────────────────────────────────────

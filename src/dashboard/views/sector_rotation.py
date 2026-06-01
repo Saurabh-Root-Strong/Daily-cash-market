@@ -623,7 +623,12 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                 else:
                     for c in _FNO_EXP_COLS:
                         stocks[c] = None
-            except Exception:
+            except Exception as _e:
+                import logging as _log
+                _log.getLogger(__name__).warning(
+                    "F&O expiry breakdown failed for %s: %s: %s",
+                    selected_date, type(_e).__name__, _e,
+                )
                 for c in _FNO_EXP_COLS:
                     stocks[c] = None
 
