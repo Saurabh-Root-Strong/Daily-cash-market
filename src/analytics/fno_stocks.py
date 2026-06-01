@@ -560,6 +560,10 @@ def get_sector_fno_aggregate(as_of_date: date) -> pd.DataFrame:
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # PER-EXPIRY F&O BREAKDOWN  (near / next / far for each stock)
+#
+# Architecture: built on get_fno_positioning_by_symbol() which is proven to work
+# on both local and Streamlit Cloud. Two small supplementary queries add the
+# extra data (next/far prev OI + options per expiry + premium change).
 # ═══════════════════════════════════════════════════════════════════════════════
 #
 # Futures signal: OI-price matrix (same as Murphy's standard framework).
@@ -680,20 +684,61 @@ def get_fno_expiry_breakdown_by_symbol(as_of_date: date) -> pd.DataFrame:
     """
     Per-symbol futures OI signal + options OI-premium matrix for near/next/far expiries.
 
-    Futures OI change: matched by the SAME expiry_date (not rank) — no rollover spikes.
-    Options premium change: (close_price - settle_price) from today's bhavcopy row.
-      settle_price = NSE previous-day settlement → disambiguates buying vs writing
-      without an extra query.
+    Built on get_fno_positioning_by_symbol() (proven on local + Streamlit Cloud) +
+    two small focused queries for next/far data and options per expiry.
+    Avoids one large complex CTE that caused Cloud-specific DuckDB failures.
 
     Returns one row per F&O underlying:
         symbol, post_expiry,
-        near/next/far_fut_label   — "🟢 LB +38%" / "⟳ rolling" / "⚪ +1%"
-        near/next_opt_label       — "🔥 Bull C.Buy+P.Wrt PCR:0.8"
-        near/next_pcr             — raw PCR number for reference
+        near/next/far_fut_label  — compact futures signal string
+        near/next_opt_label      — call+put OI-premium combined signal
+        far_opt_label            — far-month PCR only
     """
     as_of_date = _as_date(as_of_date)
 
-    df = query_dataframe("""
+    # ── Step 1: Base — proven working function with near-month data ───────────
+    base = get_fno_positioning_by_symbol(as_of_date)
+    if base.empty:
+        return pd.DataFrame()
+
+    days_since_roll = _trading_days_since_roll(as_of_date)
+    in_post_expiry  = days_since_roll is not None and days_since_roll <= _POST_EXPIRY_WINDOW
+
+    # ── Step 2: Supplementary — next/far prev OI for OI change % ─────────────
+    supp_fut = query_dataframe("""
+        WITH expiries AS (
+            SELECT symbol, expiry_date,
+                   ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY expiry_date) AS exp_rank
+            FROM (
+                SELECT DISTINCT symbol, expiry_date
+                FROM fno_bhavcopy
+                WHERE trade_date = ? AND instrument = 'FUTSTK' AND expiry_date >= ?
+            ) e
+        ),
+        prev_date AS (
+            SELECT MAX(trade_date) AS prev_dt
+            FROM fno_bhavcopy WHERE trade_date < ? AND instrument = 'FUTSTK'
+        )
+        SELECT f.symbol,
+               SUM(CASE WHEN x.exp_rank = 2 THEN f.open_interest END) AS next_prev_oi,
+               SUM(CASE WHEN x.exp_rank = 3 THEN f.open_interest END) AS far_prev_oi,
+               MAX(CASE WHEN x.exp_rank = 2 THEN f.close_price  END) AS next_close,
+               MAX(CASE WHEN x.exp_rank = 2 THEN f.settle_price END) AS next_settle
+        FROM fno_bhavcopy f
+        JOIN expiries x ON f.symbol = x.symbol AND f.expiry_date = x.expiry_date
+        CROSS JOIN prev_date pd
+        WHERE f.trade_date = pd.prev_dt AND f.instrument = 'FUTSTK'
+        GROUP BY f.symbol
+    """, [as_of_date, as_of_date, as_of_date])
+
+    if not supp_fut.empty:
+        base = base.merge(supp_fut, on="symbol", how="left")
+    else:
+        for c in ["next_prev_oi", "far_prev_oi", "next_close", "next_settle"]:
+            base[c] = float("nan")
+
+    # ── Step 3: Supplementary — options OI + premium change per expiry ────────
+    supp_opt = query_dataframe("""
         WITH expiries AS (
             SELECT symbol, expiry_date,
                    ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY expiry_date) AS exp_rank
@@ -707,45 +752,17 @@ def get_fno_expiry_breakdown_by_symbol(as_of_date: date) -> pd.DataFrame:
             SELECT MAX(trade_date) AS prev_dt
             FROM fno_bhavcopy WHERE trade_date < ? AND instrument = 'FUTSTK'
         ),
-        fut_today AS (
-            SELECT f.symbol, x.exp_rank,
-                   SUM(f.open_interest) AS oi,
-                   SUM(f.close_price  * GREATEST(f.contracts, 1))
-                       / NULLIF(SUM(GREATEST(f.contracts, 1)), 0) AS close_p,
-                   SUM(f.settle_price * GREATEST(f.contracts, 1))
-                       / NULLIF(SUM(GREATEST(f.contracts, 1)), 0) AS settle_p
-            FROM fno_bhavcopy f
-            JOIN expiries x ON f.symbol = x.symbol AND f.expiry_date = x.expiry_date
-            WHERE f.trade_date = ? AND f.instrument = 'FUTSTK'
-            GROUP BY f.symbol, x.exp_rank
-        ),
-        fut_prev AS (
-            SELECT f.symbol, x.exp_rank, SUM(f.open_interest) AS prev_oi
-            FROM fno_bhavcopy f
-            JOIN expiries x ON f.symbol = x.symbol AND f.expiry_date = x.expiry_date
-            CROSS JOIN prev_date pd
-            WHERE f.trade_date = pd.prev_dt AND f.instrument = 'FUTSTK'
-            GROUP BY f.symbol, x.exp_rank
-        ),
         opt_today AS (
-            -- Volume-weighted premium change (close - settle) per option type per expiry.
-            -- settle_price = NSE previous-day settlement, embedded in today's row.
-            -- This tells us: did the aggregate option premium rise or fall today?
-            -- Combined with OI direction → buying vs writing.
             SELECT o.symbol, x.exp_rank,
                    SUM(CASE WHEN o.option_type='CE' THEN o.open_interest ELSE 0 END) AS call_oi,
                    SUM(CASE WHEN o.option_type='PE' THEN o.open_interest ELSE 0 END) AS put_oi,
                    SUM(CASE WHEN o.option_type='CE'
-                       THEN (o.close_price - o.settle_price) * GREATEST(o.contracts, 1)
-                       ELSE 0 END)
-                       / NULLIF(SUM(CASE WHEN o.option_type='CE'
-                                    THEN GREATEST(o.contracts, 1) ELSE 0 END), 0)
+                            THEN (o.close_price - o.settle_price) * o.contracts ELSE 0 END)
+                   / NULLIF(SUM(CASE WHEN o.option_type='CE' THEN o.contracts ELSE 0 END), 0)
                        AS call_prem_chg,
                    SUM(CASE WHEN o.option_type='PE'
-                       THEN (o.close_price - o.settle_price) * GREATEST(o.contracts, 1)
-                       ELSE 0 END)
-                       / NULLIF(SUM(CASE WHEN o.option_type='PE'
-                                    THEN GREATEST(o.contracts, 1) ELSE 0 END), 0)
+                            THEN (o.close_price - o.settle_price) * o.contracts ELSE 0 END)
+                   / NULLIF(SUM(CASE WHEN o.option_type='PE' THEN o.contracts ELSE 0 END), 0)
                        AS put_prem_chg
             FROM fno_bhavcopy o
             JOIN expiries x ON o.symbol = x.symbol AND o.expiry_date = x.expiry_date
@@ -761,90 +778,79 @@ def get_fno_expiry_breakdown_by_symbol(as_of_date: date) -> pd.DataFrame:
             CROSS JOIN prev_date pd
             WHERE o.trade_date = pd.prev_dt AND o.instrument = 'OPTSTK'
             GROUP BY o.symbol, x.exp_rank
-        ),
-        combined AS (
-            SELECT ft.symbol, ft.exp_rank,
-                   ft.oi, ft.close_p, ft.settle_p, fp.prev_oi,
-                   ot.call_oi, ot.put_oi,
-                   ot.call_prem_chg, ot.put_prem_chg,
-                   op.call_prev_oi, op.put_prev_oi
-            FROM fut_today ft
-            LEFT JOIN fut_prev  fp ON ft.symbol = fp.symbol AND ft.exp_rank = fp.exp_rank
-            LEFT JOIN opt_today ot ON ft.symbol = ot.symbol AND ft.exp_rank = ot.exp_rank
-            LEFT JOIN opt_prev  op ON ft.symbol = op.symbol AND ft.exp_rank = op.exp_rank
         )
-        SELECT symbol,
-               MAX(CASE WHEN exp_rank=1 THEN oi            END) AS near_oi,
-               MAX(CASE WHEN exp_rank=1 THEN prev_oi       END) AS near_prev_oi,
-               MAX(CASE WHEN exp_rank=1 THEN close_p       END) AS near_close,
-               MAX(CASE WHEN exp_rank=1 THEN settle_p      END) AS near_settle,
-               MAX(CASE WHEN exp_rank=2 THEN oi            END) AS next_oi,
-               MAX(CASE WHEN exp_rank=2 THEN prev_oi       END) AS next_prev_oi,
-               MAX(CASE WHEN exp_rank=2 THEN close_p       END) AS next_close,
-               MAX(CASE WHEN exp_rank=2 THEN settle_p      END) AS next_settle,
-               MAX(CASE WHEN exp_rank=3 THEN oi            END) AS far_oi,
-               MAX(CASE WHEN exp_rank=3 THEN prev_oi       END) AS far_prev_oi,
-               MAX(CASE WHEN exp_rank=3 THEN close_p       END) AS far_close,
-               MAX(CASE WHEN exp_rank=3 THEN settle_p      END) AS far_settle,
-               MAX(CASE WHEN exp_rank=1 THEN call_oi       END) AS near_call_oi,
-               MAX(CASE WHEN exp_rank=1 THEN put_oi        END) AS near_put_oi,
-               MAX(CASE WHEN exp_rank=1 THEN call_prem_chg END) AS near_call_prem_chg,
-               MAX(CASE WHEN exp_rank=1 THEN put_prem_chg  END) AS near_put_prem_chg,
-               MAX(CASE WHEN exp_rank=1 THEN call_prev_oi  END) AS near_call_prev_oi,
-               MAX(CASE WHEN exp_rank=1 THEN put_prev_oi   END) AS near_put_prev_oi,
-               MAX(CASE WHEN exp_rank=2 THEN call_oi       END) AS next_call_oi,
-               MAX(CASE WHEN exp_rank=2 THEN put_oi        END) AS next_put_oi,
-               MAX(CASE WHEN exp_rank=2 THEN call_prem_chg END) AS next_call_prem_chg,
-               MAX(CASE WHEN exp_rank=2 THEN put_prem_chg  END) AS next_put_prem_chg,
-               MAX(CASE WHEN exp_rank=2 THEN call_prev_oi  END) AS next_call_prev_oi,
-               MAX(CASE WHEN exp_rank=2 THEN put_prev_oi   END) AS next_put_prev_oi,
-               MAX(CASE WHEN exp_rank=3 THEN call_oi       END) AS far_call_oi,
-               MAX(CASE WHEN exp_rank=3 THEN put_oi        END) AS far_put_oi
-        FROM combined
-        GROUP BY symbol
-    """, [as_of_date, as_of_date, as_of_date, as_of_date, as_of_date])
+        SELECT t.symbol,
+               MAX(CASE WHEN t.exp_rank=1 THEN t.call_oi       END) AS near_call_oi,
+               MAX(CASE WHEN t.exp_rank=1 THEN t.put_oi        END) AS near_put_oi,
+               MAX(CASE WHEN t.exp_rank=1 THEN t.call_prem_chg END) AS near_call_prem_chg,
+               MAX(CASE WHEN t.exp_rank=1 THEN t.put_prem_chg  END) AS near_put_prem_chg,
+               MAX(CASE WHEN t.exp_rank=1 THEN p.call_prev_oi  END) AS near_call_prev_oi,
+               MAX(CASE WHEN t.exp_rank=1 THEN p.put_prev_oi   END) AS near_put_prev_oi,
+               MAX(CASE WHEN t.exp_rank=2 THEN t.call_oi       END) AS next_call_oi,
+               MAX(CASE WHEN t.exp_rank=2 THEN t.put_oi        END) AS next_put_oi,
+               MAX(CASE WHEN t.exp_rank=2 THEN t.call_prem_chg END) AS next_call_prem_chg,
+               MAX(CASE WHEN t.exp_rank=2 THEN t.put_prem_chg  END) AS next_put_prem_chg,
+               MAX(CASE WHEN t.exp_rank=2 THEN p.call_prev_oi  END) AS next_call_prev_oi,
+               MAX(CASE WHEN t.exp_rank=2 THEN p.put_prev_oi   END) AS next_put_prev_oi,
+               MAX(CASE WHEN t.exp_rank=3 THEN t.call_oi       END) AS far_call_oi,
+               MAX(CASE WHEN t.exp_rank=3 THEN t.put_oi        END) AS far_put_oi
+        FROM opt_today t
+        LEFT JOIN opt_prev p ON t.symbol = p.symbol AND t.exp_rank = p.exp_rank
+        GROUP BY t.symbol
+    """, [as_of_date, as_of_date, as_of_date, as_of_date])
 
-    if df.empty:
-        return df
+    if not supp_opt.empty:
+        base = base.merge(supp_opt, on="symbol", how="left")
+    else:
+        for c in ["near_call_oi", "near_put_oi", "near_call_prem_chg", "near_put_prem_chg",
+                  "near_call_prev_oi", "near_put_prev_oi",
+                  "next_call_oi", "next_put_oi", "next_call_prem_chg", "next_put_prem_chg",
+                  "next_call_prev_oi", "next_put_prev_oi", "far_call_oi", "far_put_oi"]:
+            base[c] = float("nan")
 
-    days_since_roll = _trading_days_since_roll(as_of_date)
-    in_post_expiry  = days_since_roll is not None and days_since_roll <= _POST_EXPIRY_WINDOW
+    df = base.copy()
     df["post_expiry"] = in_post_expiry
 
-    # ── Futures signals (near / next / far) ──────────────────────────────────
-    for rank, pfx in [(1, "near"), (2, "next"), (3, "far")]:
-        df[f"{pfx}_oi_chg_pct"] = (
-            (df[f"{pfx}_oi"] - df[f"{pfx}_prev_oi"])
-            / df[f"{pfx}_prev_oi"].replace(0, float("nan")) * 100
-        ).round(1)
-        df[f"{pfx}_price_chg_pct"] = (
-            (df[f"{pfx}_close"] - df[f"{pfx}_settle"])
-            / df[f"{pfx}_settle"].replace(0, float("nan")) * 100
-        ).round(2)
+    # ── Futures labels (near uses proven base data; next/far computed here) ───
+    # Near: base already has fut_signal (near) and fut_oi_chg_pct
+    df["near_fut_label"] = df.apply(
+        lambda r: _compact_fut_label(
+            str(r.get("fut_signal", "Neutral")), r.get("fut_oi_chg_pct")
+        ), axis=1,
+    )
+    # Next: OI change vs prev-day same contract
+    df["next_oi_chg_pct"] = (
+        (df["next_oi"] - df["next_prev_oi"])
+        / df["next_prev_oi"].replace(0, float("nan")) * 100
+    ).round(1)
+    df["next_price_chg_pct"] = (
+        (df["next_close"] - df["next_settle"])
+        / df["next_settle"].replace(0, float("nan")) * 100
+    ).round(2)
+    df["next_fut_label"] = df.apply(
+        lambda r: _compact_fut_label(
+            _fut_signal(r.get("next_price_chg_pct"), r.get("next_oi_chg_pct")),
+            r.get("next_oi_chg_pct"),
+        ), axis=1,
+    )
+    # Far: OI change only (no price — far month price less meaningful)
+    df["far_oi_chg_pct"] = (
+        (df["far_oi"] - df["far_prev_oi"])
+        / df["far_prev_oi"].replace(0, float("nan")) * 100
+    ).round(1)
+    df["far_fut_label"] = df["far_oi_chg_pct"].apply(
+        lambda v: (f"⚪ {v:+.0f}%" if abs(v) < 0.5 else
+                   f"🟢 +{v:.0f}%" if v > 0 else f"🔴 {v:.0f}%")
+        if pd.notna(v) else "—"
+    )
 
-        def _sig(r, p=pfx, rk=rank):
-            if rk == 1 and in_post_expiry:
-                return "OI settling (post-expiry)"
-            if rk == 1 and pd.isna(r.get(f"{p}_prev_oi", float("nan"))):
-                return "OI N/A"
-            return _fut_signal(r.get(f"{p}_price_chg_pct"), r.get(f"{p}_oi_chg_pct"))
-
-        df[f"{pfx}_fut_signal"] = df.apply(_sig, axis=1)
-        df[f"{pfx}_fut_label"]  = df.apply(
-            lambda r, p=pfx: _compact_fut_label(r[f"{p}_fut_signal"], r.get(f"{p}_oi_chg_pct")),
-            axis=1,
-        )
-
-    # ── Options OI-premium signals (near / next only; far too thin) ───────────
+    # ── Options OI-premium signals (near / next; far = PCR only) ─────────────
     for pfx in ("near", "next"):
-        # OI change % for calls and puts vs same expiry previous day
-        for opt, col in [("call", "CE"), ("put", "PE")]:
+        for opt in ("call", "put"):
             df[f"{pfx}_{opt}_oi_chg_pct"] = (
                 (df[f"{pfx}_{opt}_oi"] - df[f"{pfx}_{opt}_prev_oi"])
                 / df[f"{pfx}_{opt}_prev_oi"].replace(0, float("nan")) * 100
             ).round(1)
-
-        # OI-premium matrix per option type
         df[f"{pfx}_call_sig"] = df.apply(
             lambda r, p=pfx: _opt_oi_prem_signal(
                 r.get(f"{p}_call_oi_chg_pct"), r.get(f"{p}_call_prem_chg"), "CE"
@@ -855,34 +861,25 @@ def get_fno_expiry_breakdown_by_symbol(as_of_date: date) -> pd.DataFrame:
                 r.get(f"{p}_put_oi_chg_pct"), r.get(f"{p}_put_prem_chg"), "PE"
             ), axis=1,
         )
-
-        # PCR for this expiry
         call = df.get(f"{pfx}_call_oi", pd.Series(0, index=df.index)).fillna(0)
         put  = df.get(f"{pfx}_put_oi",  pd.Series(0, index=df.index)).fillna(0)
         df[f"{pfx}_pcr"] = (put / call.replace(0, float("nan"))).round(2)
-
-        # Combined label: call+put OI-premium → single actionable read
         df[f"{pfx}_opt_label"] = df.apply(
             lambda r, p=pfx: _combined_opt_label(
                 r[f"{p}_call_sig"], r[f"{p}_put_sig"], r.get(f"{p}_pcr")
             ), axis=1,
         )
 
-    # Far-month: PCR only (volume too thin for reliable OI-premium matrix)
-    # Displayed as "Opt Far" to keep column naming consistent with Near/Next
     far_call = df.get("far_call_oi", pd.Series(0, index=df.index)).fillna(0)
     far_put  = df.get("far_put_oi",  pd.Series(0, index=df.index)).fillna(0)
-    df["far_pcr"]     = (far_put / far_call.replace(0, float("nan"))).round(2)
+    df["far_pcr"]       = (far_put / far_call.replace(0, float("nan"))).round(2)
     df["far_opt_label"] = df["far_pcr"].apply(_compact_pcr_label)
 
     keep = [
         "symbol", "post_expiry",
-        # Futures per expiry
         "near_fut_label", "next_fut_label", "far_fut_label",
         "near_oi_chg_pct", "next_oi_chg_pct", "far_oi_chg_pct",
-        # Options signals (near/next = full OI-premium matrix; far = PCR only)
         "near_opt_label", "next_opt_label", "far_opt_label",
-        # Raw sub-signals (reference)
         "near_call_sig", "near_put_sig", "next_call_sig", "next_put_sig",
     ]
     return df[[c for c in keep if c in df.columns]].reset_index(drop=True)
