@@ -80,40 +80,36 @@ def _get_remote_version() -> str | None:
         return None
 
 
-def ensure_database() -> tuple[bool, bool]:
+def ensure_database() -> bool:
     """
     Ensure the Cloud DuckDB snapshot is downloaded and up to date.
-    Returns (success, newly_downloaded).
+    Returns True if database is ready, False if download failed.
 
     Logic:
     1. If DB doesn't exist → download.
-    2. If DB exists → check remote version.txt (lightweight, ~10 ms).
-       If remote timestamp > local version → re-download (new data available).
-       If same or can't reach GitHub → use existing DB.
+    2. If DB exists → check remote version.txt (lightweight API call, ~10 ms).
+       Remote newer → re-download. Same/unreachable → use existing DB.
 
-    Called on app startup and periodically from app.py.
+    Called on app startup and every 30 min from app.py.
     """
     if not is_cloud():
-        return True, False
+        return True
 
     os.environ["DATABASE_PATH"] = str(_CLOUD_DB_PATH)
 
     db_exists = _CLOUD_DB_PATH.exists() and _CLOUD_DB_PATH.stat().st_size > 1_000
 
     if db_exists:
-        # Read local version we downloaded last time
-        local_ver = _CLOUD_VER_PATH.read_text().strip() if _CLOUD_VER_PATH.exists() else ""
+        local_ver  = _CLOUD_VER_PATH.read_text().strip() if _CLOUD_VER_PATH.exists() else ""
         remote_ver = _get_remote_version()
 
         if remote_ver and remote_ver != local_ver:
-            print(f"[cloud] New snapshot detected (remote={remote_ver}, local={local_ver}) — re-downloading")
-        elif remote_ver:
-            return True, False   # already up to date
+            print(f"[cloud] New snapshot available (remote={remote_ver}) — re-downloading")
+            # fall through to download
         else:
-            return True, False   # can't reach GitHub, use existing DB
+            return True   # up to date, or GitHub unreachable
 
-    ok = _download_snapshot()
-    return ok, ok
+    return _download_snapshot()
 
 
 def _download_snapshot() -> bool:

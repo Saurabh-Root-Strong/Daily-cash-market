@@ -103,7 +103,7 @@ def _cloud_startup() -> None:
     it re-downloads automatically — no manual "Refresh Data" needed.
     """
     import time as _time
-    from src.core.cloud import is_cloud, ensure_database, get_snapshot_info
+    from src.core.cloud import is_cloud, ensure_database, get_snapshot_info, _CLOUD_DB_PATH
     if not is_cloud():
         return
 
@@ -112,8 +112,12 @@ def _cloud_startup() -> None:
     needs_check = (now - last_check) >= _CLOUD_CHECK_INTERVAL
 
     if needs_check:
+        # Snapshot mtime before — if it changes, a new DB was downloaded
+        db_mtime_before = (
+            _CLOUD_DB_PATH.stat().st_mtime if _CLOUD_DB_PATH.exists() else 0
+        )
         with st.spinner("Checking for latest market data..."):
-            ok, newly_downloaded = ensure_database()
+            ok = ensure_database()
         if not ok:
             st.error(
                 "Could not download market data from GitHub Releases. "
@@ -122,8 +126,11 @@ def _cloud_startup() -> None:
             st.stop()
         st.session_state["_cloud_last_check"] = now
         st.session_state["_cloud_db_ready"]   = True
-        if newly_downloaded:
-            # New snapshot → clear all cached query results so pages show fresh data
+        db_mtime_after = (
+            _CLOUD_DB_PATH.stat().st_mtime if _CLOUD_DB_PATH.exists() else 0
+        )
+        if db_mtime_after != db_mtime_before:
+            # New snapshot was downloaded → clear all caches so pages show fresh data
             st.cache_data.clear()
             st.toast("Market data updated! Showing latest data.", icon="✅")
 
