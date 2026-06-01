@@ -131,6 +131,66 @@ def main() -> None:
         initial_sidebar_state="expanded",
     )
 
+    # ── Responsive CSS ─────────────────────────────────────────────────────────
+    st.markdown("""
+<style>
+/* ── Phone (≤ 640px): single column, compact padding ───────────────── */
+@media screen and (max-width: 640px) {
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+    }
+    [data-testid="stHorizontalBlock"] > [data-testid="column"],
+    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+        min-width: 100% !important;
+        width: 100% !important;
+        flex: 1 1 100% !important;
+    }
+    .main .block-container {
+        padding-left: 0.5rem !important;
+        padding-right: 0.5rem !important;
+        max-width: 100% !important;
+    }
+    [data-testid="stMetricValue"] > div { font-size: 1.05rem !important; }
+    [data-testid="stMetricLabel"] > div { font-size: 0.75rem !important; }
+}
+
+/* ── Phablet / small tablet (641–900px): stack everything ──────────── */
+@media screen and (min-width: 641px) and (max-width: 900px) {
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+    }
+    [data-testid="stHorizontalBlock"] > [data-testid="column"],
+    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+        min-width: 100% !important;
+        flex: 1 1 100% !important;
+    }
+    .main .block-container {
+        padding-left: 0.75rem !important;
+        padding-right: 0.75rem !important;
+    }
+    [data-testid="stMetricValue"] > div { font-size: 1.1rem !important; }
+}
+
+/* ── Tablet / laptop with sidebar (901–1200px): 3-per-row max ───────── *
+ *  Covers 1024px laptop + open sidebar (~1030px content area),           *
+ *  1280px laptop + open sidebar (~1030px content area).                  *
+ *  30% min-width → 5-col KPI wraps to 3+2 rows (not 2+2+1).            */
+@media screen and (min-width: 901px) and (max-width: 1200px) {
+    [data-testid="stHorizontalBlock"] {
+        flex-wrap: wrap !important;
+    }
+    [data-testid="stHorizontalBlock"] > [data-testid="column"],
+    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+        min-width: 30% !important;
+        flex: 1 1 30% !important;
+    }
+}
+
+/* ── Standard laptop / desktop (1201px+): Streamlit defaults apply ──── *
+ *  Wide layout + sidebar ≈ 950–1200px content area. No overrides needed. */
+</style>
+""", unsafe_allow_html=True)
+
     _inject_streamlit_secrets()   # push secrets → os.environ before anything reads them
     _cloud_startup()               # no-op in local mode; downloads DB snapshot in cloud
 

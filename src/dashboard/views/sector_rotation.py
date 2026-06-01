@@ -28,6 +28,7 @@ from src.dashboard.cache.queries import (
     cached_sector_stocks_custom_range,
     cached_sector_stocks_rotation,
     cached_fno_positioning_by_symbol,
+    cached_fno_expiry_breakdown,
 )
 from src.dashboard.constants import NEGATIVE_COLOR, POSITIVE_COLOR, PLOT_BG, PAPER_BG, GRID_COLOR
 from src.dashboard.components.charts import hex_to_rgba as _hex_to_rgba  # deduped helper
@@ -428,6 +429,7 @@ _MIN_STOCK_WTD_DELIV_PCT = 48.0
 
 def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                  deliv_threshold: float = _MIN_STOCK_WTD_DELIV_PCT,
+                 deliv_vs_100d_pct: float = 0.0,
                  fno_row: pd.Series | None = None) -> None:
     meta       = _SIGNAL_META.get(row["signal"], {})
     color      = meta.get("color", "#888")
@@ -527,7 +529,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
         f"<span style='font-size:11px;color:{color};font-weight:600'>{score:.0f}/100</span></div>"
         f"{bar_html}"
         f"<div style='font-size:11px;margin-bottom:4px'>{row['signal']} &nbsp; {action_html}</div>"
-        f"<div style='display:flex;gap:16px;margin-top:4px;font-size:12px'>"
+        f"<div style='display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:4px;font-size:12px'>"
         f"<span>DV Today: <b>{dv_str}</b></span>"
         f"<span>5D Avg: <b style='color:{dv5d_color}'>{dv5d_str}</b></span>"
         f"<span>Z-Rank: <b style='color:{z_color}'>{z_str}</b></span>"
@@ -599,21 +601,37 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
             stocks = stocks.copy()
             stocks["conviction"] = stocks.apply(_stock_signal, axis=1)
 
-            # ── F&O overlay: merge per-symbol futures/options positioning ──────
-            # Cached (@st.cache_data), so calling per-card is a cache hit. Non-F&O
-            # stocks get NaN → rendered blank, exactly as intended. fut_signal is
-            # the OI-price read (or "OI settling (post-expiry)"); opt_signal is the
-            # PCR read. These are SHORT-TERM (daily OI) reads — complementary to the
-            # swing delivery conviction, not a replacement.
-            _fno = cached_fno_positioning_by_symbol(selected_date)
-            if not _fno.empty:
-                stocks = stocks.merge(
-                    _fno[["symbol", "fut_signal", "opt_signal"]],
-                    on="symbol", how="left",
+            # % excess of recent 7D delivery vs own 100D baseline
+            # +15 = recent delivery 15% above own historical norm; −8 = below norm
+            if "avg_deliv_per_100d" in stocks.columns:
+                stocks["deliv_vs_100d_pct"] = stocks.apply(
+                    lambda r: (r["wtd_deliv_per"] / r["avg_deliv_per_100d"] - 1) * 100
+                    if pd.notna(r.get("avg_deliv_per_100d")) and r.get("avg_deliv_per_100d", 0) > 0
+                    else float("nan"),
+                    axis=1,
                 )
+
+            # ── F&O overlay: per-expiry futures OI + options PCR ────────────
+            # Both calls are @st.cache_data — cache hits per sector card.
+            # Non-F&O stocks get NaN → rendered blank, as intended.
+            # near/next/far gives context across the 3 monthly contracts:
+            #   - Near collapsing on expiry day = rollover, NOT selling
+            #   - Next surging on expiry day = fresh positioning (real signal)
+            #   - PCR per expiry filters near-month options noise at expiry
+            _fno_exp = cached_fno_expiry_breakdown(selected_date)
+            if not _fno_exp.empty:
+                exp_cols = [c for c in [
+                    "symbol",
+                    "near_fut_label", "next_fut_label", "far_fut_label",
+                    "near_opt_label", "next_opt_label",
+                    "near_pcr", "next_pcr", "far_pcr_label",
+                ] if c in _fno_exp.columns]
+                stocks = stocks.merge(_fno_exp[exp_cols], on="symbol", how="left")
             else:
-                stocks["fut_signal"] = None
-                stocks["opt_signal"] = None
+                for c in ["near_fut_label", "next_fut_label", "far_fut_label",
+                          "near_opt_label", "next_opt_label",
+                          "near_pcr", "next_pcr", "far_pcr_label"]:
+                    stocks[c] = None
 
             if invest_signal:
                 _rank = {"🔥 Strong": 0, "✅ Buying": 1, "👀 Watch": 2, "⚪ Weak": 3}
@@ -682,20 +700,44 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                 )
 
             display_cols = ["symbol", "company_name", "industry", "ltp", "conviction",
-                            "fut_signal", "opt_signal",
-                            "wtd_deliv_per", "avg_deliv_per_100d",
+                            "near_fut_label", "next_fut_label", "far_fut_label",
+                            "near_opt_label", "next_opt_label",
+                            "near_pcr", "next_pcr", "far_pcr_label",
+                            "wtd_deliv_per", "deliv_vs_100d_pct", "avg_deliv_per_100d",
                             "deliv_value_cr", "turnover_cr", "price_chg_pct"]
             display_cols = [c for c in display_cols if c in stocks.columns]
 
-            # Show only stocks with 7D turnover-weighted delivery % above the floor.
+            # Show only stocks with 7D turnover-weighted delivery % above the absolute floor.
             # Conviction + dominance/top-3 context above stay on the full sector set.
             shown = stocks[stocks["wtd_deliv_per"] > deliv_threshold]
+
+            # Optional second filter: keep only stocks whose 7D wtd delivery exceeds
+            # their own 100D average by at least deliv_vs_100d_pct %.
+            # Formula: wtd_deliv_per >= avg_deliv_per_100d * (1 + deliv_vs_100d_pct / 100)
+            # Stocks with no 100D history (NaN avg) are excluded when filter > 0 —
+            # they cannot be verified against their own norm.
+            if deliv_vs_100d_pct > 0 and "avg_deliv_per_100d" in shown.columns:
+                multiplier = 1 + deliv_vs_100d_pct / 100
+                shown = shown[
+                    shown.apply(
+                        lambda r: (
+                            pd.notna(r["avg_deliv_per_100d"])
+                            and r["avg_deliv_per_100d"] > 0
+                            and r["wtd_deliv_per"] >= r["avg_deliv_per_100d"] * multiplier
+                        ),
+                        axis=1,
+                    )
+                ]
+
             n_hidden = len(stocks) - len(shown)
             if n_hidden:
+                filter_parts = [f"Wtd Deliv % > {deliv_threshold:.0f}%"]
+                if deliv_vs_100d_pct > 0:
+                    filter_parts.append(f"7D ≥ {deliv_vs_100d_pct:.0f}%+ above own 100D avg")
                 st.caption(
                     f"Showing {len(shown)} of {len(stocks)} stocks — "
-                    f"Wtd Deliv % > {deliv_threshold:.0f}% "
-                    f"({n_hidden} below threshold hidden)."
+                    f"{' AND '.join(filter_parts)} "
+                    f"({n_hidden} hidden)."
                 )
 
             st.dataframe(
@@ -726,22 +768,97 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                              "📉 Fading    = price rising but delivery not below avg\n"
                              "⚪ Neutral   = no clear signal\n\n"
                              "Falls back to sector-relative percentile for stocks with no 100D history"),
-                    "fut_signal":    st.column_config.TextColumn(
-                        "Futures",
-                        help="Stock-FUTURES positioning (near-month OI vs price, daily):\n"
-                             "🟢 Long Buildup = OI↑ + price↑ (fresh longs)\n"
-                             "🔴 Short Buildup = OI↑ + price↓ (fresh shorts)\n"
-                             "Short Covering = OI↓ + price↑ | Long Unwinding = OI↓ + price↓\n"
-                             "Blank = not an F&O stock. 'OI settling (post-expiry)' = "
-                             "2-3 days after monthly expiry, OI still rolling — not reliable.\n"
-                             "SHORT-TERM read — confirms/diverges from the swing delivery signal."),
-                    "opt_signal":    st.column_config.TextColumn(
-                        "Options",
-                        help="Stock-OPTIONS positioning — near-month put/call OI (DESCRIPTIVE):\n"
-                             "Put Heavy (PCR>1.3) = heavy put OI | Call Heavy (PCR<0.6) = heavy call OI\n"
-                             "Balanced = in between. Blank = not an F&O stock.\n"
-                             "NOTE: shown as context only — the contrarian read did NOT validate "
-                             "(IC test: high PCR went with lower forward returns). Do not trade off it alone."),
+                    # ── Per-expiry Futures columns (Near / Next / Far) ─────────
+                    # Format: "🟢 LB +38%"  /  "🔴 SB -12%"  /  "⚪ +1%"  /  "⟳ rolling"
+                    # On expiry day: Near shows "⟳ rolling" (rollover noise),
+                    # Next shows the REAL fresh positioning — that's the signal to read.
+                    "near_fut_label": st.column_config.TextColumn(
+                        "Fut Near",
+                        help="FUTURES — Near-month (current expiry) OI signal:\n"
+                             "🟢 LB = Long Buildup (OI↑ + price↑ — fresh longs)\n"
+                             "🔴 SB = Short Buildup (OI↑ + price↓ — fresh shorts)\n"
+                             "🔵 SC = Short Covering (OI↓ + price↑)\n"
+                             "🟠 LU = Long Unwinding (OI↓ + price↓)\n"
+                             "⚪ = Neutral (small move)\n"
+                             "⟳ rolling = expiry rollover in progress — OI unreliable, see Next month\n"
+                             "Number = OI change % vs yesterday (SAME contract, not rank-matched)"),
+                    "next_fut_label": st.column_config.TextColumn(
+                        "Fut Next",
+                        help="FUTURES — Next-month OI signal (most informative near expiry):\n"
+                             "When near-month shows '⟳ rolling', THIS column shows where\n"
+                             "real money is being positioned for the coming month.\n"
+                             "🟢 LB = fresh longs in next month → bullish carry-over\n"
+                             "🔴 SB = fresh shorts in next month → bearish positioning\n"
+                             "OI change matched by the SAME next-month expiry_date — no rollover artifacts"),
+                    "far_fut_label": st.column_config.TextColumn(
+                        "Fut Far",
+                        help="FUTURES — Far-month OI signal (3rd monthly expiry):\n"
+                             "Speculative / longer-term positioning.\n"
+                             "Lower liquidity — treat as directional context, not a primary signal.\n"
+                             "Large OI build in far month = conviction over the coming 2–3 months"),
+                    # ── Options OI-Premium Matrix (Near / Next) ─────────────────
+                    # Solves the core PCR ambiguity: PCR tells you the RATIO of put/call OI
+                    # but NOT whether that OI was built by BUYERS or WRITERS.
+                    # Low PCR (Call Heavy) could mean:
+                    #   a) Call WRITING (bearish) — the standard contrarian read
+                    #   b) Call BUYING  (directly bullish) — the market is going up
+                    # The OI-premium matrix disambiguates:
+                    #   OI↑ + premium↑ → BUYING  (demand drives both up)
+                    #   OI↑ + premium↓ → WRITING (supply: writers push price down)
+                    #   OI↓ + premium↑ → SHORT COVERING (writers buying back)
+                    #   OI↓ + premium↓ → LONG EXITING (buyers selling out)
+                    "near_opt_label": st.column_config.TextColumn(
+                        "Opt Near",
+                        help="OPTIONS — Near-month OI+Premium matrix (buying vs writing):\n\n"
+                             "🔥 Bull C.Buy+P.Wrt = Calls being BOUGHT + Puts being WRITTEN\n"
+                             "  → Smart money net LONG: call buyers are bullish; put writers\n"
+                             "    are also bullish (selling puts = accepting downside risk for premium)\n\n"
+                             "❄️ Bear C.Wrt+P.Buy = Calls being WRITTEN + Puts being BOUGHT\n"
+                             "  → Smart money net SHORT: call writers are capping upside;\n"
+                             "    put buyers are hedging/betting on a fall\n\n"
+                             "⚡ Vol Bet C+P.Buy = Both calls AND puts being bought\n"
+                             "  → Straddle / strangle: big move expected, direction unclear\n\n"
+                             "📊 Range C+P.Wrt = Both calls AND puts being written\n"
+                             "  → Iron condor / theta play: low volatility expected\n\n"
+                             "PCR shown as context — the OI-premium signal is the primary read.\n"
+                             "Near expiry: positions rolling → read Opt Next instead"),
+                    "next_opt_label": st.column_config.TextColumn(
+                        "Opt Next",
+                        help="OPTIONS — Next-month OI+Premium matrix (most reliable near expiry):\n\n"
+                             "Same signal logic as Opt Near but for the next monthly expiry.\n"
+                             "On expiry day, near-month options are closing/rolling — next-month\n"
+                             "shows where FRESH institutional positioning is being built.\n\n"
+                             "🔥 Bull C.Buy+P.Wrt → fresh next-month net longs accumulating\n"
+                             "❄️ Bear C.Wrt+P.Buy → fresh next-month net shorts building\n\n"
+                             "Compare with Fut Next (futures OI direction) for confirmation:\n"
+                             "Fut Next = 🟢 LB + Opt Next = 🔥 Bull → HIGH CONVICTION LONG\n"
+                             "Fut Next = 🔴 SB + Opt Next = ❄️ Bear → HIGH CONVICTION SHORT"),
+                    # ── Supporting PCR numbers ───────────────────────────────────
+                    "near_pcr": st.column_config.NumberColumn(
+                        "PCR Near", format="%.2f",
+                        help="Near-month Put/Call OI ratio (descriptive context).\n"
+                             "> 1.3 = Put heavy  |  < 0.6 = Call heavy  |  0.6–1.3 = Balanced\n"
+                             "Use Opt Near column for the actual directional read —\n"
+                             "PCR alone cannot distinguish buying from writing."),
+                    "next_pcr": st.column_config.NumberColumn(
+                        "PCR Next", format="%.2f",
+                        help="Next-month Put/Call OI ratio.\n"
+                             "More reliable near expiry than near-month PCR.\n"
+                             "Use Opt Next column for the full buying-vs-writing signal."),
+                    "far_pcr_label": st.column_config.TextColumn(
+                        "PCR Far",
+                        help="Far-month (3rd expiry) PCR — OI ratio only, no premium analysis\n"
+                             "(far-month options have low volume, premium signal unreliable).\n"
+                             "Put↑ = PCR>1.3 | Call↑ = PCR<0.6 | Bal = between\n"
+                             "Treat as macro/structural sentiment, not a short-term signal"),
+                    "deliv_vs_100d_pct": st.column_config.NumberColumn(
+                        "vs 100D", format="%+.1f%%",
+                        help="(7D Wtd Delivery % ÷ 100D avg − 1) × 100\n\n"
+                             "+15% = recent delivery is 15% ABOVE own 100D norm → strong conviction\n"
+                             "−10% = recent delivery is 10% BELOW own norm → fading interest\n"
+                             "0% = exactly at own historical average\n\n"
+                             "Use this to instantly compare the two adjacent columns — "
+                             "positive = above own norm (bullish quality), negative = below norm."),
                     "avg_deliv_per_100d": st.column_config.NumberColumn(
                         "100D Avg Del%", format="%.1f%%",
                         help="Stock's own 100-trading-day average delivery %\n\n"
@@ -799,7 +916,7 @@ def _phase_card(row: pd.Series, color: str) -> None:
         f"<div style='display:flex;justify-content:space-between;align-items:center'>"
         f"<b style='font-size:13px'>{sector}</b>"
         f"<span style='font-size:12px;font-weight:600;color:{price_c}'>{price:+.2f}%</span></div>"
-        f"<div style='display:flex;gap:14px;margin-top:3px;font-size:11px;color:rgba(255,255,255,0.55)'>"
+        f"<div style='display:flex;flex-wrap:wrap;gap:6px 14px;margin-top:3px;font-size:11px;color:rgba(255,255,255,0.55)'>"
         f"<span>Del Chg: <b style='color:{chg_c}'>{chg_str}</b></span>"
         f"<span>Slope Z: <b style='color:{color}'>{slope_z:+.2f}σ</b></span>"
         f"<span>DV: <b>₹{dv_cr:,.0f} Cr</b></span>"
@@ -1717,15 +1834,32 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
 
     st.markdown("---")
 
-    # Per-stock delivery filter — controls every "View stocks in …" drill-down below.
-    deliv_threshold = st.slider(
-        "Min stock Wtd Delivery % — filters the per-stock lists below",
-        min_value=0, max_value=100, value=int(_MIN_STOCK_WTD_DELIV_PCT), step=1,
-        key="rotation_stock_deliv_threshold",
-        help="Hide stocks whose 7-day turnover-weighted delivery % is at or below this value "
-             "inside the 'View stocks in …' expanders. Sector-level stats (top-3 contributors, "
-             "single-stock dominance warning) still use the full stock set.",
-    )
+    # Per-stock delivery filters — control every "View stocks in …" drill-down below.
+    _fcol1, _fcol2 = st.columns(2)
+    with _fcol1:
+        deliv_threshold = st.slider(
+            "Min stock Wtd Delivery % — filters the per-stock lists below",
+            min_value=0, max_value=100, value=int(_MIN_STOCK_WTD_DELIV_PCT), step=1,
+            key="rotation_stock_deliv_threshold",
+            help="Hide stocks whose 7-day turnover-weighted delivery % is at or below this value "
+                 "inside the 'View stocks in …' expanders. Sector-level stats (top-3 contributors, "
+                 "single-stock dominance warning) still use the full stock set.",
+        )
+    with _fcol2:
+        deliv_vs_100d_pct = st.slider(
+            "Min 7D vs 100D excess % — filters the per-stock lists below",
+            min_value=0, max_value=100, value=0, step=5,
+            key="rotation_stock_deliv_vs_100d_pct",
+            help=(
+                "Show only stocks where the 7-day turnover-weighted delivery % is at least X% "
+                "ABOVE the stock's own 100-trading-day average delivery %.\n\n"
+                "Example — 10% filter: a stock with a 100D avg of 40% must show ≥ 44% recent "
+                "delivery to appear. A stock with a 100D avg of 25% must show ≥ 27.5%.\n\n"
+                "0 = no filter (all stocks above the base Wtd Deliv % threshold are shown).\n"
+                "Set 10–20% to isolate stocks showing abnormally high recent delivery "
+                "relative to their own norm — the strongest own-history conviction reads."
+            ),
+        )
 
     col_enter, col_avoid = st.columns(2)
 
@@ -1747,7 +1881,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                         unsafe_allow_html=True,
                     )
                     shown_divider = True
-                _sector_card(row, selected_date, min_turnover, deliv_threshold)
+                _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct)
 
     with col_avoid:
         st.markdown("### 🔴 SECTORS TO AVOID / EXIT")
@@ -1764,7 +1898,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 unsafe_allow_html=True,
             )
             for _, row in exiting.iterrows():
-                _sector_card(row, selected_date, min_turnover, deliv_threshold)
+                _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct)
 
         # Tier 2 — relative laggards: weakest sectors by score, excluding any
         # already shown in the invest / caution / distribution lists. The absolute
@@ -1785,7 +1919,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 unsafe_allow_html=True,
             )
             for _, row in laggards.iterrows():
-                _sector_card(row, selected_date, min_turnover, deliv_threshold)
+                _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct)
 
     if not caution.empty:
         st.markdown("---")
@@ -1796,7 +1930,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             "Do not buy based on delivery value alone."
         )
         for _, row in caution.iterrows():
-            _sector_card(row, selected_date, min_turnover, deliv_threshold)
+            _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct)
 
     st.markdown("---")
 

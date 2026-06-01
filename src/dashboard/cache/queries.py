@@ -224,6 +224,13 @@ def cached_sector_fno_aggregate(trade_date: date) -> pd.DataFrame:
 
 
 @st.cache_data(ttl=_TTL)
+def cached_fno_expiry_breakdown(trade_date: date) -> pd.DataFrame:
+    """Per-symbol near/next/far futures OI change % and options PCR for all 3 expiries."""
+    from src.analytics.fno_stocks import get_fno_expiry_breakdown_by_symbol
+    return get_fno_expiry_breakdown_by_symbol(trade_date)
+
+
+@st.cache_data(ttl=_TTL)
 def cached_fno_composite_signals(trade_date: date, min_fut_oi: int = 50_000) -> pd.DataFrame:
     from src.analytics.fno_signals import get_fno_composite_signals
     return get_fno_composite_signals(trade_date, min_fut_oi=min_fut_oi)
