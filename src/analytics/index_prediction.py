@@ -58,9 +58,12 @@ Signals 22–24 are Statistical Regime signals applied to all indices.
                                Reveals WHO is buying (institutions vs day traders)
   17d.Constituent Fut OI       Nifty 50 ONLY — stock futures OI-Price matrix consensus
                                Fresh long/short buildup across 50 constituent stocks
-                               Disambiguates index OI: stock futures are ALWAYS directional
-                               (no hedge use case exists) → pure institutional conviction signal
+                               Stock futures = always directional (no hedge use case)
                                net bull ≥ 30% above bear = +2.0 basket long conviction
+  17e.Constituent Opt OI-Prem  Nifty 50 ONLY — stock options OI-Premium matrix basket
+                               C.Buy+P.Write = Net Long per stock; aggregated across 50
+                               Disambiguates PCR: OI↑+Prem↑=Buying vs OI↑+Prem↓=Writing
+                               net_long_pct - net_short_pct ≥ 0.25 = +2.0 basket bull
 
   ── Multi-Expiry (Nifty 50 only — weekly + monthly expiry both available) ─────
   18. Cross-Expiry PCR       Weekly PCR vs Monthly PCR divergence
@@ -268,6 +271,16 @@ class MarketContext:
     n50_fut_fresh_short: int = 0   # price↓ + OI↑ = new money entering shorts
     n50_fut_long_unwind: int = 0   # price↓ + OI↓ = longs exiting
     n50_fut_short_cov:   int = 0   # price↑ + OI↓ = shorts covering
+
+    # ── Nifty 50 constituent stock options OI-Premium matrix (Signal 17e) ───────
+    # OI-Premium matrix applied to the options chains of all 50 constituent stocks.
+    # Disambiguates WHAT is happening in options: buying (OI↑+Prem↑) vs writing
+    # (OI↑+Prem↓). Aggregate basket configuration reveals institutional intent.
+    n50_opt_valid:     int = 0   # stocks with valid call + put classification
+    n50_opt_net_long:  int = 0   # call buying and/or put writing (institutional bull)
+    n50_opt_net_short: int = 0   # put buying and/or call writing (institutional bear)
+    n50_opt_straddle:  int = 0   # both call + put buying (big move expected, no direction)
+    n50_opt_range:     int = 0   # both call + put writing (low vol, range play)
 
 
 @dataclass
@@ -722,6 +735,129 @@ def _build_market_context(trade_date: date) -> MarketContext:
             ctx.n50_fut_fresh_short = _fs
             ctx.n50_fut_long_unwind = _lu
             ctx.n50_fut_short_cov   = _sc
+
+    # ── Nifty 50 constituent stock options OI-Premium matrix (Signal 17e) ────
+    # Aggregate near-expiry call + put OI change and volume-weighted premium change
+    # across all 50 constituent stocks. settle_price for OPTSTK = previous-day
+    # settlement (NSE DAT column 9 = "previous close price"), so
+    # (close_price - settle_price) = today's premium change. Same as Signal 5.
+    _sym_ph_o = ", ".join("?" * len(_NIFTY50_SYMBOLS))
+    _n50_opt_df = query_dataframe(f"""
+        WITH last2 AS (
+            SELECT DISTINCT trade_date
+            FROM fno_bhavcopy
+            WHERE instrument = 'OPTSTK'
+              AND symbol IN ({_sym_ph_o})
+              AND trade_date <= ?
+            ORDER BY trade_date DESC LIMIT 2
+        ),
+        near_exp_date AS (
+            SELECT symbol, trade_date, MIN(expiry_date) AS near_expiry
+            FROM fno_bhavcopy
+            WHERE instrument = 'OPTSTK'
+              AND symbol IN ({_sym_ph_o})
+              AND trade_date IN (SELECT trade_date FROM last2)
+              AND open_interest > 0
+            GROUP BY symbol, trade_date
+        )
+        SELECT
+            f.symbol,
+            f.trade_date,
+            ne.near_expiry,
+            f.option_type,
+            SUM(f.open_interest) AS total_oi,
+            SUM(CASE WHEN f.contracts > 0 AND f.settle_price > 0
+                     THEN (f.close_price - f.settle_price) * f.contracts
+                     ELSE 0 END
+            ) / NULLIF(SUM(CASE WHEN f.contracts > 0 AND f.settle_price > 0
+                                THEN f.contracts ELSE 0 END), 0) AS wt_prem_chg,
+            SUM(f.contracts) AS total_contracts
+        FROM fno_bhavcopy f
+        INNER JOIN near_exp_date ne
+            ON  f.symbol     = ne.symbol
+            AND f.trade_date = ne.trade_date
+            AND f.expiry_date= ne.near_expiry
+        WHERE f.instrument = 'OPTSTK'
+          AND f.open_interest > 0
+        GROUP BY f.symbol, f.trade_date, ne.near_expiry, f.option_type
+        ORDER BY f.symbol, f.trade_date DESC, f.option_type
+    """, [*_NIFTY50_SYMBOLS, trade_date, *_NIFTY50_SYMBOLS])
+
+    if not _n50_opt_df.empty:
+        _n50_opt_df["trade_date"]  = pd.to_datetime(_n50_opt_df["trade_date"]).dt.date
+        _n50_opt_df["near_expiry"] = pd.to_datetime(_n50_opt_df["near_expiry"]).dt.date
+        _opt_dates = sorted(_n50_opt_df["trade_date"].unique(), reverse=True)
+        _opt_td = _opt_dates[0] if _opt_dates else None
+        _opt_pd = _opt_dates[1] if len(_opt_dates) >= 2 else None
+
+        if _opt_td and _opt_pd:
+            # Build lookup: (symbol, option_type) → row  for each date
+            _opt_today = _n50_opt_df[_n50_opt_df["trade_date"] == _opt_td].set_index(["symbol", "option_type"])
+            _opt_prev  = _n50_opt_df[_n50_opt_df["trade_date"] == _opt_pd].set_index(["symbol", "option_type"])
+            _MIN_CONTR = 100   # min contracts for premium change to be meaningful
+
+            _on = _os = _ostr = _or = _ov = 0
+
+            # Collect all symbols that have both CE and PE data today
+            _syms_today = {s for s, _ in _opt_today.index}
+            for _sym in _syms_today:
+                try:
+                    t_ce = _opt_today.loc[(_sym, "CE")]
+                    t_pe = _opt_today.loc[(_sym, "PE")]
+                except KeyError:
+                    continue   # missing CE or PE for this symbol today
+
+                # Rollover guard: skip if near expiry changed vs yesterday
+                try:
+                    p_ce = _opt_prev.loc[(_sym, "CE")]
+                    p_pe = _opt_prev.loc[(_sym, "PE")]
+                except KeyError:
+                    continue   # no previous data for this stock
+
+                if t_ce["near_expiry"] != p_ce["near_expiry"]:
+                    continue   # monthly expiry rollover for this stock
+
+                # OI change %
+                _c_oi_t = float(t_ce["total_oi"]); _c_oi_p = float(p_ce["total_oi"])
+                _p_oi_t = float(t_pe["total_oi"]); _p_oi_p = float(p_pe["total_oi"])
+                if _c_oi_p <= 0 or _p_oi_p <= 0:
+                    continue
+
+                c_oi_chg = (_c_oi_t - _c_oi_p) / _c_oi_p * 100
+                p_oi_chg = (_p_oi_t - _p_oi_p) / _p_oi_p * 100
+                c_prem   = t_ce.get("wt_prem_chg"); c_contr = float(t_ce.get("total_contracts", 0) or 0)
+                p_prem   = t_pe.get("wt_prem_chg"); p_contr = float(t_pe.get("total_contracts", 0) or 0)
+
+                # Classify each side (OI must change meaningfully; premium needs volume)
+                c_oi_up = c_oi_chg >  0.5
+                p_oi_up = p_oi_chg >  0.5
+                c_prem_up = (c_prem is not None and not pd.isna(c_prem) and
+                             float(c_prem) > 0 and c_contr >= _MIN_CONTR)
+                p_prem_up = (p_prem is not None and not pd.isna(p_prem) and
+                             float(p_prem) > 0 and p_contr >= _MIN_CONTR)
+
+                c_buy = c_oi_up and c_prem_up    # call OI↑ + premium↑ = call buying
+                c_wrt = c_oi_up and not c_prem_up # call OI↑ + premium↓ = call writing
+                p_buy = p_oi_up and p_prem_up     # put OI↑ + premium↑ = put buying
+                p_wrt = p_oi_up and not p_prem_up  # put OI↑ + premium↓ = put writing
+
+                # Skip if neither side has significant OI change
+                if not (c_oi_up or p_oi_up):
+                    continue
+
+                _ov += 1
+                if   c_buy and p_wrt:  _on   += 1   # both sides bullish → net long
+                elif c_wrt and p_buy:  _os   += 1   # both sides bearish → net short
+                elif c_buy and p_buy:  _ostr += 1   # both buying → straddle
+                elif c_wrt and p_wrt:  _or   += 1   # both writing → range
+                elif c_buy or p_wrt:   _on   += 1   # single-sided bullish
+                elif p_buy or c_wrt:   _os   += 1   # single-sided bearish
+
+            ctx.n50_opt_valid    = _ov
+            ctx.n50_opt_net_long = _on
+            ctx.n50_opt_net_short= _os
+            ctx.n50_opt_straddle = _ostr
+            ctx.n50_opt_range    = _or
 
     # ── Sector breadth + rotation ─────────────────────────────────────────────
     sec_df = _load_sector_indices(trade_date)
@@ -1822,6 +1958,122 @@ def _sig_constituent_fut_oi(ctx: MarketContext) -> Optional[IndexSignal]:
     return IndexSignal(name, "Futures OI", direction, score, head, desc, emoji)
 
 
+def _sig_constituent_opt_oi_prem(ctx: MarketContext) -> Optional[IndexSignal]:
+    """
+    Signal 17e: Nifty 50 constituent stock options OI-Premium matrix — NIFTY exclusive.
+
+    WHAT IT MEASURES:
+      For each Nifty 50 stock: aggregate all near-expiry call and put strikes into
+      a single OI-change + volume-weighted premium change reading. Then classify
+      each stock's options configuration using the same 4-quadrant matrix as Signal 5:
+
+        OI ↑ + Premium ↑  →  Buying    (directional bet — paying UP for the option)
+        OI ↑ + Premium ↓  →  Writing   (premium collection — taking the OPPOSITE side)
+        OI ↓ + Premium ↑  →  SC        (writers buying back — options squeeze)
+        OI ↓ + Premium ↓  →  LE        (buyers closing out)
+
+    COMBINED BASKET CLASSIFICATION PER STOCK:
+        C.Buy  + P.Write = Net Long  → institutions bullish (both sides confirm)
+        C.Write + P.Buy  = Net Short → institutions bearish (both sides confirm)
+        C.Buy  + P.Buy   = Straddle  → big move expected, no direction
+        C.Write + P.Write = Range   → low vol / theta decay expected
+
+    WHY THIS IS DIFFERENT FROM SIGNAL 5 (Index PCR / OI-Premium):
+      Signal 5 analyses the options ON THE INDEX ITSELF (OPTIDX for NIFTY).
+      This signal analyses the options on the 50 individual stocks that MAKE UP the index.
+      When 30+ constituent stocks simultaneously show Call Buying across their own
+      options chains, institutions are buying individual-stock upside exposure —
+      the most specific expression of a bullish Nifty view possible.
+
+    SCORING (based on basket net_long_pct vs net_short_pct):
+      net ≥ 0.45  → +3.0  Exceptional: >45% more net-long stocks than net-short
+      net ≥ 0.25  → +2.0  Strong basket bullish options configuration
+      net ≥ 0.12  → +1.0  Mild bullish lean in constituent options
+      net ≤ −0.45 → −3.0  Exceptional: institutional bearish across basket
+      net ≤ −0.25 → −2.0  Strong basket bearish options
+      net ≤ −0.12 → −1.0  Mild bearish lean
+    """
+    valid = ctx.n50_opt_valid
+    if valid < 15:
+        return None   # need at least 15 classifiable stocks
+
+    nl   = ctx.n50_opt_net_long
+    ns   = ctx.n50_opt_net_short
+    ostr = ctx.n50_opt_straddle
+    orng = ctx.n50_opt_range
+
+    nl_pct = nl / valid
+    ns_pct = ns / valid
+    net    = nl_pct - ns_pct
+
+    # Straddle dominance = big-move expectation, not directional
+    straddle_dominant = ostr / valid >= 0.30
+
+    if net >= 0.45:
+        score = 3.0
+        name  = "N50 Basket Options: Exceptional Call Buying / Put Writing"
+        head  = (f"{nl}/{valid} N50 stocks Net Long options config "
+                 f"({nl_pct:.0%} bull vs {ns_pct:.0%} bear, net {net:+.0%})")
+        emoji = "🔥"
+    elif net >= 0.25:
+        score = 2.0
+        name  = "N50 Basket Options: Broadly Bullish Configuration"
+        head  = (f"{nl} net-long vs {ns} net-short stocks in options "
+                 f"({nl_pct:.0%} vs {ns_pct:.0%}, net {net:+.0%})")
+        emoji = "🟢"
+    elif net >= 0.12:
+        score = 1.0
+        name  = "N50 Basket Options: Mild Bullish Lean"
+        head  = f"N50 options basket: {nl_pct:.0%} bullish vs {ns_pct:.0%} bearish (mild bull)"
+        emoji = "🟡"
+    elif net <= -0.45:
+        score = -3.0
+        name  = "N50 Basket Options: Exceptional Put Buying / Call Writing"
+        head  = (f"{ns}/{valid} N50 stocks Net Short options config "
+                 f"({ns_pct:.0%} bear vs {nl_pct:.0%} bull, net {net:+.0%})")
+        emoji = "💀"
+    elif net <= -0.25:
+        score = -2.0
+        name  = "N50 Basket Options: Broadly Bearish Configuration"
+        head  = (f"{ns} net-short vs {nl} net-long stocks in options "
+                 f"({ns_pct:.0%} vs {nl_pct:.0%}, net {net:+.0%})")
+        emoji = "🔴"
+    elif net <= -0.12:
+        score = -1.0
+        name  = "N50 Basket Options: Mild Bearish Lean"
+        head  = f"N50 options basket: {ns_pct:.0%} bearish vs {nl_pct:.0%} bullish (mild bear)"
+        emoji = "🟠"
+    else:
+        return None   # net between -0.12 and +0.12: mixed, no directional edge
+
+    # Straddle note: large straddle count means big-move expectations even on directional signal
+    straddle_note = ""
+    if straddle_dominant:
+        straddle_note = (
+            f" Note: {ostr}/{valid} stocks also show straddle config (both call + put buying) — "
+            "options market expects high volatility regardless of direction."
+        )
+
+    direction = 1 if score > 0 else -1
+    desc = (
+        f"OI-Premium matrix applied to near-expiry options chains of {valid} Nifty 50 stocks:\n"
+        f"  Net Long  (C.Buy/P.Write) : {nl:2d} ({nl_pct:.0%}) — both sides confirm bullish\n"
+        f"  Net Short (C.Write/P.Buy) : {ns:2d} ({ns_pct:.0%}) — both sides confirm bearish\n"
+        f"  Straddle  (C.Buy+P.Buy)   : {ostr:2d} — big move expected, no direction\n"
+        f"  Range     (C.Write+P.Write): {orng:2d} — low vol / theta play\n"
+        f"\n"
+        f"OI-Premium matrix disambiguates PCR: a high PCR could mean put buying (bearish hedge) "
+        f"OR put writing (bullish premium collection) — completely opposite signals from the "
+        f"same raw number. By checking whether premium rises or falls WITH the OI change, "
+        f"we determine WHO is driving the OI. "
+        f"Applied to 50 constituent stocks individually, this reveals whether the options "
+        f"activity is directional conviction or just mechanical hedging."
+        f"{straddle_note}"
+    )
+
+    return IndexSignal(name, "Options OI", direction, score, head, desc, emoji)
+
+
 def _sig_valuation_pe(ctx: MarketContext) -> Optional[IndexSignal]:
     """
     Nifty PE ratio as background valuation context.
@@ -2639,11 +2891,11 @@ def _compute_prediction(
     add(_sig_valuation_pe(market_ctx))
     # Signal 17b: sector RS vs Nifty — fires for BankNifty / FinNifty / MidcapNifty only
     add(_sig_index_relative_strength(fno_symbol, day_change_pct, market_ctx))
-    # Signal 17c: Nifty 50 constituent breadth + delivery quality — NIFTY only
-    # Signal 17d: Nifty 50 stock futures OI-Price matrix — NIFTY only
+    # Signals 17c/d/e: Nifty 50 constituent data — NIFTY only
     if fno_symbol == "NIFTY":
-        add(_sig_constituent_breadth(market_ctx))
-        add(_sig_constituent_fut_oi(market_ctx))
+        add(_sig_constituent_breadth(market_ctx))       # 17c cash breadth + delivery
+        add(_sig_constituent_fut_oi(market_ctx))         # 17d stock futures OI-Price
+        add(_sig_constituent_opt_oi_prem(market_ctx))    # 17e stock options OI-Premium
 
     # — Signals 18-20: Nifty 50 multi-expiry (fires only when weekly ≠ monthly) —
     if fno_symbol == "NIFTY" and monthly_exp_me is not None:
