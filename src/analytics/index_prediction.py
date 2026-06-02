@@ -791,33 +791,40 @@ def _build_market_context(trade_date: date) -> MarketContext:
         _opt_pd = _opt_dates[1] if len(_opt_dates) >= 2 else None
 
         if _opt_td and _opt_pd:
-            # Build lookup: (symbol, option_type) → row  for each date
-            _opt_today = _n50_opt_df[_n50_opt_df["trade_date"] == _opt_td].set_index(["symbol", "option_type"])
-            _opt_prev  = _n50_opt_df[_n50_opt_df["trade_date"] == _opt_pd].set_index(["symbol", "option_type"])
-            _MIN_CONTR = 100   # min contracts for premium change to be meaningful
+            _MIN_CONTR = 100   # min contracts for premium direction to be meaningful
+
+            # Defensive dedup: SQL GROUP BY already prevents duplicates, but if a data
+            # anomaly produces two rows for the same (symbol, option_type), set_index
+            # silently creates a MultiIndex with duplicates and loc[] returns a DataFrame
+            # instead of a Series — breaking all downstream float() casts.
+            def _make_opt_idx(df, td):
+                return (
+                    df[df["trade_date"] == td]
+                    .drop_duplicates(subset=["symbol", "option_type"], keep="last")
+                    .set_index(["symbol", "option_type"])
+                )
+            _opt_today = _make_opt_idx(_n50_opt_df, _opt_td)
+            _opt_prev  = _make_opt_idx(_n50_opt_df, _opt_pd)
 
             _on = _os = _ostr = _or = _ov = 0
 
-            # Collect all symbols that have both CE and PE data today
             _syms_today = {s for s, _ in _opt_today.index}
             for _sym in _syms_today:
                 try:
                     t_ce = _opt_today.loc[(_sym, "CE")]
                     t_pe = _opt_today.loc[(_sym, "PE")]
                 except KeyError:
-                    continue   # missing CE or PE for this symbol today
+                    continue
 
-                # Rollover guard: skip if near expiry changed vs yesterday
                 try:
                     p_ce = _opt_prev.loc[(_sym, "CE")]
                     p_pe = _opt_prev.loc[(_sym, "PE")]
                 except KeyError:
-                    continue   # no previous data for this stock
+                    continue
 
                 if t_ce["near_expiry"] != p_ce["near_expiry"]:
                     continue   # monthly expiry rollover for this stock
 
-                # OI change %
                 _c_oi_t = float(t_ce["total_oi"]); _c_oi_p = float(p_ce["total_oi"])
                 _p_oi_t = float(t_pe["total_oi"]); _p_oi_p = float(p_pe["total_oi"])
                 if _c_oi_p <= 0 or _p_oi_p <= 0:
@@ -828,20 +835,29 @@ def _build_market_context(trade_date: date) -> MarketContext:
                 c_prem   = t_ce.get("wt_prem_chg"); c_contr = float(t_ce.get("total_contracts", 0) or 0)
                 p_prem   = t_pe.get("wt_prem_chg"); p_contr = float(t_pe.get("total_contracts", 0) or 0)
 
-                # Classify each side (OI must change meaningfully; premium needs volume)
-                c_oi_up = c_oi_chg >  0.5
-                p_oi_up = p_oi_chg >  0.5
-                c_prem_up = (c_prem is not None and not pd.isna(c_prem) and
-                             float(c_prem) > 0 and c_contr >= _MIN_CONTR)
-                p_prem_up = (p_prem is not None and not pd.isna(p_prem) and
-                             float(p_prem) > 0 and p_contr >= _MIN_CONTR)
+                c_oi_up = c_oi_chg > 0.5
+                p_oi_up = p_oi_chg > 0.5
 
-                c_buy = c_oi_up and c_prem_up    # call OI↑ + premium↑ = call buying
-                c_wrt = c_oi_up and not c_prem_up # call OI↑ + premium↓ = call writing
-                p_buy = p_oi_up and p_prem_up     # put OI↑ + premium↑ = put buying
-                p_wrt = p_oi_up and not p_prem_up  # put OI↑ + premium↓ = put writing
+                # Volume gates — must have >= MIN_CONTR to determine premium direction.
+                # Without sufficient volume, we CANNOT distinguish buying (prem↑) from
+                # writing (prem↓): the premium data is noise. If volume gate fails,
+                # NEITHER buying NOR writing fires for that side — the stock is neutral
+                # on that leg rather than being systematically mis-tagged as "Writing".
+                # (Old code: c_wrt = c_oi_up and not c_prem_up → fired even at zero volume,
+                #  adding spurious bearish bias whenever OI rose on a thin-volume day.)
+                has_call_vol = c_contr >= _MIN_CONTR
+                has_put_vol  = p_contr >= _MIN_CONTR
 
-                # Skip if neither side has significant OI change
+                c_prem_up = (has_call_vol and c_prem is not None and
+                             not pd.isna(c_prem) and float(c_prem) > 0)
+                p_prem_up = (has_put_vol  and p_prem is not None and
+                             not pd.isna(p_prem) and float(p_prem) > 0)
+
+                c_buy = c_oi_up and c_prem_up                       # OI↑ + prem↑ + volume
+                c_wrt = c_oi_up and has_call_vol and not c_prem_up  # OI↑ + prem↓ + volume
+                p_buy = p_oi_up and p_prem_up
+                p_wrt = p_oi_up and has_put_vol  and not p_prem_up
+
                 if not (c_oi_up or p_oi_up):
                     continue
 
