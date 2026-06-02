@@ -22,7 +22,7 @@ echo [%date% %time%] Sector overrides applied. >> logs\scheduler.log
 REM ── Write timestamp from DB latest trade date (not wall clock) ───────────
 :write_timestamp
 echo [%date% %time%] Writing last_updated marker... >> logs\scheduler.log
-python -c "from src.data.repository import query_dataframe; from datetime import datetime; df=query_dataframe('SELECT MAX(trade_date) AS d FROM daily_data',[]); d=df['d'].iloc[0]; open('logs/last_updated.txt','w').write(d.isoformat() if hasattr(d,'isoformat') else str(d))" >> logs\scheduler.log 2>&1
+python -c "from src.data.repository import query_dataframe; df=query_dataframe('SELECT MAX(trade_date) AS d FROM daily_data',[]); d=df['d'].iloc[0]; open('logs/last_updated.txt','w').write(str(d)[:10])" >> logs\scheduler.log 2>&1
 
 REM ── Upload snapshot to GitHub Releases (for mobile / Streamlit Cloud access) ─
 REM   Requires GITHUB_TOKEN and GITHUB_REPO in Windows Environment Variables.
