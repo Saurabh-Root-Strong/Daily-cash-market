@@ -1,10 +1,10 @@
 """
 Index Prediction Engine — per-index next-day directional forecast.
 
-23-signal quant framework — institutional-grade + statistical regime detection:
-Core 17 signals apply to all indices.
-Signals 18–20 are Nifty 50 exclusive (weekly + monthly OI bifurcation).
-Signals 21–23 are Statistical Regime signals applied to all indices.
+24-signal quant framework — institutional-grade + statistical regime detection:
+Core 18 signals apply to all indices (Signal 5 = OI-Premium Matrix, new).
+Signals 19–21 are Nifty 50 exclusive (weekly + monthly OI bifurcation).
+Signals 22–24 are Statistical Regime signals applied to all indices.
 
   ── Statistical Regime Detection (Signals 21–23, all indices) ────────────────
   21. Market Memory       Hurst R/S + DFA — autocorrelation structure of returns.
@@ -24,7 +24,10 @@ Signals 21–23 are Statistical Regime signals applied to all indices.
    2. Cost of Carry         Hull (Options, Futures & Other Derivatives)
    3. Max Pain              McMillan (Options as a Strategic Investment)
    4. PCR Contrarian        Put-Call Ratio as fear/greed indicator
-   5. Price Mean-Reversion  90-day NSE backtest — 67% oversold bounce rate
+   5. OI-Premium Matrix     Disambiguates PCR — identifies buyers vs writers
+                            OI↑+Prem↑=Buying | OI↑+Prem↓=Writing | OI↓+Prem↑=SC
+                            C.Buy+P.Write=Net Long | C.Write+P.Buy=Net Short
+   6. Price Mean-Reversion  90-day NSE backtest — 67% oversold bounce rate
    6. Wyckoff Range Position  Close vs day's H-L range
 
   ── Institutional / FII Analytics (all sourced from NSE publications) ────────
@@ -738,6 +741,162 @@ def _sig_pcr(pcr: Optional[float], prev_pcr: Optional[float]) -> Optional[IndexS
         return IndexSignal("PCR Low — Under-Hedged", "Options OI", -1, -1.0,
             f"PCR {pcr:.2f} — Mild Caution",
             f"PCR {pcr:.2f} below neutral. Under-hedged. Vulnerable if sentiment shifts.", "🟡")
+    return None
+
+
+def _sig_opt_oi_premium(
+    opt_near_today: pd.DataFrame,
+    opt_near_prev: pd.DataFrame,
+) -> Optional[IndexSignal]:
+    """
+    Options OI-Premium Matrix — disambiguates PCR by identifying BUYERS vs WRITERS.
+
+    PCR tells you the ratio of put/call OI but NOT whether that OI was built
+    by buyers (directional bet) or writers (premium collectors with opposite view).
+
+    OI-Premium Matrix (applied per option type):
+      OI ↑ + Premium ↑  →  Buying    (demand drives both up — direct directional bet)
+      OI ↑ + Premium ↓  →  Writing   (supply: writers push premium down)
+      OI ↓ + Premium ↑  →  Short Covering (writers buying back their shorts)
+      OI ↓ + Premium ↓  →  Long Exiting  (buyers selling out their longs)
+
+    Combined call + put signal:
+      C.Buy  + P.Write  →  Net Long  (+2.5)  — both sides confirm bulls
+      C.Write + P.Buy   →  Net Short (-2.5)  — both sides confirm bears
+      C.Buy  + P.Buy    →  Straddle  (0)     — big move expected, no direction
+      C.Write + P.Write →  Range Play (0)    — low vol / theta decay expected
+    """
+    if opt_near_today.empty:
+        return None
+
+    calls_t = opt_near_today[opt_near_today["option_type"] == "CE"]
+    puts_t  = opt_near_today[opt_near_today["option_type"] == "PE"]
+    if calls_t.empty and puts_t.empty:
+        return None
+
+    def _wt_prem_chg(df: pd.DataFrame) -> Optional[float]:
+        """Volume-weighted (close_price − settle_price) across all strikes."""
+        df = df[df["contracts"] > 0]
+        if df.empty:
+            return None
+        vol = float(df["contracts"].sum())
+        if vol == 0:
+            return None
+        return float(((df["close_price"] - df["settle_price"]) * df["contracts"]).sum() / vol)
+
+    def _oi_diff(opt_type: str) -> Optional[int]:
+        t_oi = int(opt_near_today[opt_near_today["option_type"] == opt_type]["open_interest"].sum())
+        if opt_near_prev.empty:
+            return None
+        p_oi = int(opt_near_prev[opt_near_prev["option_type"] == opt_type]["open_interest"].sum())
+        return t_oi - p_oi
+
+    call_prem = _wt_prem_chg(calls_t)
+    put_prem  = _wt_prem_chg(puts_t)
+    call_doi  = _oi_diff("CE")
+    put_doi   = _oi_diff("PE")
+
+    if call_prem is None and put_prem is None:
+        return None
+
+    def _classify(doi: Optional[int], prem: Optional[float], leg: str) -> str:
+        if prem is None:
+            return f"{leg}.—"
+        oi_up = (doi is not None and doi > 0)
+        oi_dn = (doi is not None and doi < 0)
+        pr_up = prem > 0
+        if oi_up and pr_up:   return f"{leg}.Buying"
+        if oi_up and not pr_up: return f"{leg}.Writing"
+        if oi_dn and pr_up:   return f"{leg}.SC"
+        if oi_dn and not pr_up: return f"{leg}.LE"
+        return f"{leg}.Neutral"
+
+    call_sig = _classify(call_doi, call_prem, "C")
+    put_sig  = _classify(put_doi,  put_prem,  "P")
+
+    c_buy = call_sig == "C.Buying"
+    c_wrt = call_sig == "C.Writing"
+    c_sc  = call_sig == "C.SC"
+    p_buy = put_sig  == "P.Buying"
+    p_wrt = put_sig  == "P.Writing"
+    p_sc  = put_sig  == "P.SC"
+
+    def _fmt(v: Optional[float]) -> str:
+        return f"{v:+.1f}pts" if v is not None else "—"
+    def _doi_s(v: Optional[int]) -> str:
+        return f"{v:+,}" if v is not None else "—"
+
+    detail = (
+        f"Call OI chg {_doi_s(call_doi)} | Call Prem {_fmt(call_prem)} → {call_sig}  "
+        f"| Put OI chg {_doi_s(put_doi)} | Put Prem {_fmt(put_prem)} → {put_sig}"
+    )
+    base_desc = (
+        "OI-Premium matrix: when OI and premium move in the SAME direction → Buying; "
+        "OI up + premium DOWN → Writing (writers collected premium, bearish/bullish lean). "
+        "This disambiguates PCR — a low PCR could mean call-buying (bullish) OR call-writing (bearish). "
+        f"\n{detail}"
+    )
+
+    # ── Combined signal ────────────────────────────────────────────────────────
+    if (c_buy or c_sc) and (p_wrt or p_sc):
+        return IndexSignal(
+            "Opt OI-Premium: Net Long (C.Buy + P.Write)", "Options OI", 1, 2.5,
+            f"Call Buying + Put Writing — net institutional LONG (PCR ambiguity resolved)",
+            f"Call OI rising + premium rising = direct call buyers (bullish). "
+            f"Put OI rising + premium falling = put writers selling protection (also bullish). "
+            f"Both sides confirm long bias — stronger signal than PCR alone.\n{detail}", "🔥",
+        )
+    if (c_wrt or c_sc) and (p_buy or p_sc):
+        return IndexSignal(
+            "Opt OI-Premium: Net Short (C.Write + P.Buy)", "Options OI", -1, -2.5,
+            f"Call Writing + Put Buying — net institutional SHORT (PCR ambiguity resolved)",
+            f"Call OI rising + premium falling = call writers capping upside (bearish). "
+            f"Put OI rising + premium rising = direct put buyers (bearish hedge). "
+            f"Both sides confirm distribution.\n{detail}", "❄️",
+        )
+    if c_buy and p_buy:
+        return IndexSignal(
+            "Opt OI-Premium: Straddle (C.Buy + P.Buy)", "Options OI", 0, 0.0,
+            f"Call + Put Buying — volatility bet, no directional edge",
+            f"Both calls AND puts OI rising with rising premiums = straddle/strangle buyers. "
+            f"Big move expected — direction unknown. Watch max pain / key S-R for breakout side.\n{detail}", "⚡",
+        )
+    if c_wrt and p_wrt:
+        return IndexSignal(
+            "Opt OI-Premium: Range Play (C.Write + P.Write)", "Options OI", 0, 0.0,
+            f"Call + Put Writing — iron condor / range-bound (low vol expected)",
+            f"Both calls AND puts OI rising with falling premiums = premium writers on both sides. "
+            f"Option writers expect the index to stay in a range. Pinning near max pain likely.\n{detail}", "📊",
+        )
+    # ── Single-sided signals ──────────────────────────────────────────────────
+    if c_buy:
+        return IndexSignal(
+            "Opt OI-Premium: Call Buying (Direct Bullish)", "Options OI", 1, 1.5,
+            f"Call Buying — participants PAYING UP for upside exposure",
+            f"Call OI rising + premium rising = direct bullish bet, NOT contrarian. "
+            f"Participants are buying calls at higher prices — genuine demand.\n{detail}", "🟢",
+        )
+    if p_wrt:
+        return IndexSignal(
+            "Opt OI-Premium: Put Writing (Bullish Lean)", "Options OI", 1, 1.0,
+            f"Put Writing — writers selling downside protection (bullish lean)",
+            f"Put OI rising + premium falling = put writers. "
+            f"They accept downside risk for premium — expect market to hold or rise.\n{detail}", "🟡",
+        )
+    if p_buy:
+        return IndexSignal(
+            "Opt OI-Premium: Put Buying (Direct Bearish)", "Options OI", -1, -1.5,
+            f"Put Buying — participants PAYING UP for downside protection",
+            f"Put OI rising + premium rising = direct bearish hedge, NOT contrarian. "
+            f"Participants are buying puts at higher prices — genuine fear.\n{detail}", "🔴",
+        )
+    if c_wrt:
+        return IndexSignal(
+            "Opt OI-Premium: Call Writing (Bearish Lean)", "Options OI", -1, -1.0,
+            f"Call Writing — writers capping upside (bearish lean)",
+            f"Call OI rising + premium falling = call writers. "
+            f"They cap the upside — expect the market to stay below the strike.\n{detail}", "🟠",
+        )
     return None
 
 
@@ -1789,11 +1948,22 @@ def _compute_prediction(
     sigs: list[IndexSignal] = []
     add = lambda s: s and sigs.append(s)  # noqa: E731
 
-    # — Signals 1-6: index-specific price/futures/options —
+    # ── Near-expiry option slices (used by Signal 5) ─────────────────────────
+    _opt_near_t = (
+        fno_today[(fno_today["instrument"] == "OPTIDX") & (fno_today["expiry_date"] == near_expiry)]
+        if near_expiry is not None else pd.DataFrame()
+    )
+    _opt_near_p = (
+        fno_prev[(fno_prev["instrument"] == "OPTIDX") & (fno_prev["expiry_date"] == near_expiry)]
+        if (near_expiry is not None and not fno_prev.empty) else pd.DataFrame()
+    )
+
+    # — Signals 1-7: index-specific price/futures/options —
     add(_sig_price_action(idx_hist))
     sigs.append(_sig_oi_price_matrix(day_change_pct, fut_oi_chg, fut_oi))
     add(_sig_carry(carry_pct_ann, carry_pts))
     add(_sig_pcr(pcr, yesterday_snap.pcr if yesterday_snap else None))
+    add(_sig_opt_oi_premium(_opt_near_t, _opt_near_p))   # Signal 5 — OI-Premium matrix
     if spot_close and dte_options <= 5:
         add(_sig_max_pain(levels.max_pain, spot_close, dte_options))
     add(_sig_range_position(spot_close, high_val, low_val, day_change_pct))
