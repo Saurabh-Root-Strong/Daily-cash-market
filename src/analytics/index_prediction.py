@@ -50,8 +50,12 @@ Signals 22–24 are Statistical Regime signals applied to all indices.
                                Today's index return vs Nifty 50 → sector rotation direction
                                RS ≥ +0.75% = capital rotating IN (bullish momentum)
                                RS ≤ −0.75% = capital rotating OUT (distribution)
-                               Mansfield RS / O'Neil CANSLIM principle — fills the gap
-                               left by all other market-wide signals for non-Nifty indices.
+                               Mansfield RS / O'Neil CANSLIM principle.
+  17c.Constituent Breadth      Nifty 50 ONLY — stock-level breadth + delivery quality
+                               Turnover-weighted advance ratio across all 50 index members
+                               Score ≥ 75% turnover advancing = +2.5 exceptional breadth
+                               Delivery ≥ 55% on advancers = +0.5 institutional accumulation
+                               Goes deeper than sector-index breadth: reveals WHO is buying
 
   ── Multi-Expiry (Nifty 50 only — weekly + monthly expiry both available) ─────
   18. Cross-Expiry PCR       Weekly PCR vs Monthly PCR divergence
@@ -119,6 +123,25 @@ _DEFENSIVE_SECTORS = [
 ]
 
 _INDIA_REPO = 6.5   # annualised % — RBI repo for fair-value carry
+
+# ── Nifty 50 constituent symbols ─────────────────────────────────────────────
+# These 50 stocks directly drive the Nifty 50 index (free-float market-cap weighted).
+# Used to compute a stock-level breadth + delivery quality signal — an edge that
+# sector-index breadth cannot provide because sector indices are themselves derived
+# from the same underlying move, while individual stock delivery reveals WHO is buying.
+# Source: NSE ind_nifty50list.csv  |  Last reviewed: Jun 2026
+_NIFTY50_SYMBOLS: tuple = (
+    "ADANIENT",   "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT",  "AXISBANK",
+    "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV", "BEL",         "BHARTIARTL",
+    "CIPLA",      "COALINDIA",  "DRREDDY",    "EICHERMOT",   "ETERNAL",
+    "GRASIM",     "HCLTECH",    "HDFCBANK",   "HDFCLIFE",    "HINDALCO",
+    "HINDUNILVR", "ICICIBANK",  "ITC",        "INFY",        "INDIGO",
+    "JSWSTEEL",   "JIOFIN",     "KOTAKBANK",  "LT",          "M&M",
+    "MARUTI",     "MAXHEALTH",  "NTPC",       "NESTLEIND",   "ONGC",
+    "POWERGRID",  "RELIANCE",   "SBILIFE",    "SHRIRAMFIN",  "SBIN",
+    "SUNPHARMA",  "TCS",        "TATACONSUM", "TMPV",        "TATASTEEL",
+    "TECHM",      "TITAN",      "TRENT",      "ULTRACEMCO",  "WIPRO",
+)
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
@@ -221,10 +244,18 @@ class MarketContext:
     nifty_pe: Optional[float] = None
 
     # ── Nifty 50 daily return — used for non-Nifty relative-strength signal ──
-    # BankNifty / FinNifty / MidcapNifty need to compare their return to the
-    # broad market to detect sector-specific capital rotation. Computed once here
-    # so _compute_prediction for each non-Nifty symbol can reference it cheaply.
     nifty_pct_chg: Optional[float] = None
+
+    # ── Nifty 50 constituent stock data (Signal 17c) ──────────────────────────
+    # Stock-level breadth + delivery quality for the 50 index members.
+    # Turnover-weighted advance ratio is a better proxy for index impact than a
+    # simple count because large-caps (Reliance, HDFC Bank) move the index more.
+    n50_coverage:      int   = 0      # stocks found in daily_data for trade_date
+    n50_advancing:     int   = 0
+    n50_declining:     int   = 0
+    n50_adv_turn_pct:  Optional[float] = None  # turnover-weighted advance % (0–100)
+    n50_adv_deliv_avg: Optional[float] = None  # avg delivery% of advancing stocks
+    n50_dec_deliv_avg: Optional[float] = None  # avg delivery% of declining stocks
 
 
 @dataclass
@@ -568,12 +599,46 @@ def _build_market_context(trade_date: date) -> MarketContext:
     ctx.nifty_pe = _load_nifty_pe(trade_date)
 
     # ── Nifty 50 daily return (for non-Nifty relative-strength signal) ───────
-    _n50 = query_dataframe("""
+    _n50idx = query_dataframe("""
         SELECT pct_chg FROM index_data
         WHERE index_name = 'Nifty 50' AND trade_date = ?
     """, [trade_date])
-    if not _n50.empty and pd.notna(_n50["pct_chg"].iloc[0]):
-        ctx.nifty_pct_chg = float(_n50["pct_chg"].iloc[0])
+    if not _n50idx.empty and pd.notna(_n50idx["pct_chg"].iloc[0]):
+        ctx.nifty_pct_chg = float(_n50idx["pct_chg"].iloc[0])
+
+    # ── Nifty 50 constituent breadth + delivery quality (Signal 17c) ─────────
+    # Query cash-market data for all 50 constituent stocks. Turnover-weighted
+    # advance ratio is a more faithful proxy for index impact than a simple count
+    # because the index is free-float market-cap weighted (Reliance ~10%, BEL ~0.5%).
+    _sym_ph = ", ".join("?" * len(_NIFTY50_SYMBOLS))
+    _stocks = query_dataframe(f"""
+        SELECT
+            symbol,
+            CASE WHEN prev_close > 0
+                 THEN (close_price - prev_close) / prev_close * 100
+                 ELSE NULL END AS pct_chg,
+            deliv_per,
+            turnover_lacs
+        FROM daily_data
+        WHERE symbol IN ({_sym_ph})
+          AND trade_date = ?
+          AND series IN ('EQ', 'SM', 'ST')
+    """, [*_NIFTY50_SYMBOLS, trade_date])
+    if not _stocks.empty:
+        _stocks = _stocks.dropna(subset=["pct_chg", "turnover_lacs"]).copy()
+        _stocks = _stocks[_stocks["turnover_lacs"] > 0]
+        ctx.n50_coverage  = len(_stocks)
+        _adv = _stocks[_stocks["pct_chg"] > 0]
+        _dec = _stocks[_stocks["pct_chg"] < 0]
+        ctx.n50_advancing = len(_adv)
+        ctx.n50_declining = len(_dec)
+        _total_turn = float(_stocks["turnover_lacs"].sum())
+        if _total_turn > 0:
+            ctx.n50_adv_turn_pct = float(_adv["turnover_lacs"].sum()) / _total_turn * 100
+        if len(_adv) >= 3:
+            ctx.n50_adv_deliv_avg = float(_adv["deliv_per"].dropna().mean()) if "deliv_per" in _adv else None
+        if len(_dec) >= 3:
+            ctx.n50_dec_deliv_avg = float(_dec["deliv_per"].dropna().mean()) if "deliv_per" in _dec else None
 
     # ── Sector breadth + rotation ─────────────────────────────────────────────
     sec_df = _load_sector_indices(trade_date)
@@ -1466,6 +1531,113 @@ def _sig_index_relative_strength(
     return None
 
 
+def _sig_constituent_breadth(ctx: MarketContext) -> Optional[IndexSignal]:
+    """
+    Signal 17c: Nifty 50 constituent breadth + delivery quality — NIFTY exclusive.
+
+    WHY THIS IS POWERFUL:
+      Nifty 50 is free-float market-cap weighted across its 50 member stocks.
+      Sector-index breadth tells us how many sector INDICES advanced — but each
+      sector index is already derived from the same underlying stock moves, making
+      it a coarser proxy. This signal goes one level deeper: the ACTUAL 50 stocks.
+
+      Delivery % distinguishes REAL money from speculation:
+        High delivery + advancing = institutions accumulating the index basket
+        Low delivery + advancing  = leveraged/intraday momentum (less durable)
+        High delivery + declining = institutions distributing (more lasting weakness)
+
+    SCORING (turnover-weighted advance ratio, 0–100%):
+      ≥ 75%  → +2.5  Exceptional breadth: almost the entire index basket rising
+      ≥ 60%  → +1.5  Strong breadth: majority rising with broad participation
+      40–60% → None  Mixed: no edge, stocks split roughly evenly
+      ≤ 40%  → -1.5  Weak breadth: majority declining
+      ≤ 25%  → -2.5  Exceptional weakness: near-universal decline in basket
+
+    DELIVERY MODIFIER (applied after breadth score):
+      +0.5 if advancing stocks avg delivery ≥ 55% → institutional accumulation
+      -0.3 if advancing stocks avg delivery ≤ 25% → speculative rally, low conviction
+      -0.5 if declining stocks avg delivery ≥ 55% → institutional distribution
+    """
+    if ctx.n50_coverage < 30 or ctx.n50_adv_turn_pct is None:
+        return None
+
+    twar = ctx.n50_adv_turn_pct   # turnover-weighted advance %, 0–100
+    adv  = ctx.n50_advancing
+    dec  = ctx.n50_declining
+    cov  = ctx.n50_coverage
+    adv_del = ctx.n50_adv_deliv_avg
+    dec_del = ctx.n50_dec_deliv_avg
+
+    if twar >= 75:
+        base  = 2.5
+        name  = "N50 Exceptional Breadth — Broad-Based Index Rally"
+        head  = f"{adv}/{cov} Nifty 50 stocks up ({twar:.0f}% of turnover) — Exceptional"
+        emoji = "🟢"
+    elif twar >= 60:
+        base  = 1.5
+        name  = "N50 Strong Breadth — Majority of Index Basket Rising"
+        head  = f"{adv}/{cov} Nifty 50 stocks up ({twar:.0f}% of turnover) — Broad Participation"
+        emoji = "🟢"
+    elif twar <= 25:
+        base  = -2.5
+        name  = "N50 Exceptional Weakness — Near-Universal Index Basket Decline"
+        head  = f"{dec}/{cov} Nifty 50 stocks down ({100-twar:.0f}% of turnover) — Broad Sell-Off"
+        emoji = "🔴"
+    elif twar <= 40:
+        base  = -1.5
+        name  = "N50 Weak Breadth — Majority of Index Basket Declining"
+        head  = f"{dec}/{cov} Nifty 50 stocks down ({100-twar:.0f}% of turnover) — Weak Participation"
+        emoji = "🔴"
+    else:
+        return None   # 40–60%: mixed, no directional edge
+
+    # Delivery quality modifier
+    deliv_note = ""
+    if base > 0:
+        if adv_del is not None and adv_del >= 55:
+            base += 0.5
+            deliv_note = (
+                f" Advancing stocks: {adv_del:.0f}% avg delivery = institutional quality — "
+                "real money is buying the index basket, not just intraday momentum."
+            )
+            emoji = "💎"
+        elif adv_del is not None and adv_del <= 25:
+            base -= 0.3
+            deliv_note = (
+                f" Advancing stocks: only {adv_del:.0f}% avg delivery = speculative rally. "
+                "Low conviction — intraday/leveraged buying, not institutional accumulation."
+            )
+            emoji = "🟡"
+        elif adv_del is not None:
+            deliv_note = f" Advancing stocks: {adv_del:.0f}% avg delivery."
+    else:
+        if dec_del is not None and dec_del >= 55:
+            base -= 0.5
+            deliv_note = (
+                f" Declining stocks: {dec_del:.0f}% avg delivery = institutional distribution — "
+                "real money is selling the index basket, not panic or forced selling."
+            )
+            emoji = "💀"
+        elif dec_del is not None:
+            deliv_note = f" Declining stocks: {dec_del:.0f}% avg delivery."
+
+    direction = 1 if base > 0 else -1
+    flat = cov - adv - dec
+    desc = (
+        f"Nifty 50 constituent breadth: {adv} advancing / {dec} declining / "
+        f"{flat} flat out of {cov} stocks tracked. "
+        f"Turnover-weighted advance ratio: {twar:.1f}% — large-cap stocks "
+        f"(Reliance, HDFC Bank, ICICI Bank) contribute proportionally to their "
+        f"index weight, so this ratio closely tracks actual index driver quality. "
+        f"{deliv_note}"
+        f"\nBreadth edge: when >60% turnover-weight advances + institutional delivery, "
+        f"the rally is in the INDEX BASKET (not just 2-3 heavyweights lifting the index) "
+        f"— historically more durable than index-level momentum alone."
+    )
+
+    return IndexSignal(name, "Sector", direction, round(base, 2), head, desc, emoji)
+
+
 def _sig_valuation_pe(ctx: MarketContext) -> Optional[IndexSignal]:
     """
     Nifty PE ratio as background valuation context.
@@ -2283,6 +2455,9 @@ def _compute_prediction(
     add(_sig_valuation_pe(market_ctx))
     # Signal 17b: sector RS vs Nifty — fires for BankNifty / FinNifty / MidcapNifty only
     add(_sig_index_relative_strength(fno_symbol, day_change_pct, market_ctx))
+    # Signal 17c: Nifty 50 constituent breadth + delivery quality — NIFTY only
+    if fno_symbol == "NIFTY":
+        add(_sig_constituent_breadth(market_ctx))
 
     # — Signals 18-20: Nifty 50 multi-expiry (fires only when weekly ≠ monthly) —
     if fno_symbol == "NIFTY" and monthly_exp_me is not None:
