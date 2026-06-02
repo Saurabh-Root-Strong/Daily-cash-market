@@ -225,12 +225,19 @@ def initialize_schema() -> None:
     except Exception as exc:
         log.debug("fii_derivatives_stats.oi_value_cr migration skipped (already applied): %s", exc)
 
-    # prediction_log — add 4 new feature columns (may not exist in older DBs)
+    # prediction_log — add feature + range columns (idempotent: IF NOT EXISTS)
     for col in [
-        "feat_max_pain_dist DOUBLE DEFAULT 0",
-        "feat_fii_5d_cumul  DOUBLE DEFAULT 0",
-        "feat_fii_delta     DOUBLE DEFAULT 0",
-        "feat_vix_5d_chg    DOUBLE DEFAULT 0",
+        "feat_max_pain_dist  DOUBLE DEFAULT 0",
+        "feat_fii_5d_cumul   DOUBLE DEFAULT 0",
+        "feat_fii_delta      DOUBLE DEFAULT 0",
+        "feat_vix_5d_chg     DOUBLE DEFAULT 0",
+        # Expected-move forecast stored with each prediction so the history
+        # table can show "what range did you predict for that day?"
+        "spot_close          DOUBLE DEFAULT NULL",
+        "range_low           DOUBLE DEFAULT NULL",
+        "range_high          DOUBLE DEFAULT NULL",
+        "target_close        DOUBLE DEFAULT NULL",
+        "expected_move_pts   DOUBLE DEFAULT NULL",
     ]:
         try:
             repo.execute_ddl(f"ALTER TABLE prediction_log ADD COLUMN IF NOT EXISTS {col}")

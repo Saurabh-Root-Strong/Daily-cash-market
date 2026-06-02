@@ -294,9 +294,10 @@ class MarketDataRepository:
                     feat_vix, feat_vix_5d_chg, feat_breadth,
                     feat_hurst, feat_entropy, feat_oi_score,
                     hmm_state, memory_label,
+                    spot_close, range_low, range_high, target_close, expected_move_pts,
                     actual_return, direction_actual, was_correct,
                     outcome_filled, created_at
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,now())
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,now())
             """, [
                 row["trade_date"], row["fno_symbol"],
                 row.get("direction_pred"), row.get("confidence_pred"),
@@ -310,6 +311,9 @@ class MarketDataRepository:
                 row.get("feat_hurst"),        row.get("feat_entropy"),
                 row.get("feat_oi_score"),
                 row.get("hmm_state"),         row.get("memory_label"),
+                row.get("spot_close"),        row.get("range_low"),
+                row.get("range_high"),        row.get("target_close"),
+                row.get("expected_move_pts"),
                 row.get("actual_return"),     row.get("direction_actual"),
                 row.get("was_correct"),       row.get("outcome_filled", False),
             ])

@@ -336,6 +336,13 @@ def store_prediction(pred, trade_date: date) -> None:
             # Regime labels
             "hmm_state":    r.hmm_state   if r and not r.error else None,
             "memory_label": r.memory_label if r and not r.error else None,
+            # Expected-move forecast — stored so the history table can show
+            # "what range did you predict for the next day?"
+            "spot_close":         getattr(pred, "spot_close",         None),
+            "range_low":          getattr(pred, "range_low",          None),
+            "range_high":         getattr(pred, "range_high",         None),
+            "target_close":       getattr(pred, "target_close",       None),
+            "expected_move_pts":  getattr(pred, "expected_move_pts",  None),
             "outcome_filled": False,
         }
         get_repository().upsert_prediction(row)
