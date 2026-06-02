@@ -417,21 +417,118 @@ def _render_prediction_log(symbol: str) -> None:
             hide_index=True,
             use_container_width=True,
             column_config={
+                "Date": st.column_config.TextColumn(
+                    "Date",
+                    help="The trading day on which this prediction was made (at market close). "
+                         "The prediction is for the NEXT trading session, not this date itself.",
+                ),
+                "Spot": st.column_config.TextColumn(
+                    "Spot",
+                    help="Index closing price on this trading day — the price the engine saw "
+                         "when it made the prediction. The predicted range is centred around this.",
+                    width="small",
+                ),
+                "Pred": st.column_config.TextColumn(
+                    "Pred",
+                    help="Predicted direction for the NEXT trading session.\n\n"
+                         "UP = composite score ≥ +3 → bullish bias\n"
+                         "DOWN = composite score ≤ −3 → bearish bias\n"
+                         "SIDEWAYS = score between −3 and +3 → no clear edge",
+                    width="small",
+                ),
+                "Conf": st.column_config.TextColumn(
+                    "Conf",
+                    help="Confidence level of the prediction.\n\n"
+                         "HIGH   = score ≥ ±12 (~6+ signals aligned)\n"
+                         "MEDIUM = score ≥ ±7\n"
+                         "LOW    = score ≥ ±3\n\n"
+                         "HIGH confidence should have the highest hit rate; "
+                         "check the Accuracy by Confidence section above.",
+                    width="small",
+                ),
+                "Score": st.column_config.TextColumn(
+                    "Score",
+                    help="Composite directional score — sum of all signal scores.\n\n"
+                         "Range: typically −20 to +20 (max possible ≈ ±35).\n"
+                         "Positive = bullish weight, negative = bearish weight.\n"
+                         "Institutional signals are capped at ±3 to prevent "
+                         "collinear FAO data from dominating the composite.",
+                    width="small",
+                ),
                 "Pred Range (next day)": st.column_config.TextColumn(
                     "Pred Range (next day)",
-                    help="68% expected-move band predicted for the NEXT trading session (1σ). "
-                         "~68% of days should close within this range.",
+                    help="68% expected-move band for the NEXT trading session.\n\n"
+                         "Calculated as: Spot ± 1σ daily move, where σ is a blend of:\n"
+                         "  • Realized 20-day volatility of the index (70% weight for non-Nifty)\n"
+                         "  • India VIX implied daily vol (50% weight for Nifty)\n\n"
+                         "Interpretation: ~68% of days close within this range. "
+                         "If the actual close falls outside, it is a statistically unusual move.",
                     width="medium",
                 ),
                 "Target": st.column_config.TextColumn(
                     "Target",
-                    help="Directional close target for the next session "
-                         "(spot ± conviction × expected move).",
+                    help="Directional close target for the next session.\n\n"
+                         "Formula: Spot + (conviction × expected_move)\n"
+                         "Conviction = composite_score / 20, clamped to ±1.\n\n"
+                         "Example: Score +14, 1σ move = 150 pts → conviction 0.70 "
+                         "→ target = Spot + 105 pts.\n"
+                         "A SIDEWAYS prediction with score ~0 gives target ≈ Spot.",
                     width="small",
                 ),
-                "Spot": st.column_config.TextColumn(
-                    "Spot",
-                    help="Index closing price on this trading day (the day the prediction was made).",
+                "Actual": st.column_config.TextColumn(
+                    "Actual",
+                    help="What actually happened on the NEXT trading session.\n\n"
+                         "UP      = next-day return > +0.15%\n"
+                         "DOWN    = next-day return < −0.15%\n"
+                         "SIDEWAYS = return between −0.15% and +0.15%\n\n"
+                         "The same threshold is used for both prediction and outcome "
+                         "so comparisons are apples-to-apples.",
+                    width="small",
+                ),
+                "Return": st.column_config.TextColumn(
+                    "Return",
+                    help="Actual % return of the index on the NEXT trading session "
+                         "(close-to-close from this date to the following trading day).\n\n"
+                         "Used to classify Actual direction and to evaluate "
+                         "whether the prediction was profitable.",
+                    width="small",
+                ),
+                "Correct": st.column_config.TextColumn(
+                    "Correct",
+                    help="✅ = predicted direction matched actual direction on the next day.\n"
+                         "❌ = prediction was wrong.\n"
+                         "⏳ = outcome not yet filled (today's pending prediction).\n\n"
+                         "Note: SIDEWAYS predictions are correct only if the market "
+                         "also moved < 0.15% the next day.",
+                    width="small",
+                ),
+                "HMM": st.column_config.TextColumn(
+                    "HMM",
+                    help="Hidden Markov Model regime state detected on this day.\n\n"
+                         "Bull     = HMM high-probability bull state (mean return > 0)\n"
+                         "Sideways = HMM sideways/consolidation state\n"
+                         "Bear     = HMM bear state (mean return < 0)\n\n"
+                         "Fitted with Baum-Welch EM on 90 days of returns. "
+                         "Regime-conditional accuracy (Bull/Bear vs Sideways) is shown "
+                         "in the 'Accuracy by HMM Regime' section above.",
+                    width="small",
+                ),
+                "Hurst": st.column_config.TextColumn(
+                    "Hurst",
+                    help="Hurst exponent (R/S + DFA average) on this day.\n\n"
+                         "H > 0.58 → Trending market (momentum signals are reliable)\n"
+                         "H ≈ 0.50 → Random walk (no memory-based edge)\n"
+                         "H < 0.42 → Mean-reverting (fade momentum signals)\n\n"
+                         "Computed on the last 90 trading days of the index's returns. "
+                         "Higher Hurst = market has autocorrelation = trends persist.",
+                    width="small",
+                ),
+                "Status": st.column_config.TextColumn(
+                    "Status",
+                    help="✅ Filled  = next-day actual return has been recorded and the "
+                         "prediction has been evaluated.\n"
+                         "⏳ Pending = today's prediction — next-day outcome not yet available. "
+                         "Will be filled automatically after tomorrow's data fetch.",
                     width="small",
                 ),
             },
