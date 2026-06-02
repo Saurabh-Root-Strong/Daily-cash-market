@@ -38,6 +38,54 @@ _NEG  = "#ff5252"
 _NEU  = "#78909C"
 
 
+def _bull_meter(score: float) -> tuple[int, str, str]:
+    """
+    Convert raw composite score (−20 to +20) → intuitive 0–100 Bull/Bear Meter.
+
+    0   = Maximum Bearish  (score ≤ −20)
+    50  = Neutral          (score =    0)
+    100 = Maximum Bullish  (score ≥ +20)
+
+    Zones:
+     0–20  → STRONG BEAR  (deep red)
+    21–35  → BEAR         (red)
+    36–45  → MILD BEAR    (orange)
+    46–54  → NEUTRAL      (grey)
+    55–64  → MILD BULL    (light green)
+    65–80  → BULL         (green)
+    81–100 → STRONG BULL  (bright green)
+    """
+    meter = max(0, min(100, round((score + 20) / 40 * 100)))
+    if   meter <= 20: return meter, "STRONG BEAR", "#d50000"
+    elif meter <= 35: return meter, "BEAR",        "#ff5252"
+    elif meter <= 45: return meter, "MILD BEAR",   "#ff9100"
+    elif meter <= 54: return meter, "NEUTRAL",     "#78909C"
+    elif meter <= 64: return meter, "MILD BULL",   "#b9f6ca"
+    elif meter <= 80: return meter, "BULL",        "#00c853"
+    else:             return meter, "STRONG BULL", "#69f0ae"
+
+
+def _meter_html(score: float, show_raw: bool = True) -> str:
+    """
+    Render a compact 0–100 Bull/Bear Meter as an HTML snippet.
+    Includes: label, number/100, gradient bar, raw score (optional).
+    """
+    meter, label, color = _bull_meter(score)
+    fill = meter                      # 0–100 fill%
+    raw  = f" <span style='color:#555;font-size:0.8em'>({score:+.1f})</span>" if show_raw else ""
+    bar  = (
+        f"<div style='background:#2a2a2a;border-radius:4px;height:5px;margin-top:4px'>"
+        f"<div style='width:{fill}%;height:5px;border-radius:4px;"
+        f"background:linear-gradient(90deg,#d50000,#ff9100,#78909C,#00c853);'></div>"
+        f"</div>"
+    )
+    return (
+        f"<span style='color:{color};font-weight:700;font-size:0.9em'>{label}</span>"
+        f"<span style='color:#888;font-size:0.8em;margin-left:5px'>{meter}/100</span>"
+        f"{raw}{bar}"
+    )
+
+
 _TOOLTIP_CSS = """<style>
 .nse-tip{position:relative;display:inline-flex;align-items:center;gap:5px}
 .nse-tip .ti{display:inline-flex;align-items:center;justify-content:center;
@@ -180,13 +228,15 @@ def _render_card(pred: IndexPrediction) -> None:
                 &nbsp;|&nbsp;
                 <span style="color:{conf_color};font-size:0.85em">{pred.confidence} CONF</span>
             </div>
+            <div style="margin-bottom:6px;font-size:0.8em">
+                {_meter_html(pred.composite_score, show_raw=True)}
+            </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:0.8em;color:#aaa">
-                <div>Score <b style="color:#fff">{pred.composite_score:+.1f}</b></div>
                 <div>PCR <b style="color:#fff">{_fmt(pred.pcr) if pred.pcr else '—'}</b></div>
-                <div>Carry <b style="color:#fff">{_fmt(pred.carry_pct_ann, 1, '% ann') if pred.carry_pct_ann is not None else '—'}</b></div>
                 <div>DTE <b style="color:#fff">{pred.days_to_expiry}d</b></div>
-                <div>FII <b style="color:#fff">{fii_emoji} {fii_str}</b>{fii_chg_str}</div>
+                <div>Carry <b style="color:#fff">{_fmt(pred.carry_pct_ann, 1, '% ann') if pred.carry_pct_ann is not None else '—'}</b></div>
                 <div>VIX <b style="color:{vix_color}">{vix_str}{vix_trend}</b></div>
+                <div style="grid-column:1/-1">FII <b style="color:#fff">{fii_emoji} {fii_str}</b>{fii_chg_str}</div>
             </div>
             <div style="margin-top:8px;font-size:0.75em;color:#888;border-top:1px solid #333;padding-top:6px">
                 S: <b style="color:#69f0ae">{_fmt(pred.levels.top_put_strike, 0) if pred.levels.top_put_strike else '—'}</b>
@@ -559,9 +609,11 @@ def _render_verdict(pred: IndexPrediction) -> None:
                     font-size:1.1em;padding:6px 16px;border-radius:8px
                 ">{dir_emoji} {pred.direction}</div>
                 <div style="color:{conf_color};font-weight:600">{pred.confidence} CONFIDENCE</div>
-                <div style="color:#888;margin-left:auto;font-size:0.85em">
-                    Score: <b style="color:#fff">{pred.composite_score:+.1f}</b>
-                    &nbsp;|&nbsp; Signals: <b style="color:#fff">{len(pred.signals)}</b>
+                <div style="margin-left:auto;font-size:0.82em;text-align:right">
+                    {_meter_html(pred.composite_score, show_raw=True)}
+                    <div style="color:#666;font-size:0.85em;margin-top:2px">
+                        {len(pred.signals)} signals &nbsp;|&nbsp; 0=Max Bear · 50=Neutral · 100=Max Bull
+                    </div>
                 </div>
             </div>
             <div style="color:#ddd;font-size:0.9em;margin-bottom:10px">{pred.headline}</div>
@@ -1209,19 +1261,28 @@ def _render_market_context(pred: IndexPrediction) -> None:
 def render(selected_date: date) -> None:
     st.subheader("Index Prediction — Tomorrow's Directional Forecast")
     st.caption(
-        "17-signal quant engine: OI-Price Matrix · Carry · Max Pain · PCR · Wyckoff Range · "
-        "Price Mean-Reversion · FII Institutional · FII Options Delta · FII Flow · "
+        "24-signal quant engine: OI-Price Matrix · Carry · Max Pain · PCR · OI-Premium Matrix · "
+        "Wyckoff Range · Price Mean-Reversion · FII Institutional · FII Options Delta · FII Flow · "
         "FII 5D Cumulative · FII OI Buildup · FII Position Change · Short Squeeze Setup · "
-        "India VIX · Sector Breadth · Cyclical/Defensive Rotation · PE Valuation"
+        "India VIX · Sector Breadth · Cyclical/Defensive Rotation · PE Valuation · "
+        "Multi-Expiry PCR · Dual Max Pain · Gamma Wall · Hurst · HMM · Entropy"
     )
 
     with st.expander("📖 How to read this page", expanded=False):
         st.markdown("""
 **Prediction Cards (top row)** — one card per index (Nifty 50, Bank Nifty, Fin Nifty, Midcap Nifty).
-- **Direction badge** (🟢 UP / 🔴 DOWN / 🟡 SIDEWAYS) — tomorrow's expected move from the 17-signal engine
-- **Score** — composite signal score (−20 to +20). Above +3 = bullish bias, below −3 = bearish bias, −3 to +3 = sideways/uncertain
-- **PCR** — Put-Call Ratio. Above 1.3 = peak fear, options writers are heavily on the put side (contrarian bullish). Below 0.70 = complacency, call-heavy (contrarian bearish)
-- **Carry** — annualised futures premium vs spot. Above 8% = market expects a rise. Below 3% or negative = futures trading at discount = smart money is cautious or bearish
+- **Direction badge** (🟢 UP / 🔴 DOWN / 🟡 SIDEWAYS) — tomorrow's expected move from the 24-signal engine
+- **Bull/Bear Meter (0–100)** — intuitive conviction scale replacing the raw ±20 score:
+  - **0–20 = STRONG BEAR** 🔴🔴 — very high bearish conviction, multiple strong signals aligned
+  - **21–35 = BEAR** 🔴 — clear bearish bias, institutions positioned short
+  - **36–45 = MILD BEAR** 🟠 — slight bearish lean, mixed signals with a downward tilt
+  - **46–54 = NEUTRAL** ⚖️ — no clear edge, range-bound likely
+  - **55–64 = MILD BULL** 🟡 — slight bullish lean
+  - **65–80 = BULL** 🟢 — clear bullish bias
+  - **81–100 = STRONG BULL** 🟢🟢 — very high bullish conviction
+  - Raw score shown in brackets for reference — 50 = neutral, each 10 points = one strong signal
+- **PCR** — Put-Call Ratio. Above 1.3 = peak fear (contrarian bullish). Below 0.70 = complacency (contrarian bearish)
+- **Carry** — annualised futures premium vs spot. Above 8% = bullish demand. Below 3% or negative = smart money cautious
 - **FII net** — Foreign Institutional net futures contracts today. Positive = net long, negative = net short
 - **S / MP / R** — Support / Max Pain / Resistance for the nearest expiry (max pain = strike with least OI writer pain)
 
