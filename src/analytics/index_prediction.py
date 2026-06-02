@@ -274,6 +274,16 @@ class IndexPrediction:
     monthly_max_pain: Optional[float] = None
     gamma_ratio: Optional[float] = None     # weekly_oi / (weekly_oi + monthly_oi)
 
+    # ── Expected-Move Forecast (magnitude — "how many points") ────────────────
+    expected_move_pts: Optional[float] = None    # 1σ daily expected move (points, ~68% band)
+    expected_move_pct: Optional[float] = None    # same as % of spot
+    range_low: Optional[float] = None            # spot − expected_move (68% lower bound)
+    range_high: Optional[float] = None           # spot + expected_move (68% upper bound)
+    target_move_pts: Optional[float] = None      # directional target move (signed, conviction-scaled)
+    target_close: Optional[float] = None         # spot + target_move (predicted close)
+    sideways_band_pts: Optional[float] = None    # ± threshold below which = sideways
+    move_basis: str = ""                         # one-line explanation of the calc
+
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
@@ -1667,6 +1677,97 @@ def _aggregate_composite(signals: list[IndexSignal]) -> float:
 # VERDICT
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _compute_expected_move(
+    idx_hist: pd.DataFrame,
+    spot_close: Optional[float],
+    vix_close: Optional[float],
+    composite: float,
+    dte: int,
+    levels: IndexKeyLevels,
+    is_nifty: bool,
+) -> dict:
+    """
+    Quantify the MAGNITUDE of tomorrow's expected move — "how many points".
+
+    Methodology (best-practice quant, blends forward + backward looking vol):
+      1. Realized 1σ daily move — std of last 20 daily returns × spot.
+         Index-specific (Bank Nifty naturally wider than Nifty). Always available.
+      2. VIX-implied 1σ daily move — India VIX is annualised IV; daily = VIX/√252.
+         Forward-looking (what the options market is pricing). India VIX measures
+         Nifty IV directly, so it anchors Nifty; for others realized vol leads.
+      3. Blend: Nifty → 50/50 realized+VIX; other indices → 70/30 (realized leads,
+         VIX as a market-wide vol-regime nudge).
+      4. Expiry compression: DTE ≤ 1 gamma pinning shrinks the range (×0.70).
+
+    The expected_move is the 1σ band (~68% of days close within ±expected_move).
+    The directional target skews within that band by conviction = composite/20.
+
+    Returns a dict of the IndexPrediction expected-move fields (or empties).
+    """
+    out = dict(
+        expected_move_pts=None, expected_move_pct=None,
+        range_low=None, range_high=None,
+        target_move_pts=None, target_close=None,
+        sideways_band_pts=None, move_basis="",
+    )
+    if not spot_close or spot_close <= 0 or idx_hist.empty:
+        return out
+
+    closes = idx_hist.sort_values("trade_date")["close_val"].dropna()
+    if len(closes) < 10:
+        return out
+
+    rets = closes.pct_change().dropna().tail(20)
+    if len(rets) < 5:
+        return out
+    realized_sigma_pct = float(rets.std()) * 100.0           # daily 1σ, %
+
+    vix_sigma_pct = None
+    if vix_close and vix_close > 0:
+        vix_sigma_pct = float(vix_close) / (252.0 ** 0.5)    # annualised → daily 1σ, %
+
+    if vix_sigma_pct is not None:
+        w_realized = 0.5 if is_nifty else 0.7
+        sigma_pct  = w_realized * realized_sigma_pct + (1 - w_realized) * vix_sigma_pct
+        basis_src  = (f"50/50 realized+VIX" if is_nifty else "70/30 realized+VIX")
+    else:
+        sigma_pct  = realized_sigma_pct
+        basis_src  = "realized 20D vol"
+
+    expected_move_pts = spot_close * sigma_pct / 100.0
+
+    # Expiry-day gamma pinning compresses the expected range
+    pin_note = ""
+    if dte <= 1:
+        expected_move_pts *= 0.70
+        sigma_pct          *= 0.70
+        pin_note = " · expiry pin ×0.7"
+
+    # Data-driven sideways band: 40% of the 1σ move (matches the user's
+    # "±40 pts = sideways, beyond = directional" intuition, but volatility-scaled).
+    sideways_band = 0.40 * expected_move_pts
+
+    # Directional target: conviction (composite/20, clamped ±1) × expected move
+    conviction  = max(-1.0, min(1.0, composite / 20.0))
+    target_move = conviction * expected_move_pts
+    target_close = spot_close + target_move
+
+    out.update(
+        expected_move_pts=round(expected_move_pts, 0),
+        expected_move_pct=round(sigma_pct, 2),
+        range_low=round(spot_close - expected_move_pts, 0),
+        range_high=round(spot_close + expected_move_pts, 0),
+        target_move_pts=round(target_move, 0),
+        target_close=round(target_close, 0),
+        sideways_band_pts=round(sideways_band, 0),
+        move_basis=(
+            f"1σ ≈ {sigma_pct:.2f}% ({basis_src}{pin_note}); "
+            f"68% of days close within ±{expected_move_pts:.0f} pts"
+        ),
+    )
+    return out
+
+
 def _compute_verdict(
     composite: float,
     signals: list[IndexSignal],
@@ -2051,6 +2152,12 @@ def _compute_prediction(
         entropy_conf=entropy_conf,
     )
 
+    # ── Expected-Move Forecast (magnitude) ────────────────────────────────────
+    em = _compute_expected_move(
+        idx_hist, spot_close, market_ctx.vix_close, composite,
+        dte_options, levels, is_nifty=(fno_symbol == "NIFTY"),
+    )
+
     pred_out = IndexPrediction(
         fno_symbol=fno_symbol, display_name=display_name, as_of_date=trade_date,
         spot_close=spot_close, prev_close=prev_close_price,
@@ -2076,6 +2183,15 @@ def _compute_prediction(
         monthly_put_oi=monthly_put_oi_me,
         monthly_max_pain=monthly_max_pain_lvl,
         gamma_ratio=gamma_ratio_val,
+        # Expected-move forecast (magnitude)
+        expected_move_pts=em["expected_move_pts"],
+        expected_move_pct=em["expected_move_pct"],
+        range_low=em["range_low"],
+        range_high=em["range_high"],
+        target_move_pts=em["target_move_pts"],
+        target_close=em["target_close"],
+        sideways_band_pts=em["sideways_band_pts"],
+        move_basis=em["move_basis"],
     )
 
     # Auto-store prediction in memory engine (non-fatal)

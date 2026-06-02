@@ -86,6 +86,92 @@ def _meter_html(score: float, show_raw: bool = True) -> str:
     )
 
 
+def _card_move_line(pred: "IndexPrediction") -> str:
+    """Compact one-line expected-move summary for the prediction card."""
+    if pred.expected_move_pts is None or pred.spot_close is None:
+        return ""
+    em  = pred.expected_move_pts
+    lo  = pred.range_low
+    hi  = pred.range_high
+    tmv = pred.target_move_pts or 0
+    tgt_color = _POS if tmv > 0 else (_NEG if tmv < 0 else _NEU)
+    arrow     = "▲" if tmv > 0 else ("▼" if tmv < 0 else "↔")
+    return (
+        f"<div style='margin-top:5px;font-size:0.74em;color:#888'>"
+        f"Range <b style='color:#fff'>{lo:,.0f}–{hi:,.0f}</b> "
+        f"<span style='color:#666'>(±{em:,.0f})</span> "
+        f"&nbsp;Tgt <b style='color:{tgt_color}'>{arrow}{abs(tmv):,.0f}</b>"
+        f"</div>"
+    )
+
+
+def _expected_move_box(pred: "IndexPrediction") -> str:
+    """
+    Prominent expected-move forecast: range, directional target, sideways band.
+    Returns an HTML snippet (empty string if no data).
+    """
+    if pred.expected_move_pts is None or pred.spot_close is None:
+        return ""
+
+    em   = pred.expected_move_pts
+    pct  = pred.expected_move_pct or 0
+    lo   = pred.range_low
+    hi   = pred.range_high
+    tgt  = pred.target_close
+    tmv  = pred.target_move_pts or 0
+    band = pred.sideways_band_pts or 0
+    spot = pred.spot_close
+
+    tgt_color = _POS if tmv > 0 else (_NEG if tmv < 0 else _NEU)
+    arrow     = "▲" if tmv > 0 else ("▼" if tmv < 0 else "↔")
+
+    # Directional verdict on magnitude vs sideways band
+    if abs(tmv) <= band:
+        magnitude_verdict = (
+            f"<span style='color:{_NEU}'>Within ±{band:.0f} pt sideways band → "
+            f"range-bound likely</span>"
+        )
+    else:
+        dir_word = "upside" if tmv > 0 else "downside"
+        magnitude_verdict = (
+            f"<span style='color:{tgt_color}'>Beyond ±{band:.0f} pt band → "
+            f"directional {dir_word} bias of ~{abs(tmv):.0f} pts</span>"
+        )
+
+    return (
+        f"<div style='background:#161616;border:1px solid #333;border-radius:8px;"
+        f"padding:10px 14px;margin-bottom:10px'>"
+        f"<div style='display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px'>"
+        # Expected range
+        f"<div style='min-width:160px'>"
+        f"<div style='color:#888;font-size:0.72em;text-transform:uppercase;letter-spacing:0.5px'>"
+        f"Expected Range (68%)</div>"
+        f"<div style='color:#fff;font-weight:700;font-size:1.0em'>"
+        f"{lo:,.0f} – {hi:,.0f}</div>"
+        f"<div style='color:#888;font-size:0.75em'>±{em:,.0f} pts (±{pct:.2f}%)</div>"
+        f"</div>"
+        # Directional target
+        f"<div style='min-width:150px'>"
+        f"<div style='color:#888;font-size:0.72em;text-transform:uppercase;letter-spacing:0.5px'>"
+        f"Directional Target</div>"
+        f"<div style='color:{tgt_color};font-weight:700;font-size:1.0em'>"
+        f"{arrow} {tgt:,.0f}</div>"
+        f"<div style='color:{tgt_color};font-size:0.75em'>{tmv:+,.0f} pts from {spot:,.0f}</div>"
+        f"</div>"
+        # Sideways band
+        f"<div style='min-width:150px'>"
+        f"<div style='color:#888;font-size:0.72em;text-transform:uppercase;letter-spacing:0.5px'>"
+        f"Sideways Band</div>"
+        f"<div style='color:#fff;font-weight:700;font-size:1.0em'>±{band:,.0f} pts</div>"
+        f"<div style='color:#888;font-size:0.75em'>{spot-band:,.0f} – {spot+band:,.0f}</div>"
+        f"</div>"
+        f"</div>"
+        f"<div style='margin-top:6px;font-size:0.78em'>{magnitude_verdict}</div>"
+        f"<div style='margin-top:3px;color:#666;font-size:0.72em'>{pred.move_basis}</div>"
+        f"</div>"
+    )
+
+
 _TOOLTIP_CSS = """<style>
 .nse-tip{position:relative;display:inline-flex;align-items:center;gap:5px}
 .nse-tip .ti{display:inline-flex;align-items:center;justify-content:center;
@@ -245,6 +331,7 @@ def _render_card(pred: IndexPrediction) -> None:
                 &nbsp;|&nbsp;
                 R: <b style="color:#ff5252">{_fmt(pred.levels.top_call_strike, 0) if pred.levels.top_call_strike else '—'}</b>
             </div>
+            {_card_move_line(pred)}
             {regime_html}
         </div>
         """,
@@ -617,6 +704,7 @@ def _render_verdict(pred: IndexPrediction) -> None:
                 </div>
             </div>
             <div style="color:#ddd;font-size:0.9em;margin-bottom:10px">{pred.headline}</div>
+            {_expected_move_box(pred)}
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.82em">
                 <div>
                     <div style="color:#69f0ae;font-weight:600;margin-bottom:2px">Key Driver</div>
@@ -1281,6 +1369,16 @@ def render(selected_date: date) -> None:
   - **65–80 = BULL** 🟢 — clear bullish bias
   - **81–100 = STRONG BULL** 🟢🟢 — very high bullish conviction
   - Raw score shown in brackets for reference — 50 = neutral, each 10 points = one strong signal
+- **Expected Move forecast** (in the Verdict & Signals tab) — answers *how many points*:
+  - **Expected Range (68%)** — the 1σ volatility cone: tomorrow's close lands inside this ~68% of the time.
+    Computed from realized 20-day volatility blended with India VIX (forward-looking implied vol).
+    Bank Nifty's range is naturally wider than Nifty (index-specific volatility).
+  - **Directional Target** — where the engine expects the close, skewed within the range by conviction
+    (composite score). Strong bull → upper end / above; neutral → middle; strong bear → lower end / below.
+  - **Sideways Band** — the data-driven ± threshold (40% of the 1σ move). If the predicted move stays
+    inside this band → range-bound. Beyond it → genuine directional bias. (Replaces a fixed ±40 pts
+    with a volatility-scaled band — wider on high-VIX days, tighter on calm days.)
+  - On expiry day (DTE ≤ 1) the range is compressed ×0.7 for gamma pinning.
 - **PCR** — Put-Call Ratio. Above 1.3 = peak fear (contrarian bullish). Below 0.70 = complacency (contrarian bearish)
 - **Carry** — annualised futures premium vs spot. Above 8% = bullish demand. Below 3% or negative = smart money cautious
 - **FII net** — Foreign Institutional net futures contracts today. Positive = net long, negative = net short
