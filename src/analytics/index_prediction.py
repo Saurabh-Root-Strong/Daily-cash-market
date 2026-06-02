@@ -55,7 +55,12 @@ Signals 22–24 are Statistical Regime signals applied to all indices.
                                Turnover-weighted advance ratio across all 50 index members
                                Score ≥ 75% turnover advancing = +2.5 exceptional breadth
                                Delivery ≥ 55% on advancers = +0.5 institutional accumulation
-                               Goes deeper than sector-index breadth: reveals WHO is buying
+                               Reveals WHO is buying (institutions vs day traders)
+  17d.Constituent Fut OI       Nifty 50 ONLY — stock futures OI-Price matrix consensus
+                               Fresh long/short buildup across 50 constituent stocks
+                               Disambiguates index OI: stock futures are ALWAYS directional
+                               (no hedge use case exists) → pure institutional conviction signal
+                               net bull ≥ 30% above bear = +2.0 basket long conviction
 
   ── Multi-Expiry (Nifty 50 only — weekly + monthly expiry both available) ─────
   18. Cross-Expiry PCR       Weekly PCR vs Monthly PCR divergence
@@ -246,16 +251,23 @@ class MarketContext:
     # ── Nifty 50 daily return — used for non-Nifty relative-strength signal ──
     nifty_pct_chg: Optional[float] = None
 
-    # ── Nifty 50 constituent stock data (Signal 17c) ──────────────────────────
-    # Stock-level breadth + delivery quality for the 50 index members.
-    # Turnover-weighted advance ratio is a better proxy for index impact than a
-    # simple count because large-caps (Reliance, HDFC Bank) move the index more.
-    n50_coverage:      int   = 0      # stocks found in daily_data for trade_date
+    # ── Nifty 50 constituent stock data — cash market (Signal 17c) ──────────────
+    n50_coverage:      int   = 0
     n50_advancing:     int   = 0
     n50_declining:     int   = 0
-    n50_adv_turn_pct:  Optional[float] = None  # turnover-weighted advance % (0–100)
-    n50_adv_deliv_avg: Optional[float] = None  # avg delivery% of advancing stocks
-    n50_dec_deliv_avg: Optional[float] = None  # avg delivery% of declining stocks
+    n50_adv_turn_pct:  Optional[float] = None
+    n50_adv_deliv_avg: Optional[float] = None
+    n50_dec_deliv_avg: Optional[float] = None
+
+    # ── Nifty 50 constituent stock futures OI-Price matrix (Signal 17d) ─────────
+    # Unlike index futures (which FII use as portfolio hedges), individual stock
+    # futures are almost always directional bets. When 30+ Nifty 50 stocks show
+    # fresh long buildup simultaneously, institutions are buying the BASKET.
+    n50_fut_valid:       int = 0   # stocks with valid today vs yesterday comparison
+    n50_fut_fresh_long:  int = 0   # price↑ + OI↑ = new money entering longs
+    n50_fut_fresh_short: int = 0   # price↓ + OI↑ = new money entering shorts
+    n50_fut_long_unwind: int = 0   # price↓ + OI↓ = longs exiting
+    n50_fut_short_cov:   int = 0   # price↑ + OI↓ = shorts covering
 
 
 @dataclass
@@ -639,6 +651,77 @@ def _build_market_context(trade_date: date) -> MarketContext:
             ctx.n50_adv_deliv_avg = float(_adv["deliv_per"].dropna().mean()) if "deliv_per" in _adv else None
         if len(_dec) >= 3:
             ctx.n50_dec_deliv_avg = float(_dec["deliv_per"].dropna().mean()) if "deliv_per" in _dec else None
+
+    # ── Nifty 50 constituent stock futures OI-Price matrix (Signal 17d) ──────
+    # Load near-expiry FUTSTK rows for the last 2 trading dates for all 50 symbols.
+    # Near expiry = lowest expiry_date with open_interest > 0 (same logic as index futures).
+    _sym_ph_f = ", ".join("?" * len(_NIFTY50_SYMBOLS))
+    _n50_fut_df = query_dataframe(f"""
+        WITH last2 AS (
+            SELECT DISTINCT trade_date
+            FROM fno_bhavcopy
+            WHERE instrument = 'FUTSTK'
+              AND symbol IN ({_sym_ph_f})
+              AND trade_date <= ?
+            ORDER BY trade_date DESC LIMIT 2
+        )
+        SELECT f.symbol, f.trade_date, f.expiry_date,
+               f.open_interest, f.settle_price
+        FROM fno_bhavcopy f
+        WHERE f.instrument = 'FUTSTK'
+          AND f.symbol IN ({_sym_ph_f})
+          AND f.trade_date IN (SELECT trade_date FROM last2)
+          AND f.open_interest > 0
+        ORDER BY f.symbol, f.trade_date DESC, f.expiry_date
+    """, [*_NIFTY50_SYMBOLS, trade_date, *_NIFTY50_SYMBOLS])
+
+    if not _n50_fut_df.empty:
+        _n50_fut_df["trade_date"] = pd.to_datetime(_n50_fut_df["trade_date"]).dt.date
+        _n50_fut_df["expiry_date"] = pd.to_datetime(_n50_fut_df["expiry_date"]).dt.date
+        _fut_dates = sorted(_n50_fut_df["trade_date"].unique(), reverse=True)
+        _td = _fut_dates[0] if _fut_dates else None
+        _pd = _fut_dates[1] if len(_fut_dates) >= 2 else None
+
+        if _td and _pd:
+            # Take near expiry (first row per symbol × date after sort by expiry_date)
+            _today_fut = (
+                _n50_fut_df[_n50_fut_df["trade_date"] == _td]
+                .groupby("symbol", as_index=False).first()
+            )
+            _prev_fut = (
+                _n50_fut_df[_n50_fut_df["trade_date"] == _pd]
+                .groupby("symbol", as_index=False).first()
+            )
+            _prev_idx = _prev_fut.set_index("symbol")
+
+            _fl = _sc = _lu = _fs = _valid = 0
+            for _, tr in _today_fut.iterrows():
+                sym = tr["symbol"]
+                if sym not in _prev_idx.index:
+                    continue
+                pr = _prev_idx.loc[sym]
+                # Only compare same expiry (skip rollover days for this stock)
+                if tr["expiry_date"] != pr["expiry_date"]:
+                    continue
+                oi_t = float(tr["open_interest"]); oi_p = float(pr["open_interest"])
+                sp_t = float(tr["settle_price"]);  sp_p = float(pr["settle_price"])
+                if oi_p <= 0 or sp_p <= 0:
+                    continue
+                oi_chg = (oi_t - oi_p) / oi_p * 100
+                pr_chg = (sp_t - sp_p) / sp_p * 100
+                oi_up = oi_chg >  0.5;  oi_dn = oi_chg < -0.5
+                pr_up = pr_chg >  0.1;  pr_dn = pr_chg < -0.1
+                _valid += 1
+                if   pr_up and oi_up: _fl += 1
+                elif pr_up and oi_dn: _sc += 1
+                elif pr_dn and oi_dn: _lu += 1
+                elif pr_dn and oi_up: _fs += 1
+
+            ctx.n50_fut_valid       = _valid
+            ctx.n50_fut_fresh_long  = _fl
+            ctx.n50_fut_fresh_short = _fs
+            ctx.n50_fut_long_unwind = _lu
+            ctx.n50_fut_short_cov   = _sc
 
     # ── Sector breadth + rotation ─────────────────────────────────────────────
     sec_df = _load_sector_indices(trade_date)
@@ -1638,6 +1721,107 @@ def _sig_constituent_breadth(ctx: MarketContext) -> Optional[IndexSignal]:
     return IndexSignal(name, "Sector", direction, round(base, 2), head, desc, emoji)
 
 
+def _sig_constituent_fut_oi(ctx: MarketContext) -> Optional[IndexSignal]:
+    """
+    Signal 17d: Nifty 50 constituent stock futures OI-Price matrix — NIFTY exclusive.
+
+    WHY THIS OUTPERFORMS THE INDEX-LEVEL OI SIGNAL:
+      Index futures (FUTIDX) are routinely used by FIIs as portfolio hedges against
+      their large cash equity holdings. A massive FII short in NIFTY index futures
+      is usually a hedge, not a directional call (the diagnostic confirmed this fires
+      bearish on ~100% of days). Stock futures (FUTSTK) carry NO such ambiguity —
+      you do not hedge a cash HDFC Bank position by shorting HDFC Bank futures;
+      that would just close the position. Every FUTSTK OI change is a directional bet.
+
+      When 30+ of the 50 index stocks show Fresh Long Buildup simultaneously,
+      institutions are constructing BASKET LONGS via individual names. This is the
+      institutional "all-in" signal that the index OI matrix cannot detect.
+
+    OI-PRICE MATRIX applied per constituent stock (near-expiry futures only):
+      Price ↑ + OI ↑ = Fresh Long Build  — new money entering; highest conviction
+      Price ↑ + OI ↓ = Short Covering    — shorts forced out; bullish but finite
+      Price ↓ + OI ↓ = Long Unwinding    — longs exiting; bearish but self-limiting
+      Price ↓ + OI ↑ = Fresh Short Build — new money entering shorts; highest conviction
+
+    SCORING (based on net_balance = bull_pct − bear_pct):
+      net ≥ 0.45 + fresh_long ≥ 30%  → +3.0  Exceptional basket conviction long
+      net ≥ 0.30                      → +2.0  Broadly bullish stock basket
+      net ≥ 0.15                      → +1.0  Mild bullish lean in basket
+      net ≤ −0.45 + fresh_short ≥ 30% → −3.0  Exceptional basket conviction short
+      net ≤ −0.30                      → −2.0  Broadly bearish stock basket
+      net ≤ −0.15                      → −1.0  Mild bearish lean
+    """
+    valid = ctx.n50_fut_valid
+    if valid < 20:
+        return None   # fewer than 20 comparable stocks — data too thin for a read
+
+    fl = ctx.n50_fut_fresh_long
+    sc = ctx.n50_fut_short_cov
+    lu = ctx.n50_fut_long_unwind
+    fs = ctx.n50_fut_fresh_short
+
+    bull_pct = (fl + sc) / valid   # all upward-priced outcomes (regardless of mechanism)
+    bear_pct = (fs + lu) / valid   # all downward-priced outcomes
+    fl_pct   = fl / valid          # purely fresh longs (highest conviction, new money in)
+    fs_pct   = fs / valid          # purely fresh shorts (highest conviction, new money in)
+    net      = bull_pct - bear_pct
+
+    if net >= 0.45 and fl_pct >= 0.30:
+        score = 3.0
+        name  = "N50 Basket Fresh Long Build — Institutional Conviction BUY"
+        head  = (f"{fl}/{valid} N50 stocks Fresh Long + {sc} Short Cov "
+                 f"= {bull_pct:.0%} of basket bulls (net {net:+.0%})")
+        emoji = "🔥"
+    elif net >= 0.30:
+        score = 2.0
+        name  = "N50 Basket Broadly Bullish — Stock Futures Net Long"
+        head  = (f"{fl} fresh long + {sc} short cov vs {fs} fresh short + {lu} unwind "
+                 f"({bull_pct:.0%} bulls, net {net:+.0%})")
+        emoji = "🟢"
+    elif net >= 0.15:
+        score = 1.0
+        name  = "N50 Basket Mild Bullish — More Stock Longs than Shorts"
+        head  = f"N50 stock futures: {bull_pct:.0%} bullish vs {bear_pct:.0%} bearish (mild bull lean)"
+        emoji = "🟡"
+    elif net <= -0.45 and fs_pct >= 0.30:
+        score = -3.0
+        name  = "N50 Basket Fresh Short Build — Institutional Conviction SELL"
+        head  = (f"{fs}/{valid} N50 stocks Fresh Short + {lu} Long Unwind "
+                 f"= {bear_pct:.0%} of basket bears (net {net:+.0%})")
+        emoji = "💀"
+    elif net <= -0.30:
+        score = -2.0
+        name  = "N50 Basket Broadly Bearish — Stock Futures Net Short"
+        head  = (f"{fs} fresh short + {lu} unwind vs {fl} fresh long + {sc} cov "
+                 f"({bear_pct:.0%} bears, net {net:+.0%})")
+        emoji = "🔴"
+    elif net <= -0.15:
+        score = -1.0
+        name  = "N50 Basket Mild Bearish — More Stock Shorts than Longs"
+        head  = f"N50 stock futures: {bear_pct:.0%} bearish vs {bull_pct:.0%} bullish (mild bear lean)"
+        emoji = "🟠"
+    else:
+        return None   # net between −0.15 and +0.15: mixed, no directional edge
+
+    direction = 1 if score > 0 else -1
+    desc = (
+        f"OI-Price matrix applied to {valid} Nifty 50 constituent stocks with active futures:\n"
+        f"  Fresh Long Build  : {fl:2d} ({fl_pct:.0%}) — price ↑ + OI ↑ → new money entering longs\n"
+        f"  Short Covering    : {sc:2d} — price ↑ + OI ↓ → shorts forced to buy back\n"
+        f"  Long Unwinding    : {lu:2d} — price ↓ + OI ↓ → longs choosing to exit\n"
+        f"  Fresh Short Build : {fs:2d} ({fs_pct:.0%}) — price ↓ + OI ↑ → new money entering shorts\n"
+        f"\n"
+        f"INTERPRETATION: Index futures can be hedges — when FII shorts NIFTY futures they "
+        f"are often protecting a long cash portfolio (hence the bearish bias every day). "
+        f"STOCK futures have no such hedge role. When {fl} index components simultaneously "
+        f"show fresh long buildup in their individual stock futures, institutions are "
+        f"constructing the index basket via stock-level names — a directional conviction "
+        f"call that is independent of and complementary to the index-level OI signal."
+    )
+
+    return IndexSignal(name, "Futures OI", direction, score, head, desc, emoji)
+
+
 def _sig_valuation_pe(ctx: MarketContext) -> Optional[IndexSignal]:
     """
     Nifty PE ratio as background valuation context.
@@ -2456,8 +2640,10 @@ def _compute_prediction(
     # Signal 17b: sector RS vs Nifty — fires for BankNifty / FinNifty / MidcapNifty only
     add(_sig_index_relative_strength(fno_symbol, day_change_pct, market_ctx))
     # Signal 17c: Nifty 50 constituent breadth + delivery quality — NIFTY only
+    # Signal 17d: Nifty 50 stock futures OI-Price matrix — NIFTY only
     if fno_symbol == "NIFTY":
         add(_sig_constituent_breadth(market_ctx))
+        add(_sig_constituent_fut_oi(market_ctx))
 
     # — Signals 18-20: Nifty 50 multi-expiry (fires only when weekly ≠ monthly) —
     if fno_symbol == "NIFTY" and monthly_exp_me is not None:
