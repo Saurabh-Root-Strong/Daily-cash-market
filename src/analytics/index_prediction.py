@@ -46,6 +46,12 @@ Signals 22–24 are Statistical Regime signals applied to all indices.
   15. Sector Breadth        Zweig (Winning on Wall Street): participation quality
   16. Defensive/Cyclical    O'Neil (CANSLIM): sector rotation leads index
   17. PE Valuation          Nifty PE ratio as background context
+  17b.Index Relative Strength  BankNifty / FinNifty / MidcapNifty ONLY
+                               Today's index return vs Nifty 50 → sector rotation direction
+                               RS ≥ +0.75% = capital rotating IN (bullish momentum)
+                               RS ≤ −0.75% = capital rotating OUT (distribution)
+                               Mansfield RS / O'Neil CANSLIM principle — fills the gap
+                               left by all other market-wide signals for non-Nifty indices.
 
   ── Multi-Expiry (Nifty 50 only — weekly + monthly expiry both available) ─────
   18. Cross-Expiry PCR       Weekly PCR vs Monthly PCR divergence
@@ -214,6 +220,12 @@ class MarketContext:
     # ── PE valuation ──────────────────────────────────────────────────────────
     nifty_pe: Optional[float] = None
 
+    # ── Nifty 50 daily return — used for non-Nifty relative-strength signal ──
+    # BankNifty / FinNifty / MidcapNifty need to compare their return to the
+    # broad market to detect sector-specific capital rotation. Computed once here
+    # so _compute_prediction for each non-Nifty symbol can reference it cheaply.
+    nifty_pct_chg: Optional[float] = None
+
 
 @dataclass
 class IndexPrediction:
@@ -308,6 +320,19 @@ def _carry_label(carry_pct_ann: float) -> str:
     if carry_pct_ann >= 4:   return "Near Fair Value — Neutral"
     if carry_pct_ann >= 0:   return "Slight Discount — Mild Bearish"
     return "Backwardation — Bearish / Stress"
+
+
+def _lag_mult(lag_days: int) -> float:
+    """Score decay for stale institutional data (FAO participant / FII derivatives stats).
+
+    0d→1.00 | 1d→0.80 | 2d→0.60 | 3d→0.40 | ≥4d→0.30 (floor)
+
+    A 3-day-old FAO snapshot fires at 40% weight — still informative as a structural
+    context signal, but does not dominate the composite as if it were fresh.
+    Applied multiplicatively to every institutional signal score except the zero-score
+    FII options put-hedge (which is context-only and already carries no vote weight).
+    """
+    return max(0.30, 1.0 - lag_days * 0.20)
 
 
 def _to_date(v) -> Optional[date]:
@@ -542,6 +567,14 @@ def _build_market_context(trade_date: date) -> MarketContext:
     # ── Nifty PE ──────────────────────────────────────────────────────────────
     ctx.nifty_pe = _load_nifty_pe(trade_date)
 
+    # ── Nifty 50 daily return (for non-Nifty relative-strength signal) ───────
+    _n50 = query_dataframe("""
+        SELECT pct_chg FROM index_data
+        WHERE index_name = 'Nifty 50' AND trade_date = ?
+    """, [trade_date])
+    if not _n50.empty and pd.notna(_n50["pct_chg"].iloc[0]):
+        ctx.nifty_pct_chg = float(_n50["pct_chg"].iloc[0])
+
     # ── Sector breadth + rotation ─────────────────────────────────────────────
     sec_df = _load_sector_indices(trade_date)
     if not sec_df.empty and "pct_chg" in sec_df.columns:
@@ -678,14 +711,48 @@ def _sig_price_action(idx_hist: pd.DataFrame) -> Optional[IndexSignal]:
     return None
 
 
-def _sig_oi_price_matrix(pct_chg: Optional[float], fut_oi_chg: int, fut_oi_base: int = 0) -> IndexSignal:
+def _sig_oi_price_matrix(
+    pct_chg: Optional[float],
+    fut_oi_chg: int,
+    fut_oi_base: int = 0,
+    is_rollover: bool = False,
+) -> IndexSignal:
     """OI-Price matrix — Murphy. Most reliable institutional directional signal.
 
     Uses percentage-based OI threshold (>0.5% change) to be scale-invariant across
     both old zip format (OI in lots) and new DAT format (OI in underlying units).
+
+    is_rollover=True: today's near contract differs from yesterday's (monthly expiry).
+    OI comparison is meaningless on rollover day — the signal falls back to pure price
+    direction at half score, labeled explicitly so the user is not misled.
     """
     pct = pct_chg or 0.0
     up  = pct > 0.10; dn = pct < -0.10
+
+    # ── Rollover day: OI comparison is invalid — brand-new contract, no prev ──
+    if is_rollover:
+        if up:
+            return IndexSignal(
+                "Expiry Rollover — Price Up (OI N/A)", "Futures OI", 1, 1.0,
+                f"Rollover day — price +{pct:.2f}%, OI change not comparable",
+                f"Monthly futures rollover: near contract changed today. OI change crosses contracts "
+                f"and is meaningless. Price direction only: +{pct:.2f}% (mild bullish lean). "
+                "Wait 1–2 days for OI to settle into new contract.", "🔄",
+            )
+        if dn:
+            return IndexSignal(
+                "Expiry Rollover — Price Down (OI N/A)", "Futures OI", -1, -1.0,
+                f"Rollover day — price {pct:.2f}%, OI change not comparable",
+                f"Monthly futures rollover: near contract changed today. OI change crosses contracts "
+                f"and is meaningless. Price direction only: {pct:.2f}% (mild bearish lean). "
+                "Wait 1–2 days for OI to settle into new contract.", "🔄",
+            )
+        return IndexSignal(
+            "Expiry Rollover — Flat (OI N/A)", "Futures OI", 0, 0.0,
+            "Rollover day — price flat, OI not comparable across contracts",
+            "Monthly rollover: OI comparison invalid. No directional edge today.", "🔄",
+        )
+
     oi_chg_pct = (fut_oi_chg / max(fut_oi_base, 1)) * 100 if fut_oi_base > 0 else 0.0
     oi_up = oi_chg_pct > 0.5
     oi_dn = oi_chg_pct < -0.5
@@ -732,25 +799,54 @@ def _sig_carry(carry_pct_ann: Optional[float], carry_pts: Optional[float]) -> Op
 
 
 def _sig_pcr(pcr: Optional[float], prev_pcr: Optional[float]) -> Optional[IndexSignal]:
-    """PCR contrarian — peak fear / complacency indicator."""
+    """PCR contrarian — trend-aware fear/complacency indicator.
+
+    Threshold CROSSINGS carry higher conviction than sustained extremes:
+      PCR crossing 1.30 today (was 1.15 yesterday) = fresh capitulation → score +3.0
+      PCR already at 1.40 for 5 days = fear already priced in              → score +2.0
+    Rising PCR into moderate zone also earns a partial boost vs static reading.
+    This eliminates the "stale fear" mis-signal where day-5 of an extreme PCR
+    fires at the same score as the initial spike that first predicted the bounce.
+    """
     if pcr is None: return None
+
+    rising      = prev_pcr is not None and pcr > prev_pcr
+    falling     = prev_pcr is not None and pcr < prev_pcr
+    fresh_spike = rising  and prev_pcr is not None and prev_pcr < 1.30
+    fresh_drop  = falling and prev_pcr is not None and prev_pcr > 0.70
+    trend_tag   = (f" (↑ from {prev_pcr:.2f})" if rising else
+                   f" (↓ from {prev_pcr:.2f})" if falling else "")
+
     if pcr > 1.3:
-        return IndexSignal("PCR Extreme High — Contrarian Bullish", "Options OI", 1, 2.0,
-            f"PCR {pcr:.2f} — Peak Fear (Contrarian BUY)",
-            f"PCR {pcr:.2f} = extreme put buying = peak fear. "
+        score = 3.0 if fresh_spike else 2.0
+        extra = (f"Fresh spike from {prev_pcr:.2f} — first crossover = strongest contrarian signal. "
+                 if fresh_spike else
+                 f"{'Rising' if rising else 'Sustained'} extreme — fear partially priced in. ")
+        return IndexSignal("PCR Extreme High — Contrarian Bullish", "Options OI", 1, score,
+            f"PCR {pcr:.2f}{trend_tag} — Peak Fear (Contrarian BUY)",
+            f"PCR {pcr:.2f} = extreme put buying = peak fear. {extra}"
             "When everyone is hedged, downside is already priced in. PCR >1.3 historically marks bottoms.", "🔄")
     if 1.1 <= pcr <= 1.3:
-        return IndexSignal("PCR Elevated — Mildly Bullish", "Options OI", 1, 1.0,
-            f"PCR {pcr:.2f} — Defensive Hedging",
-            f"PCR {pcr:.2f} above neutral. Participants buying protection. Bullish lean.", "🟡")
+        s = 1.5 if rising else 1.0
+        return IndexSignal("PCR Elevated — Mildly Bullish", "Options OI", 1, s,
+            f"PCR {pcr:.2f}{trend_tag} — Defensive Hedging",
+            f"PCR {pcr:.2f} above neutral. "
+            f"{'Rising fear — fresh hedge demand building.' if rising else 'Participants buying protection.'} Bullish lean.", "🟡")
     if pcr < 0.70:
-        return IndexSignal("PCR Extreme Low — Contrarian Bearish", "Options OI", -1, -2.0,
-            f"PCR {pcr:.2f} — Complacency (Contrarian SELL)",
-            f"PCR {pcr:.2f} = extreme call buying = complacency. PCR <0.70 precedes corrections.", "🔄")
+        score = -3.0 if fresh_drop else -2.0
+        extra = (f"Fresh collapse from {prev_pcr:.2f} — first crossover = strongest contrarian signal. "
+                 if fresh_drop else
+                 f"{'Falling further' if falling else 'Sustained'} complacency — correction risk elevated. ")
+        return IndexSignal("PCR Extreme Low — Contrarian Bearish", "Options OI", -1, score,
+            f"PCR {pcr:.2f}{trend_tag} — Complacency (Contrarian SELL)",
+            f"PCR {pcr:.2f} = extreme call buying = complacency. {extra}"
+            "PCR <0.70 precedes corrections.", "🔄")
     if 0.70 <= pcr < 0.85:
-        return IndexSignal("PCR Low — Under-Hedged", "Options OI", -1, -1.0,
-            f"PCR {pcr:.2f} — Mild Caution",
-            f"PCR {pcr:.2f} below neutral. Under-hedged. Vulnerable if sentiment shifts.", "🟡")
+        s = -1.5 if falling else -1.0
+        return IndexSignal("PCR Low — Under-Hedged", "Options OI", -1, s,
+            f"PCR {pcr:.2f}{trend_tag} — Mild Caution",
+            f"PCR {pcr:.2f} below neutral. "
+            f"{'Falling — participants unhedging into complacency.' if falling else 'Under-hedged.'} Vulnerable if sentiment shifts.", "🟡")
     return None
 
 
@@ -784,13 +880,27 @@ def _sig_opt_oi_premium(
     if calls_t.empty and puts_t.empty:
         return None
 
+    # ── Near-expiry noise guard ───────────────────────────────────────────────
+    # On expiry day / day before (DTE ≤ 2), only a handful of ATM strikes trade.
+    # Volume-weighted premium becomes a single-trade data point — pure noise.
+    # Minimum 10,000 contracts needed across calls+puts for a statistically valid read.
+    _MIN_CONTRACTS = 10_000
+    total_contracts = float(
+        calls_t[calls_t["contracts"] > 0]["contracts"].sum() +
+        puts_t[puts_t["contracts"] > 0]["contracts"].sum()
+    )
+    if total_contracts < _MIN_CONTRACTS:
+        return None   # too thin — signal would be noise, not information
+
     def _wt_prem_chg(df: pd.DataFrame) -> Optional[float]:
-        """Volume-weighted (close_price − settle_price) across all strikes."""
+        """Volume-weighted (close_price − settle_price) across all strikes.
+        settle_price = NSE previous-day settlement embedded in today's row.
+        Thins strikes (contracts=0) are excluded to avoid zero-weight pollution."""
         df = df[df["contracts"] > 0]
         if df.empty:
             return None
         vol = float(df["contracts"].sum())
-        if vol == 0:
+        if vol < 100:   # still too thin even after filter
             return None
         return float(((df["close_price"] - df["settle_price"]) * df["contracts"]).sum() / vol)
 
@@ -954,19 +1064,29 @@ def _sig_fii_institutional(ctx: MarketContext) -> Optional[IndexSignal]:
     """
     FII net index futures OI vs Client divergence.
     Schwager: follow smart money. FAO divergence resolves in FII's direction >90% of cases.
+    Score decays with data age via _lag_mult so 3-day-old FAO fires at 40% weight.
     """
     if ctx.fao_date is None: return None
     fii = ctx.fii_fut_idx_net; cli = ctx.client_fut_idx_net; dii = ctx.dii_fut_idx_net
-    lag  = (ctx.trade_date - ctx.fao_date).days
-    tag  = f" [FAO {ctx.fao_date.strftime('%d %b')}{', ' + str(lag) + 'd lag' if lag else ''}]"
+    lag = (ctx.trade_date - ctx.fao_date).days
+    lm  = _lag_mult(lag)
+    tag = f" [FAO {ctx.fao_date.strftime('%d %b')}{', ' + str(lag) + 'd lag' if lag else ''}]"
     dii_txt = f" | DII: {dii:+,}" if dii != 0 else ""
 
     # Hedge awareness: an FII index-futures SHORT that is offset by net-long stock
-    # futures is a market-neutral HEDGE, not a directional bearish bet. The
-    # diagnostic showed FII-short signals firing bearish on ~100% of days (FIIs are
-    # structurally short index futs against cash longs), with no predictive edge.
-    # When the hedge pattern is present, dampen the bearish magnitude to 40%.
-    is_hedge = bool(ctx.fii_stock_fut_net_cr and ctx.fii_stock_fut_net_cr > 500)
+    # futures is a market-neutral HEDGE, not a directional bearish bet.
+    # Guard: only apply hedge dampening when FAO and FII-stats data are from the
+    # SAME day (≤1-day gap). When dates diverge, stock-fut book may have changed,
+    # and mixing asynchronous data risks misclassifying a genuine directional short
+    # as a hedge. When dates align, dampen bearish score to 40%.
+    _stats_fao_gap = (
+        abs((ctx.fii_stats_date - ctx.fao_date).days)
+        if ctx.fii_stats_date and ctx.fao_date else 99
+    )
+    is_hedge = bool(
+        _stats_fao_gap <= 1 and
+        ctx.fii_stock_fut_net_cr and ctx.fii_stock_fut_net_cr > 500
+    )
     bear_mult = 0.4 if is_hedge else 1.0
     neutral_note = ""
     if is_hedge:
@@ -976,26 +1096,26 @@ def _sig_fii_institutional(ctx: MarketContext) -> Optional[IndexSignal]:
     FII_T, CLI_T = 80_000, 100_000
     if fii < -FII_T and cli > CLI_T:
         return IndexSignal("FII Short vs Retail Long — Smart Money BEARISH",
-            "Institutional", -1, round(-3.0 * bear_mult, 2),
+            "Institutional", -1, round(-3.0 * bear_mult * lm, 2),
             f"FII {fii:+,} | Client {cli:+,}{tag}",
             f"FII {abs(fii):,} net SHORT vs Client net LONG {cli:,}{dii_txt}. "
             "Institutional-retail divergence resolves in FII's direction (>90% historical rate). "
             f"Institutions positioned against retail longs.{neutral_note}", "🐻")
     if fii > FII_T and cli < -CLI_T:
         return IndexSignal("FII Long vs Retail Short — Smart Money BULLISH",
-            "Institutional", 1, 3.0,
+            "Institutional", 1, round(3.0 * lm, 2),
             f"FII {fii:+,} | Client {cli:+,}{tag}",
             f"FII net LONG {fii:,} vs Client net SHORT {abs(cli):,}{dii_txt}. "
             "Smart money bullish vs retail shorts — short squeeze setup.", "🐂")
     if fii < -FII_T:
         return IndexSignal("FII Net Short — Institutional Bearish Bias",
-            "Institutional", -1, round(-2.0 * bear_mult, 2),
+            "Institutional", -1, round(-2.0 * bear_mult * lm, 2),
             f"FII Net {fii:+,} contracts (SHORT){tag}",
             f"FII carrying {abs(fii):,} net short index futures{dii_txt}.{neutral_note} "
             "Institutional short position creates overhead pressure on rallies.", "📉")
     if fii > FII_T:
         return IndexSignal("FII Net Long — Institutional Bullish Bias",
-            "Institutional", 1, 2.0,
+            "Institutional", 1, round(2.0 * lm, 2),
             f"FII Net {fii:+,} contracts (LONG){tag}",
             f"FII carrying {fii:,} net long index futures{dii_txt}. "
             "Institutional long positioning provides momentum support.", "📈")
@@ -1006,17 +1126,18 @@ def _sig_fii_options_delta(ctx: MarketContext) -> Optional[IndexSignal]:
     """FII net call minus net put OI — directional bias via options book."""
     if ctx.fao_date is None: return None
     delta = ctx.fii_opt_delta; cn = ctx.fii_opt_call_net; pn = ctx.fii_opt_put_net
-    tag = f" [FAO {ctx.fao_date.strftime('%d %b')}]"
+    lag = (ctx.trade_date - ctx.fao_date).days
+    lm  = _lag_mult(lag)
+    tag = f" [FAO {ctx.fao_date.strftime('%d %b')}{', ' + str(lag) + 'd lag' if lag else ''}]"
     if delta > 150_000:
         return IndexSignal("FII Options Delta Bullish — Net Long Calls",
-            "Institutional", 1, 1.5, f"FII Options Delta +{delta:,}{tag}",
+            "Institutional", 1, round(1.5 * lm, 2), f"FII Options Delta +{delta:,}{tag}",
             f"FII net LONG {cn:,} calls vs LONG {pn:,} puts. "
-            "Options delta +{delta:,} = institutional upside bias via options.", "📊")
+            f"Options delta +{delta:,} = institutional upside bias via options.", "📊")
     if delta < -150_000:
         # Score 0.0 (context-only): FII run a permanent net-long-put book as
         # downside insurance on cash holdings, so this fires ~every day (148/152
-        # in the diagnostic) with no directional edge — a constant, like the
-        # entropy bug. Display it for context but don't vote it into the sum.
+        # in the diagnostic) with no directional edge. Display for context only.
         return IndexSignal("FII Options Bearish — Heavy Put Hedge",
             "Institutional", -1, 0.0, f"FII Options Delta {delta:,}{tag}",
             f"FII net LONG {pn:,} puts vs SHORT {abs(cn):,} calls. "
@@ -1031,16 +1152,17 @@ def _sig_fii_flow(ctx: MarketContext, fno_symbol: str) -> Optional[IndexSignal]:
     net = ctx.fii_symbol_flows.get(fno_symbol)
     if net is None: return None
     lag = (ctx.trade_date - ctx.fii_stats_date).days
+    lm  = _lag_mult(lag)
     tag = f" [FII Stats {ctx.fii_stats_date.strftime('%d %b')}{', ' + str(lag) + 'd lag' if lag else ''}]"
     if net >= 500:
-        s = 2.0 if net >= 2_000 else 1.0
+        s = round((2.0 if net >= 2_000 else 1.0) * lm, 2)
         return IndexSignal(f"FII Net Buyer — {fno_symbol} Futures",
             "Institutional", 1, s,
             f"FII Net Bought Rs{net:,.0f}Cr in {fno_symbol} Futures{tag}",
             f"FII net bought Rs{net:,.0f}Cr of {fno_symbol} index futures. "
             "Active institutional accumulation — directional conviction.", "💰")
     if net <= -500:
-        s = -2.0 if net <= -2_000 else -1.0
+        s = round((-2.0 if net <= -2_000 else -1.0) * lm, 2)
         return IndexSignal(f"FII Net Seller — {fno_symbol} Futures",
             "Institutional", -1, s,
             f"FII Net Sold Rs{abs(net):,.0f}Cr in {fno_symbol} Futures{tag}",
@@ -1057,10 +1179,12 @@ def _sig_fii_cumulative_flow(ctx: MarketContext, fno_symbol: str) -> Optional[In
     """
     cumul = ctx.fii_cumul_flows_5d.get(fno_symbol)
     if cumul is None: return None
-    tag = f" [5D: {ctx.fii_stats_date.strftime('%d %b') if ctx.fii_stats_date else 'N/A'}]"
+    lag = (ctx.trade_date - ctx.fii_stats_date).days if ctx.fii_stats_date else 0
+    lm  = _lag_mult(lag)
+    tag = f" [5D ending {ctx.fii_stats_date.strftime('%d %b') if ctx.fii_stats_date else 'N/A'}{', ' + str(lag) + 'd lag' if lag else ''}]"
 
     if cumul >= 2_000:
-        s = 2.5 if cumul >= 5_000 else 1.5
+        s = round((2.5 if cumul >= 5_000 else 1.5) * lm, 2)
         return IndexSignal(f"FII 5D Accumulation — {fno_symbol}",
             "Institutional", 1, s,
             f"FII 5D Cumulative +Rs{cumul:,.0f}Cr in {fno_symbol} Futures{tag}",
@@ -1068,7 +1192,7 @@ def _sig_fii_cumulative_flow(ctx: MarketContext, fno_symbol: str) -> Optional[In
             "Sustained institutional accumulation — systematic buying, not a one-day event. "
             "This is the strongest institutional trend signal available.", "🏦")
     if cumul <= -2_000:
-        s = -2.5 if cumul <= -5_000 else -1.5
+        s = round((-2.5 if cumul <= -5_000 else -1.5) * lm, 2)
         return IndexSignal(f"FII 5D Distribution — {fno_symbol}",
             "Institutional", -1, s,
             f"FII 5D Cumulative Rs{cumul:,.0f}Cr in {fno_symbol} Futures{tag}",
@@ -1090,31 +1214,33 @@ def _sig_fii_oi_buildup(ctx: MarketContext, fno_symbol: str) -> Optional[IndexSi
 
     chg_pct = (oi_now - oi_ago) / oi_ago * 100
     fii_net = ctx.fii_fut_idx_net
-    tag = f" [OI: Rs{oi_now:,.0f}Cr, 5D chg: {chg_pct:+.1f}%]"
+    lag = (ctx.trade_date - ctx.fii_stats_date).days if ctx.fii_stats_date else 0
+    lm  = _lag_mult(lag)
+    tag = f" [OI: Rs{oi_now:,.0f}Cr, 5D chg: {chg_pct:+.1f}%{', ' + str(lag) + 'd lag' if lag else ''}]"
 
     if chg_pct >= 10 and fii_net < -50_000:
         return IndexSignal("FII Building Short Position — High Conviction",
-            "Institutional", -1, -2.0,
+            "Institutional", -1, round(-2.0 * lm, 2),
             f"FII OI grew {chg_pct:+.1f}% in 5D while NET SHORT{tag}",
             f"FII's {fno_symbol} futures OI increased from Rs{oi_ago:,.0f}Cr to Rs{oi_now:,.0f}Cr "
             f"({chg_pct:+.1f}% in 5D). Growing OI with net short position = FII adding conviction "
             "to their bearish bet. Not a hedge — a directional call.", "🔨")
     if chg_pct >= 10 and fii_net > 50_000:
         return IndexSignal("FII Building Long Position — High Conviction",
-            "Institutional", 1, 2.0,
+            "Institutional", 1, round(2.0 * lm, 2),
             f"FII OI grew {chg_pct:+.1f}% in 5D while NET LONG{tag}",
             f"FII OI increased {chg_pct:+.1f}% in 5D. Growing OI with net long = "
             "FII adding to bullish bet. Strong institutional conviction for upside.", "🏗️")
     if chg_pct <= -10 and fii_net < -50_000:
         return IndexSignal("FII Unwinding Short — Potential Reversal",
-            "Institutional", 1, 1.5,
+            "Institutional", 1, round(1.5 * lm, 2),
             f"FII OI SHRINKING {chg_pct:+.1f}% in 5D while short{tag}",
             f"FII OI dropped from Rs{oi_ago:,.0f}Cr to Rs{oi_now:,.0f}Cr ({chg_pct:+.1f}% in 5D). "
             "Short position shrinking = FII covering. "
             "Position unwinds create buying pressure and short squeeze fuel.", "🔄")
     if chg_pct <= -10 and fii_net > 50_000:
         return IndexSignal("FII Reducing Long — Distribution",
-            "Institutional", -1, -1.5,
+            "Institutional", -1, round(-1.5 * lm, 2),
             f"FII OI shrinking {chg_pct:+.1f}% in 5D while long{tag}",
             f"FII reducing long exposure — potential distribution phase.", "⚠️")
     return None
@@ -1128,11 +1254,13 @@ def _sig_fii_position_change(ctx: MarketContext) -> Optional[IndexSignal]:
     if ctx.fii_prev_fao_date is None: return None
     chg     = ctx.fii_net_change_1d
     cur_net = ctx.fii_fut_idx_net
-    tag     = f" [{ctx.fii_prev_fao_date.strftime('%d %b')} → {ctx.fao_date.strftime('%d %b')}]" if ctx.fao_date else ""
+    lag     = (ctx.trade_date - ctx.fao_date).days if ctx.fao_date else 0
+    lm      = _lag_mult(lag)
+    tag     = f" [{ctx.fii_prev_fao_date.strftime('%d %b')} → {ctx.fao_date.strftime('%d %b')}{', ' + str(lag) + 'd lag' if lag else ''}]" if ctx.fao_date else ""
 
     # Only signal on meaningful moves (>3,000 contracts = ~Rs500Cr at Nifty levels)
     if chg < -5_000:
-        s = -2.0 if chg < -10_000 else -1.0
+        s = round((-2.0 if chg < -10_000 else -1.0) * lm, 2)
         return IndexSignal("FII Adding to Short — Increasing Conviction",
             "Institutional", -1, s,
             f"FII added {abs(chg):,} SHORT contracts in 1 day{tag}",
@@ -1140,7 +1268,7 @@ def _sig_fii_position_change(ctx: MarketContext) -> Optional[IndexSignal]:
             f"Aggressively building bearish position — not covering despite recent market moves. "
             "This is real conviction: institutions are doubling down on their bearish thesis.", "🐻")
     if chg > 5_000:
-        s = 2.0 if chg > 10_000 else 1.0
+        s = round((2.0 if chg > 10_000 else 1.0) * lm, 2)
         return IndexSignal("FII Covering Shorts — Reversal Trigger",
             "Institutional", 1, s,
             f"FII covered {chg:,} SHORT contracts in 1 day{tag}",
@@ -1176,8 +1304,9 @@ def _sig_short_squeeze_setup(
     if hits < 2: return None
 
     lag   = (ctx.trade_date - ctx.fao_date).days
-    tag   = f" [FAO {ctx.fao_date.strftime('%d %b')}, {lag}d lag]" if lag else ""
-    score = 2.5 if hits == 3 else 2.0
+    lm    = _lag_mult(lag)
+    tag   = f" [FAO {ctx.fao_date.strftime('%d %b')}{', ' + str(lag) + 'd lag' if lag else ''}]"
+    score = round((2.5 if hits == 3 else 2.0) * lm, 2)
 
     criteria = []
     if near_hod:    criteria.append(f"HOD close ({range_pos*100:.0f}% of range)")
@@ -1276,6 +1405,64 @@ def _sig_defensive_cyclical(ctx: MarketContext) -> Optional[IndexSignal]:
             f"Defensives +{dfe:.1f}% vs Cyclicals +{cyc:.1f}% — RISK-OFF",
             f"Defensives avg {dfe:.1f}% vs Cyclicals avg {cyc:.1f}% — gap {abs(diff):.1f}%. "
             "Flight to safety = institutions reducing risk exposure.", "🛡️")
+    return None
+
+
+def _sig_index_relative_strength(
+    fno_symbol: str,
+    index_pct_chg: Optional[float],
+    ctx: MarketContext,
+) -> Optional[IndexSignal]:
+    """
+    Sector relative strength vs Nifty 50 — non-Nifty exclusive signal.
+
+    For BankNifty / FinNifty / MidcapNifty: today's performance relative to
+    the broad market reveals which way institutional capital is rotating.
+
+    WHY THIS MATTERS:
+      Nifty 50 is the broad market. When BankNifty outperforms Nifty today,
+      money is specifically rotating INTO banking — this rotation momentum
+      tends to persist short-term (O'Neil CANSLIM RS / Mansfield RS principle).
+      When BankNifty underperforms, institutions are moving OUT of banking even
+      on a market-up day — relative weakness signals continued distribution.
+
+    This signal fills the gap left by market-wide signals: sector breadth (5% or
+    90% advancing) and defensive/cyclical rotation are both Nifty-centric. None
+    of them answer "is BankNifty specifically attracting capital right now?"
+
+    Thresholds: ±0.75% RS = actionable edge; ±1.50% = strong rotation conviction.
+    Not fired for NIFTY since relative-to-itself is undefined.
+    """
+    if fno_symbol == "NIFTY": return None
+    if index_pct_chg is None or ctx.nifty_pct_chg is None: return None
+
+    relative = index_pct_chg - ctx.nifty_pct_chg
+
+    if relative >= 0.75:
+        s = 2.0 if relative >= 1.50 else 1.0
+        return IndexSignal(
+            f"Sector RS: {fno_symbol} Outperforming Nifty — Rotation IN",
+            "Sector", 1, s,
+            f"{fno_symbol} {index_pct_chg:+.2f}% vs Nifty {ctx.nifty_pct_chg:+.2f}% (RS {relative:+.2f}%)",
+            f"Outperformed Nifty 50 by {relative:.2f}% today — institutional capital is "
+            f"rotating specifically INTO this sector. "
+            f"O'Neil RS / Mansfield principle: sectors leading the market today tend to "
+            f"attract continued inflows tomorrow as momentum players follow the signal. "
+            f"{'Strong rotation — multiple standard deviations above market.' if relative >= 1.50 else 'Moderate rotation — clear preference visible.'}",
+            "⚡"
+        )
+    if relative <= -0.75:
+        s = -2.0 if relative <= -1.50 else -1.0
+        return IndexSignal(
+            f"Sector RS: {fno_symbol} Underperforming Nifty — Rotation OUT",
+            "Sector", -1, s,
+            f"{fno_symbol} {index_pct_chg:+.2f}% vs Nifty {ctx.nifty_pct_chg:+.2f}% (RS {relative:+.2f}%)",
+            f"Underperformed Nifty 50 by {abs(relative):.2f}% today — capital rotating OUT of "
+            f"this sector even as the broader market {'rises' if ctx.nifty_pct_chg and ctx.nifty_pct_chg > 0 else 'falls'}. "
+            f"Mansfield RS: persistent underperformers continue to see distribution. "
+            f"{'Severe underperformance — institutional sector preference has clearly shifted.' if relative <= -1.50 else 'Relative weakness persisting — watch for recovery above Nifty level to confirm reversal.'}",
+            "📉"
+        )
     return None
 
 
@@ -1942,16 +2129,23 @@ def _compute_prediction(
         days_to_expiry = max((fut_expiry - trade_date).days, 0) if fut_expiry else 30
         futures_price  = float(nr["settle_price"]) if pd.notna(nr["settle_price"]) else None
         fut_oi         = int(nr["open_interest"])
-        # Compute OI change from today vs yesterday (chg_in_oi column is always 0 from NSE files)
-        fut_oi_chg = 0
+        # Compute OI change: matched by SAME expiry_date (not rank) so rollover
+        # days don't create false OI spikes by comparing different contracts.
+        # When prev_futs is empty, the near contract is brand-new (just rolled);
+        # is_rollover=True flags this so the signal is labeled correctly.
+        fut_oi_chg  = 0
+        is_rollover = False
         if not fno_prev.empty:
             prev_futs = fno_prev[
                 (fno_prev["instrument"] == "FUTIDX") &
                 (fno_prev["expiry_date"] == nr["expiry_date"])
             ]
             if not prev_futs.empty:
-                prev_oi = int(prev_futs["open_interest"].sum())
+                prev_oi    = int(prev_futs["open_interest"].sum())
                 fut_oi_chg = fut_oi - prev_oi
+            else:
+                # Same expiry_date not found in yesterday → contract just rolled
+                is_rollover = True
         if spot_close and futures_price and days_to_expiry >= 3:
             carry_pts     = futures_price - spot_close
             carry_pct_ann = (carry_pts / spot_close) * (365.0 / max(days_to_expiry, 1)) * 100
@@ -1985,6 +2179,7 @@ def _compute_prediction(
     monthly_pcr_val: Optional[float] = None
     monthly_max_pain_lvl: Optional[float] = None
     gamma_ratio_val: Optional[float] = None
+    near_is_monthly = False   # True during the ~4 days of the monthly expiry week
 
     if fno_symbol == "NIFTY" and not opt_rows.empty:
         all_exp = sorted(_to_date(e) for e in opt_rows["expiry_date"].unique() if e is not None)
@@ -1995,7 +2190,10 @@ def _compute_prediction(
             if ym not in month_last or e > month_last[ym]:
                 month_last[ym] = e
         monthly_candidates = sorted(month_last.values())
-        # Monthly for cross-analysis = nearest monthly that differs from near (weekly) expiry
+        near_is_monthly = near_expiry in set(monthly_candidates)
+        # Monthly for cross-analysis = nearest monthly that differs from near expiry.
+        # When near_expiry IS the monthly (monthly expiry week), monthly_exp_me becomes
+        # next month's monthly — PCR divergence signal is suppressed in that case (below).
         monthly_exp_me = next(
             (m for m in monthly_candidates if m != near_expiry), None
         )
@@ -2061,7 +2259,7 @@ def _compute_prediction(
 
     # — Signals 1-7: index-specific price/futures/options —
     add(_sig_price_action(idx_hist))
-    sigs.append(_sig_oi_price_matrix(day_change_pct, fut_oi_chg, fut_oi))
+    sigs.append(_sig_oi_price_matrix(day_change_pct, fut_oi_chg, fut_oi, is_rollover=is_rollover))
     add(_sig_carry(carry_pct_ann, carry_pts))
     add(_sig_pcr(pcr, yesterday_snap.pcr if yesterday_snap else None))
     add(_sig_opt_oi_premium(_opt_near_t, _opt_near_p))   # Signal 5 — OI-Premium matrix
@@ -2083,11 +2281,18 @@ def _compute_prediction(
     add(_sig_sector_breadth(market_ctx))
     add(_sig_defensive_cyclical(market_ctx))
     add(_sig_valuation_pe(market_ctx))
+    # Signal 17b: sector RS vs Nifty — fires for BankNifty / FinNifty / MidcapNifty only
+    add(_sig_index_relative_strength(fno_symbol, day_change_pct, market_ctx))
 
     # — Signals 18-20: Nifty 50 multi-expiry (fires only when weekly ≠ monthly) —
     if fno_symbol == "NIFTY" and monthly_exp_me is not None:
         dte_monthly = (monthly_exp_me - trade_date).days
-        add(_sig_multi_expiry_pcr(pcr, monthly_pcr_val, near_expiry, monthly_exp_me, trade_date))
+        # PCR divergence requires a genuine weekly vs monthly distinction.
+        # When near_expiry IS the monthly (last ~4 days of the month), "monthly_exp_me"
+        # is next month's expiry — comparing same-horizon PCR to next-month PCR
+        # produces a meaningless "weekly vs monthly" label. Suppress in that case.
+        if not near_is_monthly:
+            add(_sig_multi_expiry_pcr(pcr, monthly_pcr_val, near_expiry, monthly_exp_me, trade_date))
         add(_sig_max_pain_convergence(
             levels.max_pain, monthly_max_pain_lvl,
             spot_close, dte_options, dte_monthly,
@@ -2125,13 +2330,26 @@ def _compute_prediction(
         from src.analytics.memory_engine import get_memory_signal, extract_features
 
         class _FeatProxy:
-            """Minimal proxy so extract_features can read the values it needs."""
+            """Minimal proxy so extract_features can read the values it needs.
+
+            MUST expose every attribute that extract_features() reads from pred:
+              pcr, carry_pct_ann, composite_score — direct scalar features
+              market_context, regime             — sub-objects (ctx, regime)
+              spot_close, levels                 — for feat_max_pain_dist
+              fno_symbol                         — for feat_fii_5d_cumul (symbol-specific lookup)
+
+            Missing any of these silently zeros out the corresponding feature dimension
+            in the similarity query, causing nearest-neighbour distances to be wrong.
+            """
             def __init__(self):
-                self.pcr = pcr
-                self.carry_pct_ann = carry_pct_ann
-                self.composite_score = composite_prelim
-                self.market_context = market_ctx
-                self.regime = regime
+                self.pcr              = pcr
+                self.carry_pct_ann    = carry_pct_ann
+                self.composite_score  = composite_prelim
+                self.market_context   = market_ctx
+                self.regime           = regime
+                self.spot_close       = spot_close   # feat_max_pain_dist numerator
+                self.levels           = levels       # feat_max_pain_dist denominator
+                self.fno_symbol       = fno_symbol   # feat_fii_5d_cumul symbol key
 
         mem_signal = get_memory_signal(
             fno_symbol, trade_date,
@@ -2194,11 +2412,18 @@ def _compute_prediction(
         move_basis=em["move_basis"],
     )
 
-    # Auto-store prediction in memory engine (non-fatal)
+    # Auto-store prediction in memory engine (non-fatal).
+    # Temporarily set composite_score = composite_prelim before storing so that
+    # feat_oi_score in the DB fingerprint uses the SAME value that was used in the
+    # similarity query (_FeatProxy.composite_score = composite_prelim). Without this,
+    # the stored feat_oi_score reflects the final composite (including Signal 24 ±2.5)
+    # while every future query uses the pre-memory composite — a systematic mismatch.
     try:
         from src.analytics.memory_engine import store_prediction
+        pred_out.composite_score = composite_prelim
         store_prediction(pred_out, trade_date)
+        pred_out.composite_score = composite   # restore final for the caller
     except Exception:
-        pass
+        pred_out.composite_score = composite   # always restore on error path
 
     return pred_out
