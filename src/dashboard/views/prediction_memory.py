@@ -20,6 +20,7 @@ from src.analytics.memory_engine import (
     get_accuracy_report,
     get_prediction_log,
     get_pending_predictions,
+    update_outcomes,
 )
 from src.dashboard.cache.queries import cached_index_predictions
 
@@ -35,12 +36,68 @@ _DIR_COLOR  = {"UP": "#4CAF50", "DOWN": "#EF5350", "SIDEWAYS": "#FFD600"}
 _CONF_COLOR = {"HIGH": "#00C853", "MEDIUM": "#FFD600", "LOW": "#78909C"}
 
 
+def _try_autofill_outcomes() -> int:
+    """
+    Silently fill prediction outcomes for any pending row whose next trading
+    day has already passed and whose data is now in index_data.
+    Returns the count of rows filled (0 if nothing new was filled).
+    Called once per calendar day per Streamlit session.
+    """
+    _key = f"_mem_autofilled_{date.today().isoformat()}"
+    if st.session_state.get(_key):
+        return 0
+    st.session_state[_key] = True
+    try:
+        from src.data.repository import get_repository
+        pend = get_repository().get_unfilled_predictions()
+        if pend.empty:
+            return 0
+        today = date.today()
+        has_stale = any(
+            (d.date() if hasattr(d, "date") else d) < today
+            for d in pend["trade_date"]
+        )
+        if not has_stale:
+            return 0
+        return update_outcomes(today)
+    except Exception:
+        return 0
+
+
+def _fetch_and_fill() -> tuple[bool, int]:
+    """
+    Run the full daily ingestion job then fill outcomes.
+    Returns (fetch_ok, filled_count).
+    """
+    fetch_ok = False
+    try:
+        from src.ingestion.orchestrator import run_daily_job
+        run_daily_job()
+        fetch_ok = True
+    except Exception:
+        pass
+    try:
+        filled = update_outcomes(date.today())
+    except Exception:
+        filled = 0
+    return fetch_ok, filled
+
+
 def render(selected_date: date) -> None:
     st.subheader("🧠 Prediction Memory Engine")
     st.caption(
         "Adaptive pattern memory: every prediction is stored with a 12-dim market fingerprint. "
         "Similar past days calibrate confidence and surface the predicted range for each session."
     )
+
+    # ── Auto-heal: fill stale pending outcomes if index_data already has the data ──
+    # Runs once per calendar day. If the CLI daily job was run earlier (or a
+    # previous Refresh Data click fetched today's data), this picks it up
+    # automatically without any user action.
+    _auto_filled = _try_autofill_outcomes()
+    if _auto_filled:
+        st.cache_data.clear()
+        st.rerun()
 
     # ── Index selector — prominent, full-width row ────────────────────────────
     st.markdown("#### Select Index")
@@ -349,6 +406,43 @@ def _render_prediction_log(symbol: str) -> None:
             st.info("No predictions logged yet.")
             return
 
+        # ── Stale-pending banner ──────────────────────────────────────────────
+        # If any pending row belongs to a day before today, today's EOD data
+        # is needed to resolve it. Show a one-click fetch button.
+        if not unfilled.empty:
+            today = date.today()
+            stale_rows = unfilled[unfilled["trade_date"].apply(
+                lambda d: (d.date() if hasattr(d, "date") else d) < today
+            )]
+            if not stale_rows.empty:
+                stale_dates = ", ".join(
+                    (r.date() if hasattr(r, "date") else r).strftime("%d %b")
+                    for r in stale_rows["trade_date"]
+                )
+                col_msg, col_btn = st.columns([4, 1])
+                with col_msg:
+                    st.warning(
+                        f"**{stale_dates}** outcome is pending — today's EOD data hasn't been fetched yet. "
+                        "Click **Fetch & Fill** to download today's market data and resolve it."
+                    )
+                with col_btn:
+                    if st.button("⬇ Fetch & Fill", key="mem_fetch_fill"):
+                        with st.spinner("Fetching today's EOD data from NSE…"):
+                            _ok, _n = _fetch_and_fill()
+                        if _n:
+                            st.success(f"Filled {_n} prediction outcome(s). Reloading…")
+                            st.cache_data.clear()
+                            # Reset autofill key so it doesn't block the next render
+                            st.session_state.pop(
+                                f"_mem_autofilled_{today.isoformat()}", None
+                            )
+                            st.rerun()
+                        else:
+                            st.error(
+                                "Could not fill outcomes — today's data may not be published "
+                                "on NSE yet (usually available after 6 PM). Try again later."
+                            )
+
         all_rows = []
 
         def _fmt_range(row) -> str:
@@ -375,6 +469,7 @@ def _render_prediction_log(symbol: str) -> None:
             if hasattr(td, "date"):
                 td = td.date()
             all_rows.append({
+                "_sort_date": td,
                 "Date":      td.strftime("%d %b %Y"),
                 "Spot":      _fmt_spot(row),
                 "Pred":      str(row.get("direction_pred", "—")),
@@ -395,6 +490,7 @@ def _render_prediction_log(symbol: str) -> None:
             if hasattr(td, "date"):
                 td = td.date()
             all_rows.append({
+                "_sort_date": td,
                 "Date":      td.strftime("%d %b %Y"),
                 "Spot":      _fmt_spot(row),
                 "Pred":      str(row.get("direction_pred", "—")),
@@ -410,7 +506,12 @@ def _render_prediction_log(symbol: str) -> None:
                 "Status":    "⏳ Pending",
             })
 
-        df = pd.DataFrame(all_rows)
+        df = (
+            pd.DataFrame(all_rows)
+            .sort_values("_sort_date", ascending=False)
+            .drop(columns=["_sort_date"])
+            .reset_index(drop=True)
+        )
 
         st.dataframe(
             df,

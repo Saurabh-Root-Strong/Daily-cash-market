@@ -29,6 +29,8 @@ from src.dashboard.cache.queries import (
     cached_sector_stocks_rotation,
     cached_fno_positioning_by_symbol,
     cached_fno_expiry_breakdown,
+    cached_market_regime,
+    cached_sector_memory_context,
 )
 from src.dashboard.constants import NEGATIVE_COLOR, POSITIVE_COLOR, PLOT_BG, PAPER_BG, GRID_COLOR
 from src.dashboard.components.charts import hex_to_rgba as _hex_to_rgba  # deduped helper
@@ -427,15 +429,170 @@ _AVOID_SIGNAL_SET = {"⚠️ Distribution Trap", "❌ Active Selling", "📉 Wea
 _MIN_STOCK_WTD_DELIV_PCT = 48.0
 
 
+def _render_memory_context(mem) -> None:
+    """
+    Display SectorMemoryContext inside a Streamlit expander.
+    Shows median forward returns + RS vs Nifty for 1W / 2W / 1M horizons.
+    Silently no-ops when the memory engine has no data yet.
+    """
+    if getattr(mem, "error", None):
+        return   # DB missing or sector not yet recorded — silent skip
+    if getattr(mem, "n_filled", 0) == 0:
+        note = getattr(mem, "note", "")
+        if not note:
+            return
+        with st.expander("🧠 Memory: building...", expanded=False):
+            st.caption(note)
+        return
+
+    n     = mem.n_filled
+    label = f"🧠 Memory: {n} similar past setup{'s' if n != 1 else ''}"
+    with st.expander(label, expanded=False):
+        has_any = (
+            mem.ret_1w_median is not None or
+            mem.ret_2w_median is not None or
+            mem.ret_1m_median is not None
+        )
+        if not has_any:
+            st.caption(
+                getattr(mem, "note", None)
+                or "Outcomes not yet filled for similar setups — check back after 30+ trading days."
+            )
+            return
+
+        def _ret_row(label_: str, median_, p25_, p75_, pos_pct_, rs_, rs_pos_) -> None:
+            if median_ is None:
+                return
+            mc = POSITIVE_COLOR if median_ > 0 else NEGATIVE_COLOR
+            rng = (f"  (p25 {p25_:+.1f}% → p75 {p75_:+.1f}%)"
+                   if p25_ is not None else "")
+            pos = (f"  ·  {pos_pct_:.0f}% positive" if pos_pct_ is not None else "")
+            if rs_ is not None:
+                rc = "#69f0ae" if rs_ > 0 else "#ff5252"
+                rs_out_str = f" ({rs_pos_:.0f}% outperformed)" if rs_pos_ is not None else ""
+                rs_html = (
+                    f"  ·  RS vs Nifty: "
+                    f"<b style='color:{rc}'>{rs_:+.1f}%</b>{rs_out_str}"
+                )
+            else:
+                rs_html = ""
+            st.markdown(
+                f"<div style='font-size:12px;margin-bottom:3px'>"
+                f"<b>{label_}</b>  median "
+                f"<b style='color:{mc}'>{median_:+.2f}%</b>"
+                f"{rng}{pos}{rs_html}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+        _ret_row("1W →", mem.ret_1w_median, mem.ret_1w_p25, mem.ret_1w_p75,
+                 mem.ret_1w_pos_pct, mem.rs_1w_median, mem.rs_1w_pos_pct)
+        _ret_row("2W →", mem.ret_2w_median, mem.ret_2w_p25, mem.ret_2w_p75,
+                 mem.ret_2w_pos_pct, mem.rs_2w_median, mem.rs_2w_pos_pct)
+        _ret_row("1M →", mem.ret_1m_median, None, None,
+                 mem.ret_1m_pos_pct, mem.rs_1m_median, None)
+
+        if getattr(mem, "by_regime", {}):
+            parts = "  ·  ".join(f"{k} {v}" for k, v in sorted(mem.by_regime.items()))
+            st.markdown(
+                f"<div style='font-size:11px;color:rgba(255,255,255,0.45);margin-top:4px'>"
+                f"Regimes in sample: {parts}"
+                f"</div>",
+                unsafe_allow_html=True,
+            )
+
+        if getattr(mem, "note", ""):
+            st.caption(mem.note)
+
+
 def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                  deliv_threshold: float = _MIN_STOCK_WTD_DELIV_PCT,
                  deliv_vs_100d_pct: float = 0.0,
-                 fno_row: pd.Series | None = None) -> None:
+                 fno_row: pd.Series | None = None,
+                 min_price: float = 0.0,
+                 max_price: float = 0.0,
+                 regime_label: str = "SIDEWAYS",
+                 regime: "dict | None" = None) -> None:
     meta       = _SIGNAL_META.get(row["signal"], {})
     color      = meta.get("color", "#888")
     score      = row["accum_score"]
     is_avoid   = row["signal"] in _AVOID_SIGNAL_SET
     invest_signal = meta.get("invest", False)
+
+    # ── Regime override badge ──────────────────────────────────────────────────
+    # When market regime conflicts with or qualifies the sector signal, show a
+    # clearly visible badge so the trader cannot misread "BUY" as an outright buy.
+    # This is the most important piece for correct equity decision-making.
+    _REGIME_INVEST_OVERRIDE = {
+        "BEAR": (
+            "#ff9100", "rgba(255,109,0,0.13)", "rgba(255,109,0,0.35)",
+            "⚠ BEAR MARKET — This sector falls LESS than the index, not UP. "
+            "Absolute return likely negative. Use only as: (a) pairs vs Nifty short, "
+            "(b) defensive core holding, or (c) staged entry anticipating regime flip. "
+            "Do NOT deploy fresh capital expecting positive returns."
+        ),
+        "CAUTION": (
+            "#ffd600", "rgba(255,214,0,0.10)", "rgba(255,214,0,0.30)",
+            "⚠ MARKET DETERIORATING — Scale in at half-size with a hard stop. "
+            "Market regime is weakening; even strong accumulation can turn negative "
+            "if the broader market confirms a break lower."
+        ),
+    }
+    _REGIME_AVOID_OVERRIDE = {
+        "BEAR": (
+            "#d50000", "rgba(213,0,0,0.15)", "rgba(213,0,0,0.40)",
+            "🔴 DOUBLE RISK — Bear market regime + sector distribution = maximum risk. "
+            "Exit any existing positions immediately. Do not average down. "
+            "No floor visible until regime improves."
+        ),
+        "CAUTION": (
+            "#ff6d00", "rgba(255,109,0,0.12)", "rgba(255,109,0,0.35)",
+            "🟠 EXIT EARLY — Market is deteriorating and this sector is already weak. "
+            "Reduce or exit before both regime and sector confirm breakdown together."
+        ),
+    }
+
+    # ── Relative Strength vs Nifty — the quantitative answer to "will I lose money?" ──
+    # rs_1w = sector_1W_return − nifty_1W_return (already in row from analytics).
+    # In a BEAR regime this is the ONE number that tells you whether delivery
+    # signals are translating into real outperformance vs the index.
+    # Positive RS in a BEAR = sector genuinely falling LESS or rising while market falls.
+    # Negative RS in a BEAR = sector is LAGGING even on a relative basis — worst case.
+    _rs_1w = row.get("rs_1w")
+    _p1w   = row.get("price_1w")
+    _n1w   = row.get("nifty_1w")
+    if _rs_1w is not None and not (isinstance(_rs_1w, float) and pd.isna(_rs_1w)):
+        _rs_color = "#69f0ae" if _rs_1w > 0 else "#ff5252"
+        _rs_sign  = "+" if _rs_1w > 0 else ""
+        _rs_label = (
+            f"RS vs Nifty (1W): <b style='color:{_rs_color}'>{_rs_sign}{_rs_1w:.1f}%</b>"
+            + (f" — Sector {_p1w:+.1f}% vs Nifty {_n1w:+.1f}%"
+               if _p1w is not None and _n1w is not None
+                  and not pd.isna(_p1w) and not pd.isna(_n1w)
+               else "")
+        )
+    else:
+        _rs_label = ""
+
+    regime_badge_html = ""
+    if invest_signal and regime_label in _REGIME_INVEST_OVERRIDE:
+        rc, rbg, rbord, rtxt = _REGIME_INVEST_OVERRIDE[regime_label]
+        regime_badge_html = (
+            f"<div style='background:{rbg};border:1px solid {rbord};"
+            f"border-radius:4px;padding:5px 9px;margin-bottom:5px;"
+            f"font-size:11px;color:{rc};line-height:1.45'>{rtxt}"
+            + (f"<br><span style='color:rgba(255,255,255,0.65);font-size:11px'>{_rs_label}</span>" if _rs_label else "")
+            + "</div>"
+        )
+    elif is_avoid and regime_label in _REGIME_AVOID_OVERRIDE:
+        rc, rbg, rbord, rtxt = _REGIME_AVOID_OVERRIDE[regime_label]
+        regime_badge_html = (
+            f"<div style='background:{rbg};border:1px solid {rbord};"
+            f"border-radius:4px;padding:5px 9px;margin-bottom:5px;"
+            f"font-size:11px;color:{rc};line-height:1.45'>{rtxt}"
+            + (f"<br><span style='color:rgba(255,255,255,0.65);font-size:11px'>{_rs_label}</span>" if _rs_label else "")
+            + "</div>"
+        )
 
     # NOTE: the sector-level F&O BADGE was removed after Phase-3 IC validation —
     # the sector F&O aggregate showed no measurable edge for sector SELECTION
@@ -528,6 +685,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
         f"<b style='font-size:14px'>{row['sector']}</b>"
         f"<span style='font-size:11px;color:{color};font-weight:600'>{score:.0f}/100</span></div>"
         f"{bar_html}"
+        f"{regime_badge_html}"
         f"<div style='font-size:11px;margin-bottom:4px'>{row['signal']} &nbsp; {action_html}</div>"
         f"<div style='display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:4px;font-size:12px'>"
         f"<span>DV Today: <b>{dv_str}</b></span>"
@@ -727,11 +885,31 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                     )
                 ]
 
+            # ── Price filter ─────────────────────────────────────────────────
+            # ltp=0 / NaN means no price data; those are only excluded when the
+            # min-price filter is active (natural — zero price fails >= threshold).
+            # For max-price we guard explicitly so a zero-price stock is not
+            # shown as "within range" when a max filter is active.
+            if min_price > 0 and "ltp" in shown.columns:
+                shown = shown[shown["ltp"].fillna(0) >= min_price]
+            if max_price > 0 and "ltp" in shown.columns:
+                shown = shown[
+                    shown["ltp"].notna() &
+                    (shown["ltp"] > 0) &
+                    (shown["ltp"] <= max_price)
+                ]
+
             n_hidden = len(stocks) - len(shown)
             if n_hidden:
                 filter_parts = [f"Wtd Deliv % > {deliv_threshold:.0f}%"]
                 if deliv_vs_100d_pct > 0:
                     filter_parts.append(f"7D ≥ {deliv_vs_100d_pct:.0f}%+ above own 100D avg")
+                if min_price > 0 and max_price > 0:
+                    filter_parts.append(f"Price ₹{min_price:,.0f}–₹{max_price:,.0f}")
+                elif min_price > 0:
+                    filter_parts.append(f"Price ≥ ₹{min_price:,.0f}")
+                elif max_price > 0:
+                    filter_parts.append(f"Price ≤ ₹{max_price:,.0f}")
                 st.caption(
                     f"Showing {len(shown)} of {len(stocks)} stocks — "
                     f"{' AND '.join(filter_parts)} "
@@ -751,9 +929,9 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                         help="Industry classification within the sector"),
                     "ltp":           st.column_config.NumberColumn(
                         "LTP (₹)", format="₹%.2f",
-                        help="Last Traded Price\n"
-                             "Formula: most recent close_price in the 7-day window\n"
-                             "= ARGMAX(close_price, trade_date)"),
+                        help="Last Traded Price — most recent close_price in the 7-day window.\n\n"
+                             "Use the Min / Max Price filters above to narrow the list "
+                             "by affordable price range or to exclude penny stocks."),
                     "conviction":    st.column_config.TextColumn("Conviction",
                         help="Own-history conviction — compares 7D Wtd Deliv % against each stock's own 100D baseline\n\n"
                              "🔥 Strong  = today's delivery ABOVE own 100D avg AND price falling  (institutions buying the dip)\n"
@@ -883,6 +1061,37 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                              "+ = price rising on average   − = price falling on average"),
                 },
             )
+
+    # ── Sector Memory Context ─────────────────────────────────────────────────
+    if regime is not None:
+        try:
+            _ema20_above    = (regime.get("nifty_vs_ema20", "—") == "ABOVE")
+            _ema_cross_bull = (True  if regime.get("nifty_vs_ema50") == "ABOVE"
+                               else False if regime.get("nifty_vs_ema50") == "BELOW"
+                               else None)
+            _rs1w_raw = row.get("rs_1w")
+            _rs1w = (float(_rs1w_raw)
+                     if _rs1w_raw is not None
+                     and not (isinstance(_rs1w_raw, float) and pd.isna(_rs1w_raw))
+                     else None)
+            mem = cached_sector_memory_context(
+                as_of_date     = selected_date,
+                sector         = str(row["sector"]),
+                signal         = str(row.get("signal", "")),
+                regime_label   = regime_label,
+                dv_ratio       = float(row.get("dv_ratio", 1.0) or 1.0),
+                z_pct          = float(row.get("z_pct", 0.5) or 0.5),
+                rs_1w          = _rs1w,
+                ema20_above    = _ema20_above,
+                ema_cross_bull = _ema_cross_bull,
+                vix            = float(regime["vix"]) if regime.get("vix") is not None else None,
+                fii_5d_cr      = float(regime["fii_5d_cr"]) if regime.get("fii_5d_cr") is not None else None,
+                hmm_state      = regime.get("hmm_state"),
+                pcr            = None,
+            )
+            _render_memory_context(mem)
+        except Exception:
+            pass
 
 
 # ── Phase Card (Rotation Clock) ───────────────────────────────────────────────
@@ -1674,7 +1883,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         """)
 
     with st.spinner("Computing 100-day rotation signals…"):
-        rot = cached_sector_rotation(selected_date, min_turnover)
+        rot    = cached_sector_rotation(selected_date, min_turnover)
+        regime = cached_market_regime(selected_date)
 
     if rot.empty:
         st.warning("Insufficient data. Need at least 10 trading days of history.")
@@ -1683,6 +1893,94 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
     if "z_score" not in rot.columns:
         st.cache_data.clear()
         st.rerun()
+
+    # ── Market Regime Banner ─────────────────────────────────────────────────
+    _REGIME_STYLE = {
+        "BULL":          ("🟢", "#00c853", "rgba(0,200,83,0.10)",  "rgba(0,200,83,0.30)"),
+        "CAUTIOUS BULL": ("🟡", "#ffd600", "rgba(255,214,0,0.08)", "rgba(255,214,0,0.30)"),
+        "SIDEWAYS":      ("🔵", "#40c4ff", "rgba(64,196,255,0.08)","rgba(64,196,255,0.30)"),
+        "CAUTION":       ("🟠", "#ff9100", "rgba(255,109,0,0.10)", "rgba(255,109,0,0.35)"),
+        "BEAR":          ("🔴", "#d50000", "rgba(213,0,0,0.12)",   "rgba(213,0,0,0.40)"),
+    }
+    r_label = regime.get("regime", "SIDEWAYS")
+    r_score = regime.get("score", 5.0)
+    r_icon, r_color, r_bg, r_border = _REGIME_STYLE.get(r_label, _REGIME_STYLE["SIDEWAYS"])
+
+    # Build signal pills (max 5 for banner readability)
+    r_signals = regime.get("signals", [])
+    _pill_css  = "display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;margin:2px 4px 2px 0"
+    _bull_pill = f"background:rgba(0,200,83,0.15);color:#69f0ae;border:1px solid rgba(0,200,83,0.3)"
+    _bear_pill = f"background:rgba(213,0,0,0.15);color:#ff5252;border:1px solid rgba(213,0,0,0.3)"
+    _neut_pill = f"background:rgba(100,100,100,0.15);color:#aaa;border:1px solid rgba(100,100,100,0.3)"
+    pills_html = " ".join(
+        f"<span style='{_pill_css};{_bull_pill if b=='bull' else _bear_pill if b=='bear' else _neut_pill}'>"
+        f"{txt}</span>"
+        for b, txt in r_signals[:5]
+    )
+
+    # Regime guidance text — sourced from analytics (VIX-differentiated for BEAR)
+    guidance = regime.get("banner_guidance", regime.get("invest_caption", ""))
+
+    # Score bar
+    score_bar_pct = int(r_score / 10 * 100)
+    _score_grad = (
+        "linear-gradient(90deg,#d50000,#ff9100)" if r_score < 4.0 else
+        "linear-gradient(90deg,#ff9100,#ffd600)" if r_score < 5.5 else
+        "linear-gradient(90deg,#ffd600,#00c853)"
+    )
+
+    _vix_val = regime.get("vix")
+    _fii_val = regime.get("fii_5d_cr")
+    _hmm     = regime.get("hmm_state", "—")
+    _ema20   = regime.get("nifty_vs_ema20", "—")
+    _ema_x   = regime.get("nifty_vs_ema50", "—")   # now = EMA20 vs EMA50 cross
+    _n1m     = regime.get("nifty_1m_pct")
+
+    # ── Volume Spike context ──────────────────────────────────────────────────
+    # High Volume Spike fraction = many sectors showing speculative trading
+    # (turnover surged but delivery % FELL below norm).  This is a structural
+    # bearish signal: institutions are trading actively WITHOUT conviction.
+    # In a downtrend context it often indicates distribution / churning.
+    n_total     = len(rot)
+    n_vol_spike = int((rot["signal"] == "📊 Volume Spike").sum())
+    vs_frac     = n_vol_spike / n_total if n_total else 0.0
+    vs_pill     = ""
+    if vs_frac >= 0.35:     # ≥35% of sectors = structural warning
+        vs_pill = (
+            f"<span style='{_pill_css};background:rgba(255,214,0,0.15);"
+            f"color:#ffd600;border:1px solid rgba(255,214,0,0.3)'>"
+            f"📊 {n_vol_spike}/{n_total} Vol Spikes — speculative, no conviction</span>"
+        )
+
+    vix_str  = f"VIX {_vix_val:.1f}" if _vix_val is not None else ""
+    fii_str  = (f"FII all-idx 5D ₹{_fii_val:+,.0f} Cr" if _fii_val is not None else "")
+    hmm_str  = f"HMM {_hmm}" if _hmm and _hmm != "—" else ""
+    ema_str  = f"Nifty {_ema20} 20D EMA" if _ema20 != "—" else ""
+    cross_str = (
+        "Golden Cross ✓" if _ema_x == "ABOVE" else
+        "Death Cross ✗"  if _ema_x == "BELOW" else ""
+    )
+    n1m_str  = f"Nifty 1M {_n1m:+.1f}%" if _n1m is not None else ""
+    vs_str   = f"Vol Spikes {n_vol_spike}/{n_total} sectors" if vs_frac >= 0.25 else ""
+    meta_row = "  ·  ".join(x for x in [ema_str, cross_str, vix_str, fii_str, hmm_str, n1m_str, vs_str] if x)
+
+    st.markdown(
+        f"<div style='padding:12px 16px;border-radius:8px;margin-bottom:12px;"
+        f"background:{r_bg};border:1px solid {r_border}'>"
+        f"<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px'>"
+        f"<span style='font-size:15px;font-weight:800;color:{r_color}'>"
+        f"{r_icon} MARKET REGIME: {r_label}</span>"
+        f"<span style='font-size:12px;color:{r_color};font-weight:600'>"
+        f"Score {r_score:.1f}/10</span></div>"
+        f"<div style='background:rgba(0,0,0,0.2);border-radius:4px;height:5px;margin-bottom:8px'>"
+        f"<div style='width:{score_bar_pct}%;background:{_score_grad};height:5px;border-radius:4px'></div></div>"
+        f"<div style='margin-bottom:6px'>{pills_html}{vs_pill}</div>"
+        f"<div style='font-size:12px;color:rgba(255,255,255,0.55);margin-bottom:4px'>{meta_row}</div>"
+        f"<div style='font-size:12px;color:rgba(255,255,255,0.80);font-style:italic'>"
+        f"⚑ {guidance}</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
 
     _INVEST_SIGNALS   = {"🔥 Secret Accumulation", "✅ Confirmed Accumulation", "👀 Early Accumulation"}
     _CAUTION_SIGNALS  = {"📊 Volume Spike"}
@@ -1823,8 +2121,10 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
 
     st.markdown("---")
 
-    # Per-stock delivery filters — control every "View stocks in …" drill-down below.
-    _fcol1, _fcol2 = st.columns(2)
+    # Per-stock filters — control every "View stocks in …" drill-down below.
+    # Sector-level stats (top-3, dominance warning, conviction) always use the
+    # full stock set; only the displayed list inside the expander is filtered.
+    _fcol1, _fcol2, _fcol3, _fcol4 = st.columns(4)
     with _fcol1:
         deliv_threshold = st.slider(
             "Min stock Wtd Delivery % — filters the per-stock lists below",
@@ -1849,14 +2149,46 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 "relative to their own norm — the strongest own-history conviction reads."
             ),
         )
+    with _fcol3:
+        min_price = float(st.number_input(
+            "Min Price ₹ — filters the per-stock lists below",
+            min_value=0, max_value=50_000, value=0, step=50,
+            key="rotation_stock_min_price",
+            help=(
+                "Hide stocks priced BELOW this value in the drill-down lists.\n\n"
+                "0 = no filter (all prices shown).\n\n"
+                "Practical thresholds:\n"
+                "  ₹50   — excludes micro-cap / penny stocks\n"
+                "  ₹100  — minimum for liquid options strategies\n"
+                "  ₹200  — typical retail lot affordability floor\n\n"
+                "Stocks with no recent price data (LTP = 0) are excluded whenever "
+                "this filter is above 0."
+            ),
+        ))
+    with _fcol4:
+        max_price = float(st.number_input(
+            "Max Price ₹ — filters the per-stock lists below",
+            min_value=0, max_value=200_000, value=0, step=100,
+            key="rotation_stock_max_price",
+            help=(
+                "Hide stocks priced ABOVE this value in the drill-down lists.\n\n"
+                "0 = no filter (no upper cap).\n\n"
+                "Practical thresholds:\n"
+                "  ₹500   — small-capital intraday traders\n"
+                "  ₹2,000 — F&O-friendly range (lower margin requirement per lot)\n"
+                "  ₹5,000 — mid-cap positional range\n\n"
+                "Combine with Min Price to isolate a specific price band, e.g., "
+                "₹200–₹2,000 for liquid, affordable swing trades."
+            ),
+        ))
 
     col_enter, col_avoid = st.columns(2)
 
     _HIGH_CONV = 70
 
     with col_enter:
-        st.markdown("### 🟢 SECTORS TO INVEST")
-        st.caption("All accumulation signals — highest score first. Score = institutional conviction strength.")
+        st.markdown(f"### {regime.get('invest_label', '🟢 SECTORS TO INVEST')}")
+        st.caption(regime.get("invest_caption", "All accumulation signals — highest score first."))
         if entering.empty:
             st.info("No sectors with accumulation signal today.")
         else:
@@ -1870,14 +2202,16 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                         unsafe_allow_html=True,
                     )
                     shown_divider = True
-                _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct)
+                _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
+                             min_price=min_price, max_price=max_price,
+                             regime_label=r_label, regime=regime)
 
     with col_avoid:
-        st.markdown("### 🔴 SECTORS TO AVOID / EXIT")
-        st.caption(
+        st.markdown(f"### {regime.get('avoid_label', '🔴 SECTORS TO AVOID / EXIT')}")
+        st.caption(regime.get("avoid_caption",
             "Active distribution/selling signals first; then relative laggards — "
             "the weakest sectors by score when no genuine distribution exists."
-        )
+        ))
 
         # Tier 1 — genuine distribution / selling (real institutional exit, red).
         if not exiting.empty:
@@ -1887,7 +2221,9 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 unsafe_allow_html=True,
             )
             for _, row in exiting.iterrows():
-                _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct)
+                _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
+                             min_price=min_price, max_price=max_price,
+                             regime_label=r_label, regime=regime)
 
         # Tier 2 — relative laggards: weakest sectors by score, excluding any
         # already shown in the invest / caution / distribution lists. The absolute
@@ -1908,7 +2244,9 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 unsafe_allow_html=True,
             )
             for _, row in laggards.iterrows():
-                _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct)
+                _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
+                             min_price=min_price, max_price=max_price,
+                             regime_label=r_label, regime=regime)
 
     if not caution.empty:
         st.markdown("---")
@@ -1919,7 +2257,9 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             "Do not buy based on delivery value alone."
         )
         for _, row in caution.iterrows():
-            _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct)
+            _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
+                         min_price=min_price, max_price=max_price,
+                         regime_label=r_label, regime=regime)
 
     st.markdown("---")
 

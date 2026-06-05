@@ -282,14 +282,11 @@ def main() -> None:
         if st.button(
             "🔄 Refresh Data",
             help=(
-                "Clears cached queries and reloads from DB.\n"
-                "On Cloud: also re-downloads the latest market snapshot from GitHub Releases "
-                "so you always get the most recent data without rebooting."
+                "Fetches latest EOD data from NSE, fills pending prediction outcomes, "
+                "then reloads all charts.\n"
+                "On Cloud: re-downloads the latest market snapshot from GitHub Releases."
             ),
         ):
-            st.cache_data.clear()
-            # Cloud: force re-download of the latest snapshot so new data
-            # (fno_bhavcopy, daily_data, etc.) is picked up without a manual reboot.
             from src.core.cloud import is_cloud, _CLOUD_DB_PATH, _CLOUD_VER_PATH
             if is_cloud():
                 st.session_state.pop("_cloud_db_ready", None)
@@ -300,6 +297,24 @@ def main() -> None:
                             p.unlink()
                     except Exception:
                         pass
+            else:
+                # Local: fetch today's EOD data then fill stale prediction outcomes
+                with st.spinner("Fetching latest market data…"):
+                    try:
+                        from src.ingestion.orchestrator import run_daily_job
+                        run_daily_job()
+                    except Exception as _e:
+                        st.warning(f"Data fetch: {_e}")
+                with st.spinner("Filling prediction outcomes…"):
+                    try:
+                        from datetime import date as _date
+                        from src.analytics.memory_engine import update_outcomes
+                        _filled = update_outcomes(_date.today())
+                        if _filled:
+                            st.toast(f"✅ Filled outcomes for {_filled} prediction(s)")
+                    except Exception as _e:
+                        st.warning(f"Outcome fill: {_e}")
+            st.cache_data.clear()
             st.rerun()
 
         # ── Data Health Widget ─────────────────────────────────────────────

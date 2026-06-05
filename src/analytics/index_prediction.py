@@ -51,17 +51,17 @@ Signals 22–24 are Statistical Regime signals applied to all indices.
                                RS ≥ +0.75% = capital rotating IN (bullish momentum)
                                RS ≤ −0.75% = capital rotating OUT (distribution)
                                Mansfield RS / O'Neil CANSLIM principle.
-  17c.Constituent Breadth      Nifty 50 ONLY — stock-level breadth + delivery quality
-                               Turnover-weighted advance ratio across all 50 index members
+  17c.Constituent Breadth      NIFTY · BANKNIFTY · FINNIFTY — stock-level breadth + delivery quality
+                               Turnover-weighted advance ratio across all constituent stocks
                                Score ≥ 75% turnover advancing = +2.5 exceptional breadth
                                Delivery ≥ 55% on advancers = +0.5 institutional accumulation
                                Reveals WHO is buying (institutions vs day traders)
-  17d.Constituent Fut OI       Nifty 50 ONLY — stock futures OI-Price matrix consensus
-                               Fresh long/short buildup across 50 constituent stocks
+  17d.Constituent Fut OI       NIFTY · BANKNIFTY · FINNIFTY — stock futures OI-Price matrix consensus
+                               Fresh long/short buildup across constituent stocks
                                Stock futures = always directional (no hedge use case)
                                net bull ≥ 30% above bear = +2.0 basket long conviction
-  17e.Constituent Opt OI-Prem  Nifty 50 ONLY — stock options OI-Premium matrix basket
-                               C.Buy+P.Write = Net Long per stock; aggregated across 50
+  17e.Constituent Opt OI-Prem  NIFTY · BANKNIFTY · FINNIFTY — stock options OI-Premium matrix basket
+                               C.Buy+P.Write = Net Long per stock; aggregated across basket
                                Disambiguates PCR: OI↑+Prem↑=Buying vs OI↑+Prem↓=Writing
                                net_long_pct - net_short_pct ≥ 0.25 = +2.0 basket bull
 
@@ -132,12 +132,10 @@ _DEFENSIVE_SECTORS = [
 
 _INDIA_REPO = 6.5   # annualised % — RBI repo for fair-value carry
 
-# ── Nifty 50 constituent symbols ─────────────────────────────────────────────
-# These 50 stocks directly drive the Nifty 50 index (free-float market-cap weighted).
-# Used to compute a stock-level breadth + delivery quality signal — an edge that
-# sector-index breadth cannot provide because sector indices are themselves derived
-# from the same underlying move, while individual stock delivery reveals WHO is buying.
-# Source: NSE ind_nifty50list.csv  |  Last reviewed: Jun 2026
+# ── Index constituent symbol tuples ──────────────────────────────────────────
+# Used for Signals 17c/d/e: breadth + delivery quality, stock futures OI-Price
+# matrix, and stock options OI-Premium matrix applied per index basket.
+# Source: NSE CSV files  |  Last reviewed: Jun 2026
 _NIFTY50_SYMBOLS: tuple = (
     "ADANIENT",   "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT",  "AXISBANK",
     "BAJAJ-AUTO", "BAJFINANCE", "BAJAJFINSV", "BEL",         "BHARTIARTL",
@@ -150,6 +148,31 @@ _NIFTY50_SYMBOLS: tuple = (
     "SUNPHARMA",  "TCS",        "TATACONSUM", "TMPV",        "TATASTEEL",
     "TECHM",      "TITAN",      "TRENT",      "ULTRACEMCO",  "WIPRO",
 )
+
+_BANKNIFTY_SYMBOLS: tuple = (
+    "AUBANK",     "AXISBANK",   "BANKBARODA", "CANBK",       "FEDERALBNK",
+    "HDFCBANK",   "ICICIBANK",  "IDFCFIRSTB", "INDUSINDBK",  "KOTAKBANK",
+    "PNB",        "SBIN",       "UNIONBANK",  "YESBANK",
+)
+
+_FINNIFTY_SYMBOLS: tuple = (
+    "AXISBANK",   "BSE",        "BAJFINANCE", "BAJAJFINSV",  "CHOLAFIN",
+    "HDFCBANK",   "HDFCLIFE",   "ICICIBANK",  "ICICIGI",     "JIOFIN",
+    "KOTAKBANK",  "LICHSGFIN",  "MFSL",       "MUTHOOTFIN",  "PFC",
+    "RECLTD",     "SBICARD",    "SBILIFE",    "SHRIRAMFIN",  "SBIN",
+)
+
+# Maps fno_symbol → (symbol universe, short label, full label) for signals 17c/d/e
+_CONSTITUENT_SYMBOLS: dict[str, tuple] = {
+    "NIFTY":     _NIFTY50_SYMBOLS,
+    "BANKNIFTY": _BANKNIFTY_SYMBOLS,
+    "FINNIFTY":  _FINNIFTY_SYMBOLS,
+}
+_CONSTITUENT_INFO: dict[str, tuple[str, str]] = {
+    "NIFTY":     ("N50", "Nifty 50"),
+    "BANKNIFTY": ("BN",  "Nifty Bank"),
+    "FINNIFTY":  ("FN",  "Fin Nifty"),
+}
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
@@ -193,6 +216,31 @@ class DaySnapshot:
     total_volume: int
     carry_pts: Optional[float]
     carry_pct_ann: Optional[float]
+
+
+@dataclass
+class _ConstituentStats:
+    """Constituent-level data for Signals 17c/d/e — one instance per index basket."""
+    total_stocks:  int   = 0   # size of the symbol universe (used for threshold scaling)
+    # 17c — cash breadth + delivery quality
+    coverage:      int   = 0
+    advancing:     int   = 0
+    declining:     int   = 0
+    adv_turn_pct:  Optional[float] = None
+    adv_deliv_avg: Optional[float] = None
+    dec_deliv_avg: Optional[float] = None
+    # 17d — stock futures OI-Price matrix
+    fut_valid:       int = 0
+    fut_fresh_long:  int = 0
+    fut_fresh_short: int = 0
+    fut_long_unwind: int = 0
+    fut_short_cov:   int = 0
+    # 17e — stock options OI-Premium matrix
+    opt_valid:     int = 0
+    opt_net_long:  int = 0
+    opt_net_short: int = 0
+    opt_straddle:  int = 0
+    opt_range:     int = 0
 
 
 @dataclass
@@ -254,33 +302,10 @@ class MarketContext:
     # ── Nifty 50 daily return — used for non-Nifty relative-strength signal ──
     nifty_pct_chg: Optional[float] = None
 
-    # ── Nifty 50 constituent stock data — cash market (Signal 17c) ──────────────
-    n50_coverage:      int   = 0
-    n50_advancing:     int   = 0
-    n50_declining:     int   = 0
-    n50_adv_turn_pct:  Optional[float] = None
-    n50_adv_deliv_avg: Optional[float] = None
-    n50_dec_deliv_avg: Optional[float] = None
-
-    # ── Nifty 50 constituent stock futures OI-Price matrix (Signal 17d) ─────────
-    # Unlike index futures (which FII use as portfolio hedges), individual stock
-    # futures are almost always directional bets. When 30+ Nifty 50 stocks show
-    # fresh long buildup simultaneously, institutions are buying the BASKET.
-    n50_fut_valid:       int = 0   # stocks with valid today vs yesterday comparison
-    n50_fut_fresh_long:  int = 0   # price↑ + OI↑ = new money entering longs
-    n50_fut_fresh_short: int = 0   # price↓ + OI↑ = new money entering shorts
-    n50_fut_long_unwind: int = 0   # price↓ + OI↓ = longs exiting
-    n50_fut_short_cov:   int = 0   # price↑ + OI↓ = shorts covering
-
-    # ── Nifty 50 constituent stock options OI-Premium matrix (Signal 17e) ───────
-    # OI-Premium matrix applied to the options chains of all 50 constituent stocks.
-    # Disambiguates WHAT is happening in options: buying (OI↑+Prem↑) vs writing
-    # (OI↑+Prem↓). Aggregate basket configuration reveals institutional intent.
-    n50_opt_valid:     int = 0   # stocks with valid call + put classification
-    n50_opt_net_long:  int = 0   # call buying and/or put writing (institutional bull)
-    n50_opt_net_short: int = 0   # put buying and/or call writing (institutional bear)
-    n50_opt_straddle:  int = 0   # both call + put buying (big move expected, no direction)
-    n50_opt_range:     int = 0   # both call + put writing (low vol, range play)
+    # ── Constituent-level data (Signals 17c/d/e): NIFTY, BANKNIFTY, FINNIFTY ─
+    # Maps fno_symbol → _ConstituentStats. Populated for all three in
+    # _build_market_context() via _compute_constituent_stats().
+    constituent_stats: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -331,8 +356,10 @@ class IndexPrediction:
     mem_signal: Optional[object] = None   # MemorySignal
 
     # ── Multi-expiry (Nifty 50 only: weekly + monthly bifurcation) ────────────
-    weekly_expiry: Optional[date] = None    # near options expiry (weekly for Nifty)
-    monthly_expiry: Optional[date] = None   # last Thursday of calendar month
+    # After Sep 2025 NSE change: NIFTY weekly = every Tuesday; monthly = last Tuesday.
+    # BANKNIFTY / FINNIFTY / MIDCPNIFTY = monthly-only (last Tuesday); no weekly contracts.
+    weekly_expiry: Optional[date] = None    # near options expiry (weekly Tuesday for NIFTY)
+    monthly_expiry: Optional[date] = None   # last Tuesday of calendar month
     weekly_pcr: Optional[float] = None      # PCR for weekly expiry
     monthly_pcr: Optional[float] = None     # PCR for monthly expiry
     weekly_call_oi: int = 0
@@ -351,6 +378,17 @@ class IndexPrediction:
     target_close: Optional[float] = None         # spot + target_move (predicted close)
     sideways_band_pts: Optional[float] = None    # ± threshold below which = sideways
     move_basis: str = ""                         # one-line explanation of the calc
+
+    # ── Breakout Extension Ranges (second range if first range is broken) ─────
+    # Triggered when price moves >breakout_threshold_pts beyond range_low/range_high.
+    # Extension target = nearest OI wall inside the 2σ zone, or 2σ if no wall found.
+    breakout_threshold_pts: Optional[float] = None  # pts beyond range to confirm breakout
+    breakout_up_start: Optional[float] = None       # upside break confirmation level
+    breakout_up_end: Optional[float] = None         # second range upper target
+    breakout_dn_start: Optional[float] = None       # second range lower target
+    breakout_dn_end: Optional[float] = None         # downside break confirmation level
+    breakout_up_src: str = ""                       # driver: "call wall 23900" / "2σ statistical"
+    breakout_dn_src: str = ""                       # driver: "put wall 23100" / "2σ statistical"
 
 
 # ── Public entry point ────────────────────────────────────────────────────────
@@ -510,6 +548,248 @@ def _load_sector_indices(trade_date: date) -> pd.DataFrame:
     """, [trade_date])
 
 
+def _is_monthly_expiry_day(d: date) -> bool:
+    """True when d is the last Tuesday of its calendar month.
+
+    After the Sep 2025 NSE change, ALL F&O (index and stock) expires on the
+    last Tuesday of each month. On this day the stock futures OI collapses
+    uniformly for every constituent stock, making Signal 17d unreliable:
+    every stock shows oi_dn = True (settlement, not direction), producing a
+    false basket-bearish or basket-bullish reading depending on price direction.
+    """
+    return d.weekday() == 1 and (d + timedelta(days=7)).month != d.month
+
+
+def _compute_constituent_stats(symbols: tuple, trade_date: date) -> _ConstituentStats:
+    """
+    Compute Signals 17c/d/e constituent data for any index symbol universe.
+
+    17c — turnover-weighted breadth + delivery quality (daily_data)
+    17d — stock futures OI-Price matrix (fno_bhavcopy FUTSTK)
+    17e — stock options OI-Premium matrix (fno_bhavcopy OPTSTK)
+    """
+    cs = _ConstituentStats(total_stocks=len(symbols))
+    if not symbols:
+        return cs
+
+    _ph = ", ".join("?" * len(symbols))
+
+    # ── 17c: cash breadth + delivery quality ─────────────────────────────────
+    _stocks = query_dataframe(f"""
+        SELECT
+            symbol,
+            CASE WHEN prev_close > 0
+                 THEN (close_price - prev_close) / prev_close * 100
+                 ELSE NULL END AS pct_chg,
+            deliv_per,
+            turnover_lacs
+        FROM daily_data
+        WHERE symbol IN ({_ph})
+          AND trade_date = ?
+          AND series IN ('EQ', 'SM', 'ST')
+    """, [*symbols, trade_date])
+    if not _stocks.empty:
+        _stocks = _stocks.dropna(subset=["pct_chg", "turnover_lacs"]).copy()
+        _stocks = _stocks[_stocks["turnover_lacs"] > 0]
+        cs.coverage  = len(_stocks)
+        _adv = _stocks[_stocks["pct_chg"] > 0]
+        _dec = _stocks[_stocks["pct_chg"] < 0]
+        cs.advancing = len(_adv)
+        cs.declining = len(_dec)
+        _total_turn = float(_stocks["turnover_lacs"].sum())
+        if _total_turn > 0:
+            cs.adv_turn_pct = float(_adv["turnover_lacs"].sum()) / _total_turn * 100
+        if len(_adv) >= 3:
+            cs.adv_deliv_avg = float(_adv["deliv_per"].dropna().mean()) if "deliv_per" in _adv else None
+        if len(_dec) >= 3:
+            cs.dec_deliv_avg = float(_dec["deliv_per"].dropna().mean()) if "deliv_per" in _dec else None
+
+    # ── 17d: stock futures OI-Price matrix ───────────────────────────────────
+    _fut_df = query_dataframe(f"""
+        WITH last2 AS (
+            SELECT DISTINCT trade_date
+            FROM fno_bhavcopy
+            WHERE instrument = 'FUTSTK'
+              AND symbol IN ({_ph})
+              AND trade_date <= ?
+            ORDER BY trade_date DESC LIMIT 2
+        )
+        SELECT f.symbol, f.trade_date, f.expiry_date,
+               f.open_interest, f.settle_price
+        FROM fno_bhavcopy f
+        WHERE f.instrument = 'FUTSTK'
+          AND f.symbol IN ({_ph})
+          AND f.trade_date IN (SELECT trade_date FROM last2)
+          AND f.open_interest > 0
+        ORDER BY f.symbol, f.trade_date DESC, f.expiry_date
+    """, [*symbols, trade_date, *symbols])
+
+    if not _fut_df.empty:
+        _fut_df["trade_date"]  = pd.to_datetime(_fut_df["trade_date"]).dt.date
+        _fut_df["expiry_date"] = pd.to_datetime(_fut_df["expiry_date"]).dt.date
+        _fdates = sorted(_fut_df["trade_date"].unique(), reverse=True)
+        _ftd = _fdates[0] if _fdates else None
+        _fpd = _fdates[1] if len(_fdates) >= 2 else None
+
+        if _ftd and _fpd and not _is_monthly_expiry_day(_ftd):
+            # Skip on monthly stock-futures expiry day (last Tuesday of month).
+            # On that day every constituent stock's OI collapses from settlement,
+            # creating a false basket-bearish or -bullish read regardless of direction.
+            _today_f = (
+                _fut_df[_fut_df["trade_date"] == _ftd]
+                .groupby("symbol", as_index=False).first()
+            )
+            _prev_f  = (
+                _fut_df[_fut_df["trade_date"] == _fpd]
+                .groupby("symbol", as_index=False).first()
+            )
+            _prev_idx = _prev_f.set_index("symbol")
+            _fl = _sc = _lu = _fs = _valid = 0
+            for _, tr in _today_f.iterrows():
+                sym = tr["symbol"]
+                if sym not in _prev_idx.index:
+                    continue
+                pr = _prev_idx.loc[sym]
+                if tr["expiry_date"] != pr["expiry_date"]:
+                    continue
+                oi_t = float(tr["open_interest"]); oi_p = float(pr["open_interest"])
+                sp_t = float(tr["settle_price"]);  sp_p = float(pr["settle_price"])
+                if oi_p <= 0 or sp_p <= 0:
+                    continue
+                oi_chg = (oi_t - oi_p) / oi_p * 100
+                pr_chg = (sp_t - sp_p) / sp_p * 100
+                oi_up = oi_chg >  0.5;  oi_dn = oi_chg < -0.5
+                pr_up = pr_chg >  0.1;  pr_dn = pr_chg < -0.1
+                _valid += 1
+                if   pr_up and oi_up: _fl += 1
+                elif pr_up and oi_dn: _sc += 1
+                elif pr_dn and oi_dn: _lu += 1
+                elif pr_dn and oi_up: _fs += 1
+
+            cs.fut_valid       = _valid
+            cs.fut_fresh_long  = _fl
+            cs.fut_fresh_short = _fs
+            cs.fut_long_unwind = _lu
+            cs.fut_short_cov   = _sc
+
+    # ── 17e: stock options OI-Premium matrix ─────────────────────────────────
+    _opt_df = query_dataframe(f"""
+        WITH last2 AS (
+            SELECT DISTINCT trade_date
+            FROM fno_bhavcopy
+            WHERE instrument = 'OPTSTK'
+              AND symbol IN ({_ph})
+              AND trade_date <= ?
+            ORDER BY trade_date DESC LIMIT 2
+        ),
+        near_exp_date AS (
+            SELECT symbol, trade_date, MIN(expiry_date) AS near_expiry
+            FROM fno_bhavcopy
+            WHERE instrument = 'OPTSTK'
+              AND symbol IN ({_ph})
+              AND trade_date IN (SELECT trade_date FROM last2)
+              AND open_interest > 0
+            GROUP BY symbol, trade_date
+        )
+        SELECT
+            f.symbol,
+            f.trade_date,
+            ne.near_expiry,
+            f.option_type,
+            SUM(f.open_interest) AS total_oi,
+            SUM(CASE WHEN f.contracts > 0 AND f.settle_price > 0
+                     THEN (f.close_price - f.settle_price) * f.contracts
+                     ELSE 0 END
+            ) / NULLIF(SUM(CASE WHEN f.contracts > 0 AND f.settle_price > 0
+                                THEN f.contracts ELSE 0 END), 0) AS wt_prem_chg,
+            SUM(f.contracts) AS total_contracts
+        FROM fno_bhavcopy f
+        INNER JOIN near_exp_date ne
+            ON  f.symbol     = ne.symbol
+            AND f.trade_date = ne.trade_date
+            AND f.expiry_date= ne.near_expiry
+        WHERE f.instrument = 'OPTSTK'
+          AND f.open_interest > 0
+        GROUP BY f.symbol, f.trade_date, ne.near_expiry, f.option_type
+        ORDER BY f.symbol, f.trade_date DESC, f.option_type
+    """, [*symbols, trade_date, *symbols])
+
+    if not _opt_df.empty:
+        _opt_df["trade_date"]  = pd.to_datetime(_opt_df["trade_date"]).dt.date
+        _opt_df["near_expiry"] = pd.to_datetime(_opt_df["near_expiry"]).dt.date
+        _odates = sorted(_opt_df["trade_date"].unique(), reverse=True)
+        _otd = _odates[0] if _odates else None
+        _opd = _odates[1] if len(_odates) >= 2 else None
+
+        if _otd and _opd:
+            _MIN_CONTR = 100
+
+            def _make_opt_idx(df, td):
+                return (
+                    df[df["trade_date"] == td]
+                    .drop_duplicates(subset=["symbol", "option_type"], keep="last")
+                    .set_index(["symbol", "option_type"])
+                )
+            _opt_today = _make_opt_idx(_opt_df, _otd)
+            _opt_prev  = _make_opt_idx(_opt_df, _opd)
+
+            _on = _os = _ostr = _or = _ov = 0
+            for _sym in {s for s, _ in _opt_today.index}:
+                try:
+                    t_ce = _opt_today.loc[(_sym, "CE")]
+                    t_pe = _opt_today.loc[(_sym, "PE")]
+                    p_ce = _opt_prev.loc[(_sym, "CE")]
+                    p_pe = _opt_prev.loc[(_sym, "PE")]
+                except KeyError:
+                    continue
+
+                if t_ce["near_expiry"] != p_ce["near_expiry"]:
+                    continue
+
+                _c_oi_t = float(t_ce["total_oi"]); _c_oi_p = float(p_ce["total_oi"])
+                _p_oi_t = float(t_pe["total_oi"]); _p_oi_p = float(p_pe["total_oi"])
+                if _c_oi_p <= 0 or _p_oi_p <= 0:
+                    continue
+
+                c_oi_chg = (_c_oi_t - _c_oi_p) / _c_oi_p * 100
+                p_oi_chg = (_p_oi_t - _p_oi_p) / _p_oi_p * 100
+                c_prem   = t_ce.get("wt_prem_chg")
+                p_prem   = t_pe.get("wt_prem_chg")
+                c_contr  = float(t_ce.get("total_contracts", 0) or 0)
+                p_contr  = float(t_pe.get("total_contracts", 0) or 0)
+
+                c_oi_up = c_oi_chg > 0.5
+                p_oi_up = p_oi_chg > 0.5
+                has_call_vol = c_contr >= _MIN_CONTR
+                has_put_vol  = p_contr >= _MIN_CONTR
+                c_prem_up = (has_call_vol and c_prem is not None and
+                             not pd.isna(c_prem) and float(c_prem) > 0)
+                p_prem_up = (has_put_vol  and p_prem is not None and
+                             not pd.isna(p_prem) and float(p_prem) > 0)
+                c_buy = c_oi_up and c_prem_up
+                c_wrt = c_oi_up and has_call_vol and not c_prem_up
+                p_buy = p_oi_up and p_prem_up
+                p_wrt = p_oi_up and has_put_vol  and not p_prem_up
+
+                if not (c_oi_up or p_oi_up):
+                    continue
+                _ov += 1
+                if   c_buy and p_wrt:  _on   += 1
+                elif c_wrt and p_buy:  _os   += 1
+                elif c_buy and p_buy:  _ostr += 1
+                elif c_wrt and p_wrt:  _or   += 1
+                elif c_buy or p_wrt:   _on   += 1
+                elif p_buy or c_wrt:   _os   += 1
+
+            cs.opt_valid     = _ov
+            cs.opt_net_long  = _on
+            cs.opt_net_short = _os
+            cs.opt_straddle  = _ostr
+            cs.opt_range     = _or
+
+    return cs
+
+
 # ── Market context builder ────────────────────────────────────────────────────
 
 def _build_market_context(trade_date: date) -> MarketContext:
@@ -631,249 +911,9 @@ def _build_market_context(trade_date: date) -> MarketContext:
     if not _n50idx.empty and pd.notna(_n50idx["pct_chg"].iloc[0]):
         ctx.nifty_pct_chg = float(_n50idx["pct_chg"].iloc[0])
 
-    # ── Nifty 50 constituent breadth + delivery quality (Signal 17c) ─────────
-    # Query cash-market data for all 50 constituent stocks. Turnover-weighted
-    # advance ratio is a more faithful proxy for index impact than a simple count
-    # because the index is free-float market-cap weighted (Reliance ~10%, BEL ~0.5%).
-    _sym_ph = ", ".join("?" * len(_NIFTY50_SYMBOLS))
-    _stocks = query_dataframe(f"""
-        SELECT
-            symbol,
-            CASE WHEN prev_close > 0
-                 THEN (close_price - prev_close) / prev_close * 100
-                 ELSE NULL END AS pct_chg,
-            deliv_per,
-            turnover_lacs
-        FROM daily_data
-        WHERE symbol IN ({_sym_ph})
-          AND trade_date = ?
-          AND series IN ('EQ', 'SM', 'ST')
-    """, [*_NIFTY50_SYMBOLS, trade_date])
-    if not _stocks.empty:
-        _stocks = _stocks.dropna(subset=["pct_chg", "turnover_lacs"]).copy()
-        _stocks = _stocks[_stocks["turnover_lacs"] > 0]
-        ctx.n50_coverage  = len(_stocks)
-        _adv = _stocks[_stocks["pct_chg"] > 0]
-        _dec = _stocks[_stocks["pct_chg"] < 0]
-        ctx.n50_advancing = len(_adv)
-        ctx.n50_declining = len(_dec)
-        _total_turn = float(_stocks["turnover_lacs"].sum())
-        if _total_turn > 0:
-            ctx.n50_adv_turn_pct = float(_adv["turnover_lacs"].sum()) / _total_turn * 100
-        if len(_adv) >= 3:
-            ctx.n50_adv_deliv_avg = float(_adv["deliv_per"].dropna().mean()) if "deliv_per" in _adv else None
-        if len(_dec) >= 3:
-            ctx.n50_dec_deliv_avg = float(_dec["deliv_per"].dropna().mean()) if "deliv_per" in _dec else None
-
-    # ── Nifty 50 constituent stock futures OI-Price matrix (Signal 17d) ──────
-    # Load near-expiry FUTSTK rows for the last 2 trading dates for all 50 symbols.
-    # Near expiry = lowest expiry_date with open_interest > 0 (same logic as index futures).
-    _sym_ph_f = ", ".join("?" * len(_NIFTY50_SYMBOLS))
-    _n50_fut_df = query_dataframe(f"""
-        WITH last2 AS (
-            SELECT DISTINCT trade_date
-            FROM fno_bhavcopy
-            WHERE instrument = 'FUTSTK'
-              AND symbol IN ({_sym_ph_f})
-              AND trade_date <= ?
-            ORDER BY trade_date DESC LIMIT 2
-        )
-        SELECT f.symbol, f.trade_date, f.expiry_date,
-               f.open_interest, f.settle_price
-        FROM fno_bhavcopy f
-        WHERE f.instrument = 'FUTSTK'
-          AND f.symbol IN ({_sym_ph_f})
-          AND f.trade_date IN (SELECT trade_date FROM last2)
-          AND f.open_interest > 0
-        ORDER BY f.symbol, f.trade_date DESC, f.expiry_date
-    """, [*_NIFTY50_SYMBOLS, trade_date, *_NIFTY50_SYMBOLS])
-
-    if not _n50_fut_df.empty:
-        _n50_fut_df["trade_date"] = pd.to_datetime(_n50_fut_df["trade_date"]).dt.date
-        _n50_fut_df["expiry_date"] = pd.to_datetime(_n50_fut_df["expiry_date"]).dt.date
-        _fut_dates = sorted(_n50_fut_df["trade_date"].unique(), reverse=True)
-        _td = _fut_dates[0] if _fut_dates else None
-        _pd = _fut_dates[1] if len(_fut_dates) >= 2 else None
-
-        if _td and _pd:
-            # Take near expiry (first row per symbol × date after sort by expiry_date)
-            _today_fut = (
-                _n50_fut_df[_n50_fut_df["trade_date"] == _td]
-                .groupby("symbol", as_index=False).first()
-            )
-            _prev_fut = (
-                _n50_fut_df[_n50_fut_df["trade_date"] == _pd]
-                .groupby("symbol", as_index=False).first()
-            )
-            _prev_idx = _prev_fut.set_index("symbol")
-
-            _fl = _sc = _lu = _fs = _valid = 0
-            for _, tr in _today_fut.iterrows():
-                sym = tr["symbol"]
-                if sym not in _prev_idx.index:
-                    continue
-                pr = _prev_idx.loc[sym]
-                # Only compare same expiry (skip rollover days for this stock)
-                if tr["expiry_date"] != pr["expiry_date"]:
-                    continue
-                oi_t = float(tr["open_interest"]); oi_p = float(pr["open_interest"])
-                sp_t = float(tr["settle_price"]);  sp_p = float(pr["settle_price"])
-                if oi_p <= 0 or sp_p <= 0:
-                    continue
-                oi_chg = (oi_t - oi_p) / oi_p * 100
-                pr_chg = (sp_t - sp_p) / sp_p * 100
-                oi_up = oi_chg >  0.5;  oi_dn = oi_chg < -0.5
-                pr_up = pr_chg >  0.1;  pr_dn = pr_chg < -0.1
-                _valid += 1
-                if   pr_up and oi_up: _fl += 1
-                elif pr_up and oi_dn: _sc += 1
-                elif pr_dn and oi_dn: _lu += 1
-                elif pr_dn and oi_up: _fs += 1
-
-            ctx.n50_fut_valid       = _valid
-            ctx.n50_fut_fresh_long  = _fl
-            ctx.n50_fut_fresh_short = _fs
-            ctx.n50_fut_long_unwind = _lu
-            ctx.n50_fut_short_cov   = _sc
-
-    # ── Nifty 50 constituent stock options OI-Premium matrix (Signal 17e) ────
-    # Aggregate near-expiry call + put OI change and volume-weighted premium change
-    # across all 50 constituent stocks. settle_price for OPTSTK = previous-day
-    # settlement (NSE DAT column 9 = "previous close price"), so
-    # (close_price - settle_price) = today's premium change. Same as Signal 5.
-    _sym_ph_o = ", ".join("?" * len(_NIFTY50_SYMBOLS))
-    _n50_opt_df = query_dataframe(f"""
-        WITH last2 AS (
-            SELECT DISTINCT trade_date
-            FROM fno_bhavcopy
-            WHERE instrument = 'OPTSTK'
-              AND symbol IN ({_sym_ph_o})
-              AND trade_date <= ?
-            ORDER BY trade_date DESC LIMIT 2
-        ),
-        near_exp_date AS (
-            SELECT symbol, trade_date, MIN(expiry_date) AS near_expiry
-            FROM fno_bhavcopy
-            WHERE instrument = 'OPTSTK'
-              AND symbol IN ({_sym_ph_o})
-              AND trade_date IN (SELECT trade_date FROM last2)
-              AND open_interest > 0
-            GROUP BY symbol, trade_date
-        )
-        SELECT
-            f.symbol,
-            f.trade_date,
-            ne.near_expiry,
-            f.option_type,
-            SUM(f.open_interest) AS total_oi,
-            SUM(CASE WHEN f.contracts > 0 AND f.settle_price > 0
-                     THEN (f.close_price - f.settle_price) * f.contracts
-                     ELSE 0 END
-            ) / NULLIF(SUM(CASE WHEN f.contracts > 0 AND f.settle_price > 0
-                                THEN f.contracts ELSE 0 END), 0) AS wt_prem_chg,
-            SUM(f.contracts) AS total_contracts
-        FROM fno_bhavcopy f
-        INNER JOIN near_exp_date ne
-            ON  f.symbol     = ne.symbol
-            AND f.trade_date = ne.trade_date
-            AND f.expiry_date= ne.near_expiry
-        WHERE f.instrument = 'OPTSTK'
-          AND f.open_interest > 0
-        GROUP BY f.symbol, f.trade_date, ne.near_expiry, f.option_type
-        ORDER BY f.symbol, f.trade_date DESC, f.option_type
-    """, [*_NIFTY50_SYMBOLS, trade_date, *_NIFTY50_SYMBOLS])
-
-    if not _n50_opt_df.empty:
-        _n50_opt_df["trade_date"]  = pd.to_datetime(_n50_opt_df["trade_date"]).dt.date
-        _n50_opt_df["near_expiry"] = pd.to_datetime(_n50_opt_df["near_expiry"]).dt.date
-        _opt_dates = sorted(_n50_opt_df["trade_date"].unique(), reverse=True)
-        _opt_td = _opt_dates[0] if _opt_dates else None
-        _opt_pd = _opt_dates[1] if len(_opt_dates) >= 2 else None
-
-        if _opt_td and _opt_pd:
-            _MIN_CONTR = 100   # min contracts for premium direction to be meaningful
-
-            # Defensive dedup: SQL GROUP BY already prevents duplicates, but if a data
-            # anomaly produces two rows for the same (symbol, option_type), set_index
-            # silently creates a MultiIndex with duplicates and loc[] returns a DataFrame
-            # instead of a Series — breaking all downstream float() casts.
-            def _make_opt_idx(df, td):
-                return (
-                    df[df["trade_date"] == td]
-                    .drop_duplicates(subset=["symbol", "option_type"], keep="last")
-                    .set_index(["symbol", "option_type"])
-                )
-            _opt_today = _make_opt_idx(_n50_opt_df, _opt_td)
-            _opt_prev  = _make_opt_idx(_n50_opt_df, _opt_pd)
-
-            _on = _os = _ostr = _or = _ov = 0
-
-            _syms_today = {s for s, _ in _opt_today.index}
-            for _sym in _syms_today:
-                try:
-                    t_ce = _opt_today.loc[(_sym, "CE")]
-                    t_pe = _opt_today.loc[(_sym, "PE")]
-                except KeyError:
-                    continue
-
-                try:
-                    p_ce = _opt_prev.loc[(_sym, "CE")]
-                    p_pe = _opt_prev.loc[(_sym, "PE")]
-                except KeyError:
-                    continue
-
-                if t_ce["near_expiry"] != p_ce["near_expiry"]:
-                    continue   # monthly expiry rollover for this stock
-
-                _c_oi_t = float(t_ce["total_oi"]); _c_oi_p = float(p_ce["total_oi"])
-                _p_oi_t = float(t_pe["total_oi"]); _p_oi_p = float(p_pe["total_oi"])
-                if _c_oi_p <= 0 or _p_oi_p <= 0:
-                    continue
-
-                c_oi_chg = (_c_oi_t - _c_oi_p) / _c_oi_p * 100
-                p_oi_chg = (_p_oi_t - _p_oi_p) / _p_oi_p * 100
-                c_prem   = t_ce.get("wt_prem_chg"); c_contr = float(t_ce.get("total_contracts", 0) or 0)
-                p_prem   = t_pe.get("wt_prem_chg"); p_contr = float(t_pe.get("total_contracts", 0) or 0)
-
-                c_oi_up = c_oi_chg > 0.5
-                p_oi_up = p_oi_chg > 0.5
-
-                # Volume gates — must have >= MIN_CONTR to determine premium direction.
-                # Without sufficient volume, we CANNOT distinguish buying (prem↑) from
-                # writing (prem↓): the premium data is noise. If volume gate fails,
-                # NEITHER buying NOR writing fires for that side — the stock is neutral
-                # on that leg rather than being systematically mis-tagged as "Writing".
-                # (Old code: c_wrt = c_oi_up and not c_prem_up → fired even at zero volume,
-                #  adding spurious bearish bias whenever OI rose on a thin-volume day.)
-                has_call_vol = c_contr >= _MIN_CONTR
-                has_put_vol  = p_contr >= _MIN_CONTR
-
-                c_prem_up = (has_call_vol and c_prem is not None and
-                             not pd.isna(c_prem) and float(c_prem) > 0)
-                p_prem_up = (has_put_vol  and p_prem is not None and
-                             not pd.isna(p_prem) and float(p_prem) > 0)
-
-                c_buy = c_oi_up and c_prem_up                       # OI↑ + prem↑ + volume
-                c_wrt = c_oi_up and has_call_vol and not c_prem_up  # OI↑ + prem↓ + volume
-                p_buy = p_oi_up and p_prem_up
-                p_wrt = p_oi_up and has_put_vol  and not p_prem_up
-
-                if not (c_oi_up or p_oi_up):
-                    continue
-
-                _ov += 1
-                if   c_buy and p_wrt:  _on   += 1   # both sides bullish → net long
-                elif c_wrt and p_buy:  _os   += 1   # both sides bearish → net short
-                elif c_buy and p_buy:  _ostr += 1   # both buying → straddle
-                elif c_wrt and p_wrt:  _or   += 1   # both writing → range
-                elif c_buy or p_wrt:   _on   += 1   # single-sided bullish
-                elif p_buy or c_wrt:   _os   += 1   # single-sided bearish
-
-            ctx.n50_opt_valid    = _ov
-            ctx.n50_opt_net_long = _on
-            ctx.n50_opt_net_short= _os
-            ctx.n50_opt_straddle = _ostr
-            ctx.n50_opt_range    = _or
+    # ── Constituent-level data (Signals 17c/d/e) ──────────────────────────────
+    for _csym, _csyms in _CONSTITUENT_SYMBOLS.items():
+        ctx.constituent_stats[_csym] = _compute_constituent_stats(_csyms, trade_date)
 
     # ── Sector breadth + rotation ─────────────────────────────────────────────
     sec_df = _load_sector_indices(trade_date)
@@ -1056,24 +1096,27 @@ def _sig_oi_price_matrix(
     oi_chg_pct = (fut_oi_chg / max(fut_oi_base, 1)) * 100 if fut_oi_base > 0 else 0.0
     oi_up = oi_chg_pct > 0.5
     oi_dn = oi_chg_pct < -0.5
+    # Cap display value: extreme % (from tiny base OI near rollover) is misleading.
+    # Direction logic above already uses the raw value correctly.
+    oi_disp = max(-999.9, min(999.9, oi_chg_pct))
     if up and oi_up:
         return IndexSignal("Fresh Long Buildup", "Futures OI", 1, 3.0, "Fresh Long Build",
-            f"Price +{pct:.2f}% AND OI +{oi_chg_pct:.1f}%. New money entering longs — "
+            f"Price +{pct:.2f}% AND OI +{oi_disp:.1f}%. New money entering longs — "
             "strongest bullish confirmation. Institutions building directional long.", "🟢")
     if up and oi_dn:
         return IndexSignal("Short Covering Rally", "Futures OI", 1, 1.0, "Short Covering",
-            f"Price +{pct:.2f}% but OI {oi_chg_pct:+.1f}% (falling). "
+            f"Price +{pct:.2f}% but OI {oi_disp:+.1f}% (falling). "
             "Short covering rally — real but lacks fresh conviction.", "🟡")
     if dn and oi_up:
         return IndexSignal("Fresh Short Buildup", "Futures OI", -1, -3.0, "Fresh Short Build",
-            f"Price {pct:.2f}% AND OI +{oi_chg_pct:.1f}%. "
+            f"Price {pct:.2f}% AND OI +{oi_disp:.1f}%. "
             "New shorts added into decline — strongest bearish confirmation.", "🔴")
     if dn and oi_dn:
         return IndexSignal("Long Unwinding", "Futures OI", -1, -1.0, "Long Unwinding",
-            f"Price {pct:.2f}% and OI {oi_chg_pct:+.1f}% (falling). "
+            f"Price {pct:.2f}% and OI {oi_disp:+.1f}% (falling). "
             "Longs closing — bearish but self-limiting.", "🟡")
     return IndexSignal("Sideways / Indecisive", "Futures OI", 0, 0.0, "Indecisive OI",
-        f"Price {pct:.2f}% with small OI change ({oi_chg_pct:+.1f}%). No directional conviction.", "⚪")
+        f"Price {pct:.2f}% with small OI change ({oi_disp:+.1f}%). No directional conviction.", "⚪")
 
 
 def _sig_carry(carry_pct_ann: Optional[float], carry_pts: Optional[float]) -> Optional[IndexSignal]:
@@ -1510,7 +1553,7 @@ def _sig_fii_oi_buildup(ctx: MarketContext, fno_symbol: str) -> Optional[IndexSi
     """
     oi_now = ctx.fii_oi_cr_latest.get(fno_symbol)
     oi_ago = ctx.fii_oi_cr_5d_ago.get(fno_symbol)
-    if oi_now is None or oi_ago is None or oi_ago == 0: return None
+    if oi_now is None or oi_ago is None or abs(oi_ago) < 1.0: return None
 
     chg_pct = (oi_now - oi_ago) / oi_ago * 100
     fii_net = ctx.fii_fut_idx_net
@@ -1766,74 +1809,69 @@ def _sig_index_relative_strength(
     return None
 
 
-def _sig_constituent_breadth(ctx: MarketContext) -> Optional[IndexSignal]:
+def _sig_constituent_breadth(
+    stats: _ConstituentStats, fno_symbol: str,
+) -> Optional[IndexSignal]:
     """
-    Signal 17c: Nifty 50 constituent breadth + delivery quality — NIFTY exclusive.
+    Signal 17c: Constituent breadth + delivery quality — NIFTY, BANKNIFTY, FINNIFTY.
 
-    WHY THIS IS POWERFUL:
-      Nifty 50 is free-float market-cap weighted across its 50 member stocks.
-      Sector-index breadth tells us how many sector INDICES advanced — but each
-      sector index is already derived from the same underlying stock moves, making
-      it a coarser proxy. This signal goes one level deeper: the ACTUAL 50 stocks.
-
-      Delivery % distinguishes REAL money from speculation:
-        High delivery + advancing = institutions accumulating the index basket
-        Low delivery + advancing  = leveraged/intraday momentum (less durable)
-        High delivery + declining = institutions distributing (more lasting weakness)
+    Turnover-weighted advance ratio distinguishes index-weight-relevant moves from
+    noise. Delivery % further separates institutional accumulation from speculation.
 
     SCORING (turnover-weighted advance ratio, 0–100%):
-      ≥ 75%  → +2.5  Exceptional breadth: almost the entire index basket rising
+      ≥ 75%  → +2.5  Exceptional breadth: almost the entire basket rising
       ≥ 60%  → +1.5  Strong breadth: majority rising with broad participation
       40–60% → None  Mixed: no edge, stocks split roughly evenly
       ≤ 40%  → -1.5  Weak breadth: majority declining
-      ≤ 25%  → -2.5  Exceptional weakness: near-universal decline in basket
+      ≤ 25%  → -2.5  Exceptional weakness: near-universal decline
 
-    DELIVERY MODIFIER (applied after breadth score):
-      +0.5 if advancing stocks avg delivery ≥ 55% → institutional accumulation
-      -0.3 if advancing stocks avg delivery ≤ 25% → speculative rally, low conviction
-      -0.5 if declining stocks avg delivery ≥ 55% → institutional distribution
+    DELIVERY MODIFIER:
+      +0.5 advancing avg delivery ≥ 55% → institutional accumulation
+      -0.3 advancing avg delivery ≤ 25% → speculative rally, low conviction
+      -0.5 declining avg delivery ≥ 55% → institutional distribution
     """
-    if ctx.n50_coverage < 30 or ctx.n50_adv_turn_pct is None:
+    short_lbl, full_lbl = _CONSTITUENT_INFO.get(fno_symbol, ("IDX", "Index"))
+    min_cov = max(5, stats.total_stocks // 2)
+    if stats.coverage < min_cov or stats.adv_turn_pct is None:
         return None
 
-    twar = ctx.n50_adv_turn_pct   # turnover-weighted advance %, 0–100
-    adv  = ctx.n50_advancing
-    dec  = ctx.n50_declining
-    cov  = ctx.n50_coverage
-    adv_del = ctx.n50_adv_deliv_avg
-    dec_del = ctx.n50_dec_deliv_avg
+    twar    = stats.adv_turn_pct
+    adv     = stats.advancing
+    dec     = stats.declining
+    cov     = stats.coverage
+    adv_del = stats.adv_deliv_avg
+    dec_del = stats.dec_deliv_avg
 
     if twar >= 75:
         base  = 2.5
-        name  = "N50 Exceptional Breadth — Broad-Based Index Rally"
-        head  = f"{adv}/{cov} Nifty 50 stocks up ({twar:.0f}% of turnover) — Exceptional"
+        name  = f"{short_lbl} Exceptional Breadth — Broad-Based Basket Rally"
+        head  = f"{adv}/{cov} {full_lbl} stocks up ({twar:.0f}% of turnover) — Exceptional"
         emoji = "🟢"
     elif twar >= 60:
         base  = 1.5
-        name  = "N50 Strong Breadth — Majority of Index Basket Rising"
-        head  = f"{adv}/{cov} Nifty 50 stocks up ({twar:.0f}% of turnover) — Broad Participation"
+        name  = f"{short_lbl} Strong Breadth — Majority of Basket Rising"
+        head  = f"{adv}/{cov} {full_lbl} stocks up ({twar:.0f}% of turnover) — Broad Participation"
         emoji = "🟢"
     elif twar <= 25:
         base  = -2.5
-        name  = "N50 Exceptional Weakness — Near-Universal Index Basket Decline"
-        head  = f"{dec}/{cov} Nifty 50 stocks down ({100-twar:.0f}% of turnover) — Broad Sell-Off"
+        name  = f"{short_lbl} Exceptional Weakness — Near-Universal Basket Decline"
+        head  = f"{dec}/{cov} {full_lbl} stocks down ({100-twar:.0f}% of turnover) — Broad Sell-Off"
         emoji = "🔴"
     elif twar <= 40:
         base  = -1.5
-        name  = "N50 Weak Breadth — Majority of Index Basket Declining"
-        head  = f"{dec}/{cov} Nifty 50 stocks down ({100-twar:.0f}% of turnover) — Weak Participation"
+        name  = f"{short_lbl} Weak Breadth — Majority of Basket Declining"
+        head  = f"{dec}/{cov} {full_lbl} stocks down ({100-twar:.0f}% of turnover) — Weak Participation"
         emoji = "🔴"
     else:
         return None   # 40–60%: mixed, no directional edge
 
-    # Delivery quality modifier
     deliv_note = ""
     if base > 0:
         if adv_del is not None and adv_del >= 55:
             base += 0.5
             deliv_note = (
                 f" Advancing stocks: {adv_del:.0f}% avg delivery = institutional quality — "
-                "real money is buying the index basket, not just intraday momentum."
+                "real money buying the basket, not just intraday momentum."
             )
             emoji = "💎"
         elif adv_del is not None and adv_del <= 25:
@@ -1850,7 +1888,7 @@ def _sig_constituent_breadth(ctx: MarketContext) -> Optional[IndexSignal]:
             base -= 0.5
             deliv_note = (
                 f" Declining stocks: {dec_del:.0f}% avg delivery = institutional distribution — "
-                "real money is selling the index basket, not panic or forced selling."
+                "real money selling the basket."
             )
             emoji = "💀"
         elif dec_del is not None:
@@ -1859,231 +1897,194 @@ def _sig_constituent_breadth(ctx: MarketContext) -> Optional[IndexSignal]:
     direction = 1 if base > 0 else -1
     flat = cov - adv - dec
     desc = (
-        f"Nifty 50 constituent breadth: {adv} advancing / {dec} declining / "
+        f"{full_lbl} constituent breadth: {adv} advancing / {dec} declining / "
         f"{flat} flat out of {cov} stocks tracked. "
-        f"Turnover-weighted advance ratio: {twar:.1f}% — large-cap stocks "
-        f"(Reliance, HDFC Bank, ICICI Bank) contribute proportionally to their "
-        f"index weight, so this ratio closely tracks actual index driver quality. "
+        f"Turnover-weighted advance ratio: {twar:.1f}% — large-cap members contribute "
+        f"proportionally to their index weight."
         f"{deliv_note}"
         f"\nBreadth edge: when >60% turnover-weight advances + institutional delivery, "
-        f"the rally is in the INDEX BASKET (not just 2-3 heavyweights lifting the index) "
-        f"— historically more durable than index-level momentum alone."
+        f"the rally is broad-based — historically more durable than a 2-3 heavyweight lift."
     )
 
     return IndexSignal(name, "Sector", direction, round(base, 2), head, desc, emoji)
 
 
-def _sig_constituent_fut_oi(ctx: MarketContext) -> Optional[IndexSignal]:
+def _sig_constituent_fut_oi(
+    stats: _ConstituentStats, fno_symbol: str,
+) -> Optional[IndexSignal]:
     """
-    Signal 17d: Nifty 50 constituent stock futures OI-Price matrix — NIFTY exclusive.
+    Signal 17d: Constituent stock futures OI-Price matrix — NIFTY, BANKNIFTY, FINNIFTY.
 
-    WHY THIS OUTPERFORMS THE INDEX-LEVEL OI SIGNAL:
-      Index futures (FUTIDX) are routinely used by FIIs as portfolio hedges against
-      their large cash equity holdings. A massive FII short in NIFTY index futures
-      is usually a hedge, not a directional call (the diagnostic confirmed this fires
-      bearish on ~100% of days). Stock futures (FUTSTK) carry NO such ambiguity —
-      you do not hedge a cash HDFC Bank position by shorting HDFC Bank futures;
-      that would just close the position. Every FUTSTK OI change is a directional bet.
+    Stock futures (FUTSTK) carry no hedge ambiguity — every OI change is a directional bet.
+    When a large fraction of constituent stocks simultaneously show Fresh Long Buildup,
+    institutions are constructing BASKET LONGS via individual names.
 
-      When 30+ of the 50 index stocks show Fresh Long Buildup simultaneously,
-      institutions are constructing BASKET LONGS via individual names. This is the
-      institutional "all-in" signal that the index OI matrix cannot detect.
-
-    OI-PRICE MATRIX applied per constituent stock (near-expiry futures only):
-      Price ↑ + OI ↑ = Fresh Long Build  — new money entering; highest conviction
-      Price ↑ + OI ↓ = Short Covering    — shorts forced out; bullish but finite
-      Price ↓ + OI ↓ = Long Unwinding    — longs exiting; bearish but self-limiting
-      Price ↓ + OI ↑ = Fresh Short Build — new money entering shorts; highest conviction
-
-    SCORING (based on net_balance = bull_pct − bear_pct):
+    SCORING (net_balance = bull_pct − bear_pct):
       net ≥ 0.45 + fresh_long ≥ 30%  → +3.0  Exceptional basket conviction long
-      net ≥ 0.30                      → +2.0  Broadly bullish stock basket
-      net ≥ 0.15                      → +1.0  Mild bullish lean in basket
+      net ≥ 0.30                      → +2.0  Broadly bullish
+      net ≥ 0.15                      → +1.0  Mild bullish lean
       net ≤ −0.45 + fresh_short ≥ 30% → −3.0  Exceptional basket conviction short
-      net ≤ −0.30                      → −2.0  Broadly bearish stock basket
+      net ≤ −0.30                      → −2.0  Broadly bearish
       net ≤ −0.15                      → −1.0  Mild bearish lean
     """
-    valid = ctx.n50_fut_valid
-    if valid < 20:
-        return None   # fewer than 20 comparable stocks — data too thin for a read
+    short_lbl, full_lbl = _CONSTITUENT_INFO.get(fno_symbol, ("IDX", "Index"))
+    min_valid = max(5, stats.total_stocks * 4 // 10)
+    valid = stats.fut_valid
+    if valid < min_valid:
+        return None
 
-    fl = ctx.n50_fut_fresh_long
-    sc = ctx.n50_fut_short_cov
-    lu = ctx.n50_fut_long_unwind
-    fs = ctx.n50_fut_fresh_short
+    fl = stats.fut_fresh_long
+    sc = stats.fut_short_cov
+    lu = stats.fut_long_unwind
+    fs = stats.fut_fresh_short
 
-    bull_pct = (fl + sc) / valid   # all upward-priced outcomes (regardless of mechanism)
-    bear_pct = (fs + lu) / valid   # all downward-priced outcomes
-    fl_pct   = fl / valid          # purely fresh longs (highest conviction, new money in)
-    fs_pct   = fs / valid          # purely fresh shorts (highest conviction, new money in)
+    bull_pct = (fl + sc) / valid
+    bear_pct = (fs + lu) / valid
+    fl_pct   = fl / valid
+    fs_pct   = fs / valid
     net      = bull_pct - bear_pct
 
     if net >= 0.45 and fl_pct >= 0.30:
         score = 3.0
-        name  = "N50 Basket Fresh Long Build — Institutional Conviction BUY"
-        head  = (f"{fl}/{valid} N50 stocks Fresh Long + {sc} Short Cov "
-                 f"= {bull_pct:.0%} of basket bulls (net {net:+.0%})")
+        name  = f"{short_lbl} Basket Fresh Long Build — Institutional Conviction BUY"
+        head  = (f"{fl}/{valid} {short_lbl} stocks Fresh Long + {sc} Short Cov "
+                 f"= {bull_pct:.0%} bulls (net {net:+.0%})")
         emoji = "🔥"
     elif net >= 0.30:
         score = 2.0
-        name  = "N50 Basket Broadly Bullish — Stock Futures Net Long"
+        name  = f"{short_lbl} Basket Broadly Bullish — Stock Futures Net Long"
         head  = (f"{fl} fresh long + {sc} short cov vs {fs} fresh short + {lu} unwind "
                  f"({bull_pct:.0%} bulls, net {net:+.0%})")
         emoji = "🟢"
     elif net >= 0.15:
         score = 1.0
-        name  = "N50 Basket Mild Bullish — More Stock Longs than Shorts"
-        head  = f"N50 stock futures: {bull_pct:.0%} bullish vs {bear_pct:.0%} bearish (mild bull lean)"
+        name  = f"{short_lbl} Basket Mild Bullish — More Stock Longs than Shorts"
+        head  = f"{short_lbl} stock futures: {bull_pct:.0%} bullish vs {bear_pct:.0%} bearish"
         emoji = "🟡"
     elif net <= -0.45 and fs_pct >= 0.30:
         score = -3.0
-        name  = "N50 Basket Fresh Short Build — Institutional Conviction SELL"
-        head  = (f"{fs}/{valid} N50 stocks Fresh Short + {lu} Long Unwind "
-                 f"= {bear_pct:.0%} of basket bears (net {net:+.0%})")
+        name  = f"{short_lbl} Basket Fresh Short Build — Institutional Conviction SELL"
+        head  = (f"{fs}/{valid} {short_lbl} stocks Fresh Short + {lu} Long Unwind "
+                 f"= {bear_pct:.0%} bears (net {net:+.0%})")
         emoji = "💀"
     elif net <= -0.30:
         score = -2.0
-        name  = "N50 Basket Broadly Bearish — Stock Futures Net Short"
+        name  = f"{short_lbl} Basket Broadly Bearish — Stock Futures Net Short"
         head  = (f"{fs} fresh short + {lu} unwind vs {fl} fresh long + {sc} cov "
                  f"({bear_pct:.0%} bears, net {net:+.0%})")
         emoji = "🔴"
     elif net <= -0.15:
         score = -1.0
-        name  = "N50 Basket Mild Bearish — More Stock Shorts than Longs"
-        head  = f"N50 stock futures: {bear_pct:.0%} bearish vs {bull_pct:.0%} bullish (mild bear lean)"
+        name  = f"{short_lbl} Basket Mild Bearish — More Stock Shorts than Longs"
+        head  = f"{short_lbl} stock futures: {bear_pct:.0%} bearish vs {bull_pct:.0%} bullish"
         emoji = "🟠"
     else:
-        return None   # net between −0.15 and +0.15: mixed, no directional edge
+        return None
 
     direction = 1 if score > 0 else -1
     desc = (
-        f"OI-Price matrix applied to {valid} Nifty 50 constituent stocks with active futures:\n"
+        f"OI-Price matrix applied to {valid} {full_lbl} constituent stocks with active futures:\n"
         f"  Fresh Long Build  : {fl:2d} ({fl_pct:.0%}) — price ↑ + OI ↑ → new money entering longs\n"
         f"  Short Covering    : {sc:2d} — price ↑ + OI ↓ → shorts forced to buy back\n"
         f"  Long Unwinding    : {lu:2d} — price ↓ + OI ↓ → longs choosing to exit\n"
         f"  Fresh Short Build : {fs:2d} ({fs_pct:.0%}) — price ↓ + OI ↑ → new money entering shorts\n"
         f"\n"
-        f"INTERPRETATION: Index futures can be hedges — when FII shorts NIFTY futures they "
-        f"are often protecting a long cash portfolio (hence the bearish bias every day). "
-        f"STOCK futures have no such hedge role. When {fl} index components simultaneously "
-        f"show fresh long buildup in their individual stock futures, institutions are "
-        f"constructing the index basket via stock-level names — a directional conviction "
-        f"call that is independent of and complementary to the index-level OI signal."
+        f"STOCK futures have no hedge role (unlike FUTIDX). When {fl} {full_lbl} components "
+        f"simultaneously show fresh long buildup, institutions are constructing basket longs "
+        f"via individual names — directional conviction independent of index-level OI."
     )
 
     return IndexSignal(name, "Futures OI", direction, score, head, desc, emoji)
 
 
-def _sig_constituent_opt_oi_prem(ctx: MarketContext) -> Optional[IndexSignal]:
+def _sig_constituent_opt_oi_prem(
+    stats: _ConstituentStats, fno_symbol: str,
+) -> Optional[IndexSignal]:
     """
-    Signal 17e: Nifty 50 constituent stock options OI-Premium matrix — NIFTY exclusive.
+    Signal 17e: Constituent stock options OI-Premium matrix — NIFTY, BANKNIFTY, FINNIFTY.
 
-    WHAT IT MEASURES:
-      For each Nifty 50 stock: aggregate all near-expiry call and put strikes into
-      a single OI-change + volume-weighted premium change reading. Then classify
-      each stock's options configuration using the same 4-quadrant matrix as Signal 5:
+    OI-Premium matrix applied per constituent stock and aggregated to a basket view.
+    Disambiguates PCR — identifies whether OI is driven by buyers or writers.
 
-        OI ↑ + Premium ↑  →  Buying    (directional bet — paying UP for the option)
-        OI ↑ + Premium ↓  →  Writing   (premium collection — taking the OPPOSITE side)
-        OI ↓ + Premium ↑  →  SC        (writers buying back — options squeeze)
-        OI ↓ + Premium ↓  →  LE        (buyers closing out)
-
-    COMBINED BASKET CLASSIFICATION PER STOCK:
-        C.Buy  + P.Write = Net Long  → institutions bullish (both sides confirm)
-        C.Write + P.Buy  = Net Short → institutions bearish (both sides confirm)
-        C.Buy  + P.Buy   = Straddle  → big move expected, no direction
-        C.Write + P.Write = Range   → low vol / theta decay expected
-
-    WHY THIS IS DIFFERENT FROM SIGNAL 5 (Index PCR / OI-Premium):
-      Signal 5 analyses the options ON THE INDEX ITSELF (OPTIDX for NIFTY).
-      This signal analyses the options on the 50 individual stocks that MAKE UP the index.
-      When 30+ constituent stocks simultaneously show Call Buying across their own
-      options chains, institutions are buying individual-stock upside exposure —
-      the most specific expression of a bullish Nifty view possible.
-
-    SCORING (based on basket net_long_pct vs net_short_pct):
-      net ≥ 0.45  → +3.0  Exceptional: >45% more net-long stocks than net-short
-      net ≥ 0.25  → +2.0  Strong basket bullish options configuration
-      net ≥ 0.12  → +1.0  Mild bullish lean in constituent options
-      net ≤ −0.45 → −3.0  Exceptional: institutional bearish across basket
-      net ≤ −0.25 → −2.0  Strong basket bearish options
+    SCORING (net_long_pct − net_short_pct):
+      net ≥ 0.45  → +3.0  Exceptional bullish basket options config
+      net ≥ 0.25  → +2.0  Broadly bullish
+      net ≥ 0.12  → +1.0  Mild bullish lean
+      net ≤ −0.45 → −3.0  Exceptional bearish
+      net ≤ −0.25 → −2.0  Broadly bearish
       net ≤ −0.12 → −1.0  Mild bearish lean
     """
-    valid = ctx.n50_opt_valid
-    if valid < 15:
-        return None   # need at least 15 classifiable stocks
+    short_lbl, full_lbl = _CONSTITUENT_INFO.get(fno_symbol, ("IDX", "Index"))
+    min_valid = max(5, stats.total_stocks * 3 // 10)
+    valid = stats.opt_valid
+    if valid < min_valid:
+        return None
 
-    nl   = ctx.n50_opt_net_long
-    ns   = ctx.n50_opt_net_short
-    ostr = ctx.n50_opt_straddle
-    orng = ctx.n50_opt_range
+    nl   = stats.opt_net_long
+    ns   = stats.opt_net_short
+    ostr = stats.opt_straddle
+    orng = stats.opt_range
 
     nl_pct = nl / valid
     ns_pct = ns / valid
     net    = nl_pct - ns_pct
-
-    # Straddle dominance = big-move expectation, not directional
     straddle_dominant = ostr / valid >= 0.30
 
     if net >= 0.45:
         score = 3.0
-        name  = "N50 Basket Options: Exceptional Call Buying / Put Writing"
-        head  = (f"{nl}/{valid} N50 stocks Net Long options config "
+        name  = f"{short_lbl} Basket Options: Exceptional Call Buying / Put Writing"
+        head  = (f"{nl}/{valid} {short_lbl} stocks Net Long options config "
                  f"({nl_pct:.0%} bull vs {ns_pct:.0%} bear, net {net:+.0%})")
         emoji = "🔥"
     elif net >= 0.25:
         score = 2.0
-        name  = "N50 Basket Options: Broadly Bullish Configuration"
-        head  = (f"{nl} net-long vs {ns} net-short stocks in options "
+        name  = f"{short_lbl} Basket Options: Broadly Bullish Configuration"
+        head  = (f"{nl} net-long vs {ns} net-short {short_lbl} stocks in options "
                  f"({nl_pct:.0%} vs {ns_pct:.0%}, net {net:+.0%})")
         emoji = "🟢"
     elif net >= 0.12:
         score = 1.0
-        name  = "N50 Basket Options: Mild Bullish Lean"
-        head  = f"N50 options basket: {nl_pct:.0%} bullish vs {ns_pct:.0%} bearish (mild bull)"
+        name  = f"{short_lbl} Basket Options: Mild Bullish Lean"
+        head  = f"{short_lbl} options basket: {nl_pct:.0%} bullish vs {ns_pct:.0%} bearish"
         emoji = "🟡"
     elif net <= -0.45:
         score = -3.0
-        name  = "N50 Basket Options: Exceptional Put Buying / Call Writing"
-        head  = (f"{ns}/{valid} N50 stocks Net Short options config "
+        name  = f"{short_lbl} Basket Options: Exceptional Put Buying / Call Writing"
+        head  = (f"{ns}/{valid} {short_lbl} stocks Net Short options config "
                  f"({ns_pct:.0%} bear vs {nl_pct:.0%} bull, net {net:+.0%})")
         emoji = "💀"
     elif net <= -0.25:
         score = -2.0
-        name  = "N50 Basket Options: Broadly Bearish Configuration"
-        head  = (f"{ns} net-short vs {nl} net-long stocks in options "
+        name  = f"{short_lbl} Basket Options: Broadly Bearish Configuration"
+        head  = (f"{ns} net-short vs {nl} net-long {short_lbl} stocks in options "
                  f"({ns_pct:.0%} vs {nl_pct:.0%}, net {net:+.0%})")
         emoji = "🔴"
     elif net <= -0.12:
         score = -1.0
-        name  = "N50 Basket Options: Mild Bearish Lean"
-        head  = f"N50 options basket: {ns_pct:.0%} bearish vs {nl_pct:.0%} bullish (mild bear)"
+        name  = f"{short_lbl} Basket Options: Mild Bearish Lean"
+        head  = f"{short_lbl} options basket: {ns_pct:.0%} bearish vs {nl_pct:.0%} bullish"
         emoji = "🟠"
     else:
-        return None   # net between -0.12 and +0.12: mixed, no directional edge
+        return None
 
-    # Straddle note: large straddle count means big-move expectations even on directional signal
     straddle_note = ""
     if straddle_dominant:
         straddle_note = (
-            f" Note: {ostr}/{valid} stocks also show straddle config (both call + put buying) — "
-            "options market expects high volatility regardless of direction."
+            f" Note: {ostr}/{valid} stocks show straddle config (both call + put buying) — "
+            "high volatility expected regardless of direction."
         )
 
     direction = 1 if score > 0 else -1
     desc = (
-        f"OI-Premium matrix applied to near-expiry options chains of {valid} Nifty 50 stocks:\n"
+        f"OI-Premium matrix applied to near-expiry options chains of {valid} {full_lbl} stocks:\n"
         f"  Net Long  (C.Buy/P.Write) : {nl:2d} ({nl_pct:.0%}) — both sides confirm bullish\n"
         f"  Net Short (C.Write/P.Buy) : {ns:2d} ({ns_pct:.0%}) — both sides confirm bearish\n"
         f"  Straddle  (C.Buy+P.Buy)   : {ostr:2d} — big move expected, no direction\n"
         f"  Range     (C.Write+P.Write): {orng:2d} — low vol / theta play\n"
         f"\n"
-        f"OI-Premium matrix disambiguates PCR: a high PCR could mean put buying (bearish hedge) "
-        f"OR put writing (bullish premium collection) — completely opposite signals from the "
-        f"same raw number. By checking whether premium rises or falls WITH the OI change, "
-        f"we determine WHO is driving the OI. "
-        f"Applied to 50 constituent stocks individually, this reveals whether the options "
-        f"activity is directional conviction or just mechanical hedging."
+        f"OI-Premium matrix disambiguates PCR: put OI rising could mean put buying (bearish) "
+        f"OR put writing (bullish) — opposite conclusions from the same raw number. "
+        f"Checking whether premium moves WITH OI determines who is driving it."
         f"{straddle_note}"
     )
 
@@ -2236,7 +2237,7 @@ def _sig_max_pain_convergence(
             f"Weekly expiry in {dte_weekly}d. Monthly max pain {monthly_max_pain:.0f} "
             f"({monthly_gap_pct:+.1f}% below spot) will dominate after weekly pin dissolves. "
             "Post-weekly drift toward monthly max pain is a high-probability setup — "
-            f"option writers shift attention to monthly strikes after Thursday.", "⬇️",
+            f"option writers shift attention to monthly strikes after weekly Tuesday expires.", "⬇️",
         )
 
     return None
@@ -2496,6 +2497,7 @@ def _compute_expected_move(
     dte: int,
     levels: IndexKeyLevels,
     is_nifty: bool,
+    gamma_ratio: Optional[float] = None,
 ) -> dict:
     """
     Quantify the MAGNITUDE of tomorrow's expected move — "how many points".
@@ -2509,6 +2511,10 @@ def _compute_expected_move(
       3. Blend: Nifty → 50/50 realized+VIX; other indices → 70/30 (realized leads,
          VIX as a market-wide vol-regime nudge).
       4. Expiry compression: DTE ≤ 1 gamma pinning shrinks the range (×0.70).
+      5. OI wall anchoring: when the weekly call wall or put wall falls INSIDE the
+         statistical 1σ range, the range bound is compressed to the wall level.
+         Option writers actively defend those strikes — the effective range is tighter
+         than the unconditional vol estimate.
 
     The expected_move is the 1σ band (~68% of days close within ±expected_move).
     The directional target skews within that band by conviction = composite/20.
@@ -2563,20 +2569,180 @@ def _compute_expected_move(
     target_move = conviction * expected_move_pts
     target_close = spot_close + target_move
 
+    # ── OI wall context (informational — does NOT change the statistical range) ──
+    # Call/put walls show where option writers are concentrated and delta-hedging
+    # creates friction.  They are RESISTANCE / SUPPORT zones, not probability
+    # ceilings or floors.  In a gamma-squeeze or strong trend the wall is blown
+    # through — capping range_high at the call wall would understate upside on
+    # exactly those days.  Show the wall positions as context so the trader knows
+    # where friction sits WITHIN the 1σ band, but keep the 68% claim intact.
+    range_low_stat  = spot_close - expected_move_pts
+    range_high_stat = spot_close + expected_move_pts
+    wall_notes: list[str] = []
+
+    call_wall = levels.top_call_strike if levels else None
+    put_wall  = levels.top_put_strike  if levels else None
+
+    if call_wall and call_wall > spot_close:
+        loc = "inside range — resistance" if call_wall < range_high_stat else "beyond range"
+        wall_notes.append(f"call wall {call_wall:.0f} ({loc})")
+
+    if put_wall and put_wall < spot_close:
+        loc = "inside range — support" if put_wall > range_low_stat else "beyond range"
+        wall_notes.append(f"put wall {put_wall:.0f} ({loc})")
+
+    # Weekly OI concentration note
+    if gamma_ratio is not None and gamma_ratio > 0.58 and 2 <= dte <= 6:
+        wall_notes.append(f"weekly OI {gamma_ratio*100:.0f}% of total — near-expiry pin zone")
+
+    wall_suffix = (" · " + " · ".join(wall_notes)) if wall_notes else ""
+
     out.update(
         expected_move_pts=round(expected_move_pts, 0),
         expected_move_pct=round(sigma_pct, 2),
-        range_low=round(spot_close - expected_move_pts, 0),
-        range_high=round(spot_close + expected_move_pts, 0),
+        range_low=round(range_low_stat, 0),
+        range_high=round(range_high_stat, 0),
         target_move_pts=round(target_move, 0),
         target_close=round(target_close, 0),
         sideways_band_pts=round(sideways_band, 0),
         move_basis=(
             f"1σ ≈ {sigma_pct:.2f}% ({basis_src}{pin_note}); "
-            f"68% of days close within ±{expected_move_pts:.0f} pts"
+            f"~75% of days close within ±{expected_move_pts:.0f} pts (VIX premium widens range vs theoretical 68%)"
+            f"{wall_suffix}"
         ),
     )
     return out
+
+
+# Breakout threshold: 50 pts on NIFTY (~0.21% of spot). Scales proportionally for other indices.
+_BREAKOUT_PCT = 0.21
+
+
+def _compute_breakout_extensions(
+    spot_close: float,
+    expected_move_pts: float,
+    range_low: float,
+    range_high: float,
+    levels: IndexKeyLevels,
+    composite: float,
+    fii_net: Optional[int] = None,
+    pcr: Optional[float] = None,
+    carry_pct_ann: Optional[float] = None,
+    dte: int = 30,
+) -> dict:
+    """
+    Compute the SECOND range — where the index heads if it breaks the first range.
+
+    Logic (asymmetric quant framework):
+      Threshold = max(50 pts, 0.21% of spot) — scales across all 4 indices.
+
+      UPSIDE EXTENSION (base = spot + 2σ):
+        FII short squeeze amplification — when FII is massively net short, covering
+        cascades create a CONVEX payoff: each uptick forces more covering, pushing
+        further than statistical vol predicts.
+          fii_net < -200k → ×1.20 (extend to 2.4σ — large squeeze risk)
+          fii_net < -100k → ×1.12 (extend to 2.24σ — moderate squeeze)
+
+      DOWNSIDE EXTENSION (base = spot - 2σ):
+        PCR put-writing floor — when PCR is elevated, put writers (short puts)
+        delta-hedge by BUYING futures as price falls, creating a real floor.
+          pcr > 1.30 → ×0.80 (compress to 1.6σ — strong put-writing floor)
+          pcr > 1.00 → ×0.90 (compress to 1.8σ — mild floor)
+        Backwardation override: futures stress deepens on downside breaks;
+          carry_pct_ann < 0 partially offsets PCR floor compression.
+
+      OI WALL OVERRIDE: if a call/put wall sits inside the computed extension zone,
+        it replaces the statistical cap as the structural target.
+    """
+    threshold      = max(50.0, round(spot_close * _BREAKOUT_PCT / 100, 0))
+    two_sigma      = expected_move_pts * 2.0
+
+    # Guard: if vol is too low relative to threshold, no meaningful second range
+    if expected_move_pts <= threshold:
+        return {}
+
+    up_trigger     = range_high + threshold
+    dn_trigger     = range_low  - threshold
+
+    # ── Upside extension: FII short squeeze amplification ────────────────────
+    up_sigma_mult = 1.0
+    up_adj_note   = ""
+    if fii_net is not None:
+        if fii_net < -200_000:
+            up_sigma_mult = 1.20
+            up_adj_note   = f"FII {fii_net:,} short → squeeze extends to 2.4σ"
+        elif fii_net < -100_000:
+            up_sigma_mult = 1.12
+            up_adj_note   = f"FII {fii_net:,} short → squeeze risk 2.2σ"
+
+    two_sigma_high = spot_close + two_sigma * up_sigma_mult
+
+    # ── Downside extension: PCR put-writing floor + backwardation offset ─────
+    dn_sigma_mult = 1.0
+    dn_adj_note   = ""
+    if pcr is not None:
+        if pcr > 1.30:
+            dn_sigma_mult = 0.80
+            dn_adj_note   = f"PCR {pcr:.2f} put-writing → floor at 1.6σ"
+        elif pcr > 1.00:
+            dn_sigma_mult = 0.90
+            dn_adj_note   = f"PCR {pcr:.2f} put-writing → floor at 1.8σ"
+    # Backwardation adds institutional selling pressure — partially offsets PCR floor
+    if carry_pct_ann is not None and carry_pct_ann < 0:
+        dn_sigma_mult = min(dn_sigma_mult + 0.07, 1.0)   # loosen floor by 7% of 2σ
+        bkwd_note = f"backwardation {carry_pct_ann:.1f}% adds sell pressure"
+        dn_adj_note = (dn_adj_note + " · " + bkwd_note) if dn_adj_note else bkwd_note
+
+    two_sigma_low = spot_close - two_sigma * dn_sigma_mult
+
+    # ── OI wall override: structural level beats statistical estimate ─────────
+    call_walls_in_zone = sorted([
+        w for w in [levels.top_call_strike, levels.second_call_strike]
+        if w and up_trigger < w <= two_sigma_high
+    ])
+    if call_walls_in_zone:
+        up_end = call_walls_in_zone[0]
+        up_src = f"call wall {up_end:.0f}"
+        if up_adj_note:
+            up_src += f" · {up_adj_note}"
+    else:
+        up_end = two_sigma_high
+        sigma_label = f"{up_sigma_mult * 2:.1f}σ"
+        up_src = f"{sigma_label} statistical" + (f" · {up_adj_note}" if up_adj_note else "")
+
+    put_walls_in_zone = sorted([
+        w for w in [levels.top_put_strike, levels.second_put_strike]
+        if w and two_sigma_low <= w < dn_trigger
+    ], reverse=True)
+    if put_walls_in_zone:
+        dn_start = put_walls_in_zone[0]
+        dn_src = f"put wall {dn_start:.0f}"
+        if dn_adj_note:
+            dn_src += f" · {dn_adj_note}"
+    else:
+        dn_start = two_sigma_low
+        sigma_label = f"{dn_sigma_mult * 2:.1f}σ"
+        dn_src = f"{sigma_label} statistical" + (f" · {dn_adj_note}" if dn_adj_note else "")
+
+    # ── Max pain gravity note (DTE ≤ 7: gravity is meaningful) ───────────────
+    mp = levels.max_pain if levels else None
+    if mp and dte <= 7:
+        mp_gap_up = mp - up_trigger
+        mp_gap_dn = dn_trigger - mp
+        if mp_gap_up < 0:   # max pain BELOW the upside breakout trigger
+            up_src += f" · max pain {mp:.0f} ({abs(mp_gap_up):.0f} pts below break → gravity)"
+        if mp_gap_dn < 0:   # max pain ABOVE the downside breakout trigger
+            dn_src += f" · max pain {mp:.0f} ({abs(mp_gap_dn):.0f} pts above break → gravity)"
+
+    return dict(
+        breakout_threshold_pts=round(threshold, 0),
+        breakout_up_start=round(up_trigger, 0),
+        breakout_up_end=round(up_end, 0),
+        breakout_dn_start=round(dn_start, 0),
+        breakout_dn_end=round(dn_trigger, 0),
+        breakout_up_src=up_src,
+        breakout_dn_src=dn_src,
+    )
 
 
 def _compute_verdict(
@@ -2739,14 +2905,26 @@ def _compute_prediction(
             high_val         = float(r["high_val"])   if pd.notna(r.get("high_val"))   else None
             low_val          = float(r["low_val"])    if pd.notna(r.get("low_val"))    else None
 
-    # ── Active futures (OI > 0) ───────────────────────────────────────────────
+    # ── Active futures (OI > 0, not yet expired) ─────────────────────────────
+    # Filter: expiry_date > trade_date — this is the critical "next-day forecast" gate.
+    # The prediction is computed from EOD data on trade_date and is USED on trade_date+1.
+    # Including trade_date's expiring contract would make dte=0, firing "Expiry day —
+    # gamma pinning" for a day where expiry has already resolved.  By excluding contracts
+    # that expire on or before trade_date, the prediction always reflects the NEXT active
+    # cycle — exactly what a trader needs for tomorrow.
+    # Side-effect: expiry-day verdict (dte≤1) now fires only on DTE=1 (day before expiry),
+    # which correctly predicts "tomorrow will have gamma pinning."
     near_expiry = fut_expiry = None
     days_to_expiry = 30
     futures_price = carry_pts = carry_pct_ann = None
     carry_label = "No Data"
     fut_oi = fut_oi_chg = 0
 
-    fut_rows = fno_today[(fno_today["instrument"] == "FUTIDX") & (fno_today["open_interest"] > 0)].sort_values("expiry_date")
+    fut_rows = fno_today[
+        (fno_today["instrument"] == "FUTIDX") &
+        (fno_today["open_interest"] > 0) &
+        (fno_today["expiry_date"] > trade_date)     # exclude expired / expiring-today
+    ].sort_values("expiry_date")
     if not fut_rows.empty:
         nr = fut_rows.iloc[0]
         fut_expiry     = _to_date(nr["expiry_date"])
@@ -2770,6 +2948,15 @@ def _compute_prediction(
             else:
                 # Same expiry_date not found in yesterday → contract just rolled
                 is_rollover = True
+        # On futures expiry day (DTE=0), the near contract's OI collapses due to
+        # settlement (both longs and shorts close simultaneously), not directional
+        # activity. The OI-Price Matrix would show extreme percentages like -3246%
+        # because the remaining residual OI is tiny relative to yesterday's full OI.
+        # Treat as rollover-like: signal fires price-direction-only at half-score
+        # with an "Expiry Day" label rather than "Short Covering / Long Unwinding".
+        if days_to_expiry == 0 and not is_rollover:
+            is_rollover = True   # settlement ≡ rollover for OI-matrix purposes
+
         if spot_close and futures_price and days_to_expiry >= 3:
             carry_pts     = futures_price - spot_close
             carry_pct_ann = (carry_pts / spot_close) * (365.0 / max(days_to_expiry, 1)) * 100
@@ -2777,8 +2964,12 @@ def _compute_prediction(
         elif futures_price and not spot_close:
             spot_close = futures_price
 
-    # ── Options expiry (weekly, for PCR / max pain) ───────────────────────────
-    opt_rows = fno_today[fno_today["instrument"] == "OPTIDX"].sort_values("expiry_date")
+    # ── Options near-expiry (weekly Tuesday for NIFTY; monthly last-Tuesday for others) ─
+    # Same expiry_date > trade_date guard as fut_rows — use only future contracts.
+    opt_rows = fno_today[
+        (fno_today["instrument"] == "OPTIDX") &
+        (fno_today["expiry_date"] > trade_date)     # exclude expired / expiring-today
+    ].sort_values("expiry_date")
     near_expiry = _to_date(opt_rows.iloc[0]["expiry_date"]) if not opt_rows.empty else fut_expiry
 
     call_oi = put_oi = 0; pcr = None
@@ -2803,7 +2994,7 @@ def _compute_prediction(
     monthly_pcr_val: Optional[float] = None
     monthly_max_pain_lvl: Optional[float] = None
     gamma_ratio_val: Optional[float] = None
-    near_is_monthly = False   # True during the ~4 days of the monthly expiry week
+    near_is_monthly = False   # True for ~7 days before the last Tuesday (once near_expiry = last in month)
 
     if fno_symbol == "NIFTY" and not opt_rows.empty:
         all_exp = sorted(_to_date(e) for e in opt_rows["expiry_date"].unique() if e is not None)
@@ -2841,7 +3032,11 @@ def _compute_prediction(
     if spot_close and high_val and low_val and (high_val - low_val) > 5:
         range_pos = (spot_close - low_val) / (high_val - low_val)
 
-    near_expiry_display = fut_expiry or near_expiry
+    # Prefer options-based near_expiry for display: on expiry day the near-futures
+    # contract often has OI=0 (fully settled) so fut_rows picks up the NEXT month's
+    # contract, making fut_expiry=next_month while options still reference today.
+    # Using near_expiry first keeps the card showing today's expiry correctly.
+    near_expiry_display = near_expiry or fut_expiry
 
     # ── Snapshots ─────────────────────────────────────────────────────────────
     today_snap = _build_snapshot(trade_date, idx_hist, fno_today, near_expiry,
@@ -2851,7 +3046,13 @@ def _compute_prediction(
         pr     = idx_hist[idx_hist["trade_date"] == prev_fno_date]
         pspot  = float(pr.iloc[0]["close_val"]) if not pr.empty and pd.notna(pr.iloc[0]["close_val"]) else None
         pfut_p = pcarry = pcarry_ann = None; popt_exp = None
-        pfut   = fno_prev[(fno_prev["instrument"] == "FUTIDX") & (fno_prev["open_interest"] > 0)].sort_values("expiry_date")
+        # Use the same expiry_date > trade_date gate so yesterday_snap references the
+        # same contract as today_snap — making the Today vs Yesterday comparison apples-to-apples.
+        pfut   = fno_prev[
+            (fno_prev["instrument"] == "FUTIDX") &
+            (fno_prev["open_interest"] > 0) &
+            (fno_prev["expiry_date"] > trade_date)
+        ].sort_values("expiry_date")
         if not pfut.empty:
             pnr = pfut.iloc[0]; pne = _to_date(pnr["expiry_date"])
             pfut_p = float(pnr["settle_price"]) if pd.notna(pnr["settle_price"]) else None
@@ -2860,7 +3061,10 @@ def _compute_prediction(
                 if pT > 3 / 365:
                     pcarry = pfut_p - pspot
                     pcarry_ann = (pcarry / pspot) * (1.0 / pT) * 100
-        por = fno_prev[fno_prev["instrument"] == "OPTIDX"].sort_values("expiry_date")
+        por = fno_prev[
+            (fno_prev["instrument"] == "OPTIDX") &
+            (fno_prev["expiry_date"] > trade_date)
+        ].sort_values("expiry_date")
         if not por.empty: popt_exp = _to_date(por.iloc[0]["expiry_date"])
         yesterday_snap = _build_snapshot(prev_fno_date, idx_hist, fno_prev, popt_exp,
                                          pspot, pfut_p, pcarry, pcarry_ann)
@@ -2885,7 +3089,21 @@ def _compute_prediction(
     add(_sig_price_action(idx_hist))
     sigs.append(_sig_oi_price_matrix(day_change_pct, fut_oi_chg, fut_oi, is_rollover=is_rollover))
     add(_sig_carry(carry_pct_ann, carry_pts))
-    add(_sig_pcr(pcr, yesterday_snap.pcr if yesterday_snap else None))
+    # Compare PCR only against the SAME expiry's prior-day OI (via _opt_near_p, which is
+    # fno_prev filtered to today's near_expiry).  On the first day of a new cycle,
+    # _opt_near_p is empty → _prev_pcr = None → no crossing detection fires.
+    # Using yesterday_snap.pcr was wrong: it comes from yesterday's OWN near_expiry
+    # (the contract that just expired), giving false fresh_spike / fresh_drop signals.
+    # After Sep 2025 NSE change: NIFTY weekly = Tuesday (new cycle starts Wednesday);
+    # BANKNIFTY/FINNIFTY/MIDCPNIFTY monthly-only (new cycle starts first Wednesday
+    # of each month after the last-Tuesday monthly expiry).
+    _prev_pcr: Optional[float] = None
+    if not _opt_near_p.empty:
+        _p_call_oi = int(_opt_near_p[_opt_near_p["option_type"] == "CE"]["open_interest"].sum())
+        _p_put_oi  = int(_opt_near_p[_opt_near_p["option_type"] == "PE"]["open_interest"].sum())
+        if _p_call_oi > 0:
+            _prev_pcr = round(_p_put_oi / _p_call_oi, 2)
+    add(_sig_pcr(pcr, _prev_pcr))
     add(_sig_opt_oi_premium(_opt_near_t, _opt_near_p))   # Signal 5 — OI-Premium matrix
     if spot_close and dte_options <= 5:
         add(_sig_max_pain(levels.max_pain, spot_close, dte_options))
@@ -2907,17 +3125,18 @@ def _compute_prediction(
     add(_sig_valuation_pe(market_ctx))
     # Signal 17b: sector RS vs Nifty — fires for BankNifty / FinNifty / MidcapNifty only
     add(_sig_index_relative_strength(fno_symbol, day_change_pct, market_ctx))
-    # Signals 17c/d/e: Nifty 50 constituent data — NIFTY only
-    if fno_symbol == "NIFTY":
-        add(_sig_constituent_breadth(market_ctx))       # 17c cash breadth + delivery
-        add(_sig_constituent_fut_oi(market_ctx))         # 17d stock futures OI-Price
-        add(_sig_constituent_opt_oi_prem(market_ctx))    # 17e stock options OI-Premium
+    # Signals 17c/d/e: constituent breadth + futures + options — NIFTY, BANKNIFTY, FINNIFTY
+    _cstats = market_ctx.constituent_stats.get(fno_symbol)
+    if _cstats:
+        add(_sig_constituent_breadth(_cstats, fno_symbol))      # 17c cash breadth + delivery
+        add(_sig_constituent_fut_oi(_cstats, fno_symbol))       # 17d stock futures OI-Price
+        add(_sig_constituent_opt_oi_prem(_cstats, fno_symbol))  # 17e stock options OI-Premium
 
     # — Signals 18-20: Nifty 50 multi-expiry (fires only when weekly ≠ monthly) —
     if fno_symbol == "NIFTY" and monthly_exp_me is not None:
         dte_monthly = (monthly_exp_me - trade_date).days
         # PCR divergence requires a genuine weekly vs monthly distinction.
-        # When near_expiry IS the monthly (last ~4 days of the month), "monthly_exp_me"
+        # When near_expiry IS the monthly (last ~7 days before the last Tuesday), "monthly_exp_me"
         # is next month's expiry — comparing same-horizon PCR to next-month PCR
         # produces a meaningless "weekly vs monthly" label. Suppress in that case.
         if not near_is_monthly:
@@ -3003,13 +3222,27 @@ def _compute_prediction(
     em = _compute_expected_move(
         idx_hist, spot_close, market_ctx.vix_close, composite,
         dte_options, levels, is_nifty=(fno_symbol == "NIFTY"),
+        gamma_ratio=gamma_ratio_val,
     )
+
+    # ── Breakout Extension Ranges (second range if first range is broken) ──────
+    bo: dict = {}
+    if (em.get("range_low") is not None and em.get("range_high") is not None
+            and em.get("expected_move_pts") is not None and spot_close):
+        bo = _compute_breakout_extensions(
+            spot_close, em["expected_move_pts"],
+            em["range_low"], em["range_high"], levels, composite,
+            fii_net=market_ctx.fii_fut_idx_net,
+            pcr=pcr,
+            carry_pct_ann=carry_pct_ann,
+            dte=dte_options,
+        )
 
     pred_out = IndexPrediction(
         fno_symbol=fno_symbol, display_name=display_name, as_of_date=trade_date,
         spot_close=spot_close, prev_close=prev_close_price,
         day_change_pct=day_change_pct, high=high_val, low=low_val,
-        near_expiry=near_expiry_display, days_to_expiry=days_to_expiry,
+        near_expiry=near_expiry_display, days_to_expiry=dte_options,
         futures_price=futures_price, carry_pts=carry_pts,
         carry_pct_ann=carry_pct_ann, carry_label=carry_label,
         fut_oi=fut_oi, fut_oi_chg=fut_oi_chg, call_oi=call_oi, put_oi=put_oi, pcr=pcr,
@@ -3039,6 +3272,14 @@ def _compute_prediction(
         target_close=em["target_close"],
         sideways_band_pts=em["sideways_band_pts"],
         move_basis=em["move_basis"],
+        # Breakout extension ranges
+        breakout_threshold_pts=bo.get("breakout_threshold_pts"),
+        breakout_up_start=bo.get("breakout_up_start"),
+        breakout_up_end=bo.get("breakout_up_end"),
+        breakout_dn_start=bo.get("breakout_dn_start"),
+        breakout_dn_end=bo.get("breakout_dn_end"),
+        breakout_up_src=bo.get("breakout_up_src", ""),
+        breakout_dn_src=bo.get("breakout_dn_src", ""),
     )
 
     # Auto-store prediction in memory engine (non-fatal).

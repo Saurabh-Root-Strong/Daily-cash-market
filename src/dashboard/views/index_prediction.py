@@ -25,13 +25,15 @@ from src.dashboard.constants import GRID_COLOR, PAPER_BG, PLOT_BG
 _DIR_EMOJI  = {"UP": "↑", "DOWN": "↓", "SIDEWAYS": "↔"}
 _CONF_COLOR = {"HIGH": "#00C853", "MEDIUM": "#FFD600", "LOW": "#78909C"}
 _CAT_COLOR  = {
-    "Price Action":   "#9c27b0",
-    "Futures OI":     "#2196f3",
-    "Options OI":     "#ff9800",
-    "Carry":          "#4caf50",
-    "Institutional":  "#f44336",
-    "Market Context": "#00bcd4",
-    "Sector":         "#8bc34a",
+    "Price Action":      "#9c27b0",
+    "Futures OI":        "#2196f3",
+    "Options OI":        "#ff9800",
+    "Carry":             "#4caf50",
+    "Institutional":     "#f44336",
+    "Market Context":    "#00bcd4",
+    "Sector":            "#8bc34a",
+    "Statistical Regime": "#607d8b",
+    "Memory":            "#795548",
 }
 _POS  = "#69f0ae"
 _NEG  = "#ff5252"
@@ -122,6 +124,8 @@ def _expected_move_box(pred: "IndexPrediction") -> str:
     band = pred.sideways_band_pts or 0
     spot = pred.spot_close
 
+    range_label = "Expected Range (~75%)"
+
     tgt_color = _POS if tmv > 0 else (_NEG if tmv < 0 else _NEU)
     arrow     = "▲" if tmv > 0 else ("▼" if tmv < 0 else "↔")
 
@@ -145,7 +149,7 @@ def _expected_move_box(pred: "IndexPrediction") -> str:
         # Expected range
         f"<div style='min-width:160px'>"
         f"<div style='color:#888;font-size:0.72em;text-transform:uppercase;letter-spacing:0.5px'>"
-        f"Expected Range (68%)</div>"
+        f"Expected Range (~75%)</div>"
         f"<div style='color:#fff;font-weight:700;font-size:1.0em'>"
         f"{lo:,.0f} – {hi:,.0f}</div>"
         f"<div style='color:#888;font-size:0.75em'>±{em:,.0f} pts (±{pct:.2f}%)</div>"
@@ -168,6 +172,74 @@ def _expected_move_box(pred: "IndexPrediction") -> str:
         f"</div>"
         f"<div style='margin-top:6px;font-size:0.78em'>{magnitude_verdict}</div>"
         f"<div style='margin-top:3px;color:#666;font-size:0.72em'>{pred.move_basis}</div>"
+        f"</div>"
+    )
+
+
+def _breakout_extension_box(pred: "IndexPrediction") -> str:
+    """
+    Second-range breakout extension box.
+
+    Shows WHERE the index is likely headed if the first range is broken by more
+    than the threshold (default ~50 pts on NIFTY, proportionally scaled for others).
+
+    Layout:
+      ↑ UPSIDE BREAK  >X  →  second range: X – Y   [source]
+      ↓ DOWNSIDE BREAK <X →  second range: A – B   [source]
+    """
+    if pred.breakout_threshold_pts is None or pred.breakout_up_start is None:
+        return ""
+
+    thr  = pred.breakout_threshold_pts
+    us   = pred.breakout_up_start
+    ue   = pred.breakout_up_end
+    ds   = pred.breakout_dn_start
+    de   = pred.breakout_dn_end
+    usrc = pred.breakout_up_src or "2σ statistical"
+    dsrc = pred.breakout_dn_src or "2σ statistical"
+
+    if ue is None or ds is None or de is None:
+        return ""
+
+    up_pts   = round(ue - us, 0)
+    dn_pts   = round(abs(de - ds), 0)
+
+    # Split source into the primary label (first part) and context notes (rest)
+    def _split_src(src: str) -> tuple[str, str]:
+        parts = src.split(" · ", 1)
+        return parts[0], (" · " + parts[1]) if len(parts) > 1 else ""
+
+    up_primary, up_context = _split_src(usrc)
+    dn_primary, dn_context = _split_src(dsrc)
+
+    return (
+        f"<div style='background:#0d1117;border:1px solid #2a3a2a;border-radius:8px;"
+        f"padding:8px 14px;margin-bottom:10px'>"
+        f"<div style='color:#555;font-size:0.68em;text-transform:uppercase;letter-spacing:0.5px;"
+        f"margin-bottom:6px'>Breakout Scenarios — if range breaks by &gt;{thr:.0f} pts</div>"
+        # Two columns: upside | downside
+        f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:10px'>"
+        # Upside breakout
+        f"<div style='border-left:2px solid #69f0ae;padding-left:8px'>"
+        f"<div style='color:#888;font-size:0.68em;text-transform:uppercase;letter-spacing:0.4px'>"
+        f"If Upside Break (&gt;{us:,.0f})</div>"
+        f"<div style='color:#69f0ae;font-weight:700;font-size:0.95em'>"
+        f"{us:,.0f} — {ue:,.0f}</div>"
+        f"<div style='color:#69f0ae;font-size:0.72em'>+{up_pts:,.0f} pts extension zone</div>"
+        f"<div style='color:#888;font-size:0.70em;margin-top:2px'>{up_primary}</div>"
+        f"<div style='color:#444;font-size:0.66em'>{up_context}</div>"
+        f"</div>"
+        # Downside breakout
+        f"<div style='border-left:2px solid #ff5252;padding-left:8px'>"
+        f"<div style='color:#888;font-size:0.68em;text-transform:uppercase;letter-spacing:0.4px'>"
+        f"If Downside Break (&lt;{de:,.0f})</div>"
+        f"<div style='color:#ff5252;font-weight:700;font-size:0.95em'>"
+        f"{ds:,.0f} — {de:,.0f}</div>"
+        f"<div style='color:#ff5252;font-size:0.72em'>{dn_pts:,.0f} pts extension zone</div>"
+        f"<div style='color:#888;font-size:0.70em;margin-top:2px'>{dn_primary}</div>"
+        f"<div style='color:#444;font-size:0.66em'>{dn_context}</div>"
+        f"</div>"
+        f"</div>"
         f"</div>"
     )
 
@@ -524,18 +596,23 @@ def _render_oi_chart(pred: IndexPrediction) -> None:
 # ── Signal breakdown ──────────────────────────────────────────────────────────
 
 def _render_signals(pred: IndexPrediction) -> None:
-    n_core = 17
-    n_extra = 3 if pred.fno_symbol == "NIFTY" and pred.monthly_expiry is not None else 0
-    n_desc = f"{n_core + n_extra}" if n_extra else str(n_core)
-    multi_note = " + 3 Nifty multi-expiry signals (weekly vs monthly PCR, dual max pain, gamma wall)" if n_extra else ""
-    _h("Signal Breakdown", f"All {n_desc} signals grouped by tier{multi_note}. Green = bullish, Red = bearish. Weighted composite score drives the final UP/DOWN/SIDEWAYS verdict. High-confidence calls require 3+ signals aligned in the same direction.")
+    n_total = len(pred.signals)
+    _h(
+        "Signal Breakdown",
+        f"All {n_total} fired signals grouped by tier. Green = bullish, Red = bearish. "
+        "Weighted composite score drives the final UP/DOWN/SIDEWAYS verdict. "
+        "Institutional signals are capped at ±3.0 to prevent collinear FII data from "
+        "dominating the score. Statistical Regime signals (Hurst, HMM, Entropy) also have "
+        "full visualisations in the Statistical Regime tab.",
+    )
     if not pred.signals:
         st.caption("No signals computed.")
         return
 
-    # Group by tier for readability
+    # Group by tier for readability — includes Statistical Regime + Memory
     tier_order = ["Institutional", "Options OI", "Futures OI", "Carry",
-                  "Price Action", "Market Context", "Sector"]
+                  "Price Action", "Market Context", "Sector",
+                  "Statistical Regime", "Memory"]
     grouped: dict[str, list[IndexSignal]] = {}
     for s in pred.signals:
         grouped.setdefault(s.category, []).append(s)
@@ -705,6 +782,7 @@ def _render_verdict(pred: IndexPrediction) -> None:
             </div>
             <div style="color:#ddd;font-size:0.9em;margin-bottom:10px">{pred.headline}</div>
             {_expected_move_box(pred)}
+            {_breakout_extension_box(pred)}
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.82em">
                 <div>
                     <div style="color:#69f0ae;font-weight:600;margin-bottom:2px">Key Driver</div>
@@ -1370,7 +1448,8 @@ def render(selected_date: date) -> None:
   - **81–100 = STRONG BULL** 🟢🟢 — very high bullish conviction
   - Raw score shown in brackets for reference — 50 = neutral, each 10 points = one strong signal
 - **Expected Move forecast** (in the Verdict & Signals tab) — answers *how many points*:
-  - **Expected Range (68%)** — the 1σ volatility cone: tomorrow's close lands inside this ~68% of the time.
+  - **Expected Range (~75%)** — the 1σ volatility band: tomorrow's close lands inside this ~75% of the time
+    (India VIX trades at a premium to realized vol, so the blended range is wider than pure 1σ = 68%).
     Computed from realized 20-day volatility blended with India VIX (forward-looking implied vol).
     Bank Nifty's range is naturally wider than Nifty (index-specific volatility).
   - **Directional Target** — where the engine expects the close, skewed within the range by conviction

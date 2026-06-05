@@ -416,6 +416,453 @@ def get_sector_rotation(
     return result.sort_values("accum_score", ascending=False).reset_index(drop=True)
 
 
+# ── Market Regime ─────────────────────────────────────────────────────────────
+
+def get_market_regime(as_of_date: date) -> dict:
+    """
+    Compute the current market regime from 5 independent signals already in the DB.
+
+    Design principle: sector rotation signals are RELATIVE (rank within universe).
+    The market regime answers the ABSOLUTE question: is the environment suitable
+    for deploying capital, or is the index beta drag larger than any sector alpha?
+
+    Five inputs — no new data needed:
+      1. Nifty50 vs 20D EMA  (short-term trend direction)
+      2. Nifty50 vs 50D EMA  (medium-term trend confirmation)
+      3. India VIX level + 5D change  (fear gauge)
+      4. FII 5D cumulative futures net flow  (institutional stance)
+      5. HMM statistical state from prediction_log  (regime memory)
+
+    Score: 0.0 (max bear) → 10.0 (max bull), 5.0 = neutral.
+    Regime labels:
+      BULL          (≥ 7.0) — all systems go, sector signals have absolute return tailwind
+      CAUTIOUS BULL (≥ 5.5) — market up but momentum soft, favour higher-conviction signals
+      SIDEWAYS      (≥ 4.0) — no clear market direction, prefer relative/pairs trades
+      CAUTION       (≥ 2.5) — deteriorating, reduce sector bets, tighten stops
+      BEAR          (< 2.5) — index beta drag likely > sector alpha; pairs trade or wait
+
+    Returns:
+      regime        str   — one of the 5 labels above
+      score         float — 0–10
+      nifty_vs_ema20  str  — "ABOVE" / "BELOW" / "—"
+      nifty_vs_ema50  str  — "ABOVE" / "BELOW" / "—"
+      nifty_1m_pct  float | None  — Nifty50 1-month return %
+      vix           float | None  — latest India VIX level
+      vix_trend     str   — "RISING" / "FALLING" / "STABLE"
+      fii_5d_cr     float | None  — FII 5D cumulative flow ₹Cr
+      hmm_state     str   — "Bull" / "Bear" / "Sideways" / "—"
+      signals       list  — human-readable signal descriptions (for the banner)
+      invest_label  str   — adjusted heading for SECTORS TO INVEST
+      invest_caption str  — adjusted caption explaining regime context
+    """
+    score   = 5.0   # neutral baseline
+    signals = []
+
+    # ── Signal 1: Nifty50 vs 20D EMA — short-term trend ─────────────────────
+    # 200 calendar days ≈ 140 trading days.  EMA50 needs ~4×span to converge
+    # (span=50 → need 200+ points).  Using 200 cal days ensures both EMA20 and
+    # EMA50 are computed on a properly warmed-up series.
+    # The 1M return is NOT scored separately — it is highly correlated with the
+    # EMA position (both measure the same price direction) and would double-count.
+    ema20_state = ema50_state = "—"
+    nifty_1m    = None
+    try:
+        nifty_hist = query_dataframe("""
+            SELECT trade_date, close_val
+            FROM index_data
+            WHERE index_name = 'Nifty 50'
+              AND trade_date <= ?
+              AND trade_date >= (? - INTERVAL 200 DAY)
+            ORDER BY trade_date
+        """, [as_of_date, as_of_date])
+
+        if not nifty_hist.empty and len(nifty_hist) >= 22:
+            nifty_hist = nifty_hist.sort_values("trade_date")
+            close_s    = nifty_hist["close_val"].astype(float)
+            latest     = float(close_s.iloc[-1])
+
+            # ── EMA20 (short-term trend, primary directional signal) ──────────
+            ema_20 = float(close_s.ewm(span=20, adjust=False).mean().iloc[-1])
+            if latest > ema_20:
+                score += 1.5
+                ema20_state = "ABOVE"
+                signals.append(("bull", f"Nifty50 {latest:,.0f} > 20D EMA {ema_20:,.0f} — short-term uptrend"))
+            else:
+                score -= 1.5
+                ema20_state = "BELOW"
+                signals.append(("bear", f"Nifty50 {latest:,.0f} < 20D EMA {ema_20:,.0f} — short-term downtrend"))
+
+            # ── Golden / Death Cross: EMA20 vs EMA50 (independent from price vs EMA) ──
+            # Using cross of EMAs rather than price vs EMA50 avoids double-counting
+            # the same price direction information.  An EMA cross is a structurally
+            # different signal — it fires only at TREND INFLECTIONS, not every day.
+            if len(close_s) >= 80:   # need warmup: span=50 needs ~80 pts for reliable cross
+                ema_50 = float(close_s.ewm(span=50, adjust=False).mean().iloc[-1])
+                if ema_20 > ema_50:
+                    score += 1.0
+                    ema50_state = "ABOVE"
+                    signals.append(("bull", f"20D EMA ({ema_20:,.0f}) > 50D EMA ({ema_50:,.0f}) — golden cross, medium-term structure bullish"))
+                else:
+                    score -= 1.0
+                    ema50_state = "BELOW"
+                    signals.append(("bear", f"20D EMA ({ema_20:,.0f}) < 50D EMA ({ema_50:,.0f}) — death cross, medium-term structure broken"))
+
+            # 1M return — stored for display only, NOT scored (correlated with EMA signals)
+            if len(close_s) >= 22:
+                start22 = float(close_s.iloc[-22])
+                nifty_1m = round((latest - start22) / start22 * 100, 2) if start22 else None
+    except Exception:
+        pass
+
+    # ── Signal 2: India VIX — fear gauge (level only, symmetric scoring) ─────
+    # Scoring calibrated so that NORMAL VIX range for India (14–18%) = 0 points.
+    # Only EXTREMES shift the score. Avoids the persistent bull bias caused by
+    # treating normal VIX (12–16) as inherently bullish.
+    vix       = None
+    vix_trend = "STABLE"
+    try:
+        vix_hist = query_dataframe("""
+            SELECT close_val FROM index_data
+            WHERE index_name = 'India VIX'
+              AND trade_date <= ?
+            ORDER BY trade_date DESC
+            LIMIT 7
+        """, [as_of_date])
+
+        if not vix_hist.empty:
+            vix_vals  = vix_hist["close_val"].astype(float).tolist()
+            vix       = vix_vals[0]
+            # True 5-trading-day change: index 0 = today, index 5 = 5 trading days ago
+            vix_5d_ch = vix_vals[0] - vix_vals[min(5, len(vix_vals) - 1)]
+
+            # Level scoring — symmetric neutral zone (14–18%) scores zero
+            if vix < 12:
+                score += 1.0
+                signals.append(("bull", f"VIX {vix:.1f} — very low fear, stable environment"))
+            elif vix > 25:
+                score -= 1.5
+                signals.append(("bear", f"VIX {vix:.1f} — ELEVATED fear, high downside risk"))
+            elif vix > 20:
+                score -= 0.75
+                signals.append(("bear", f"VIX {vix:.1f} — rising fear, caution warranted"))
+            # VIX 12–20 = normal range = 0 contribution (no bull bias on flat days)
+
+            # Trend scoring — direction of fear change is independent of level
+            if vix_5d_ch > 3:
+                score -= 0.5
+                vix_trend = "RISING"
+                signals.append(("bear", f"VIX +{vix_5d_ch:.1f} pts in 5D — fear accelerating"))
+            elif vix_5d_ch < -3:
+                score += 0.5
+                vix_trend = "FALLING"
+                signals.append(("bull", f"VIX {vix_5d_ch:.1f} pts in 5D — fear dissipating"))
+    except Exception:
+        pass
+
+    # ── Signal 3: FII 5D cumulative flow — all index futures combined ─────────
+    # FIX 1: Use ALL index futures (NIFTY + BANKNIFTY + FINNIFTY + MIDCAP) to
+    #   capture the total institutional directional stance, not just NIFTY.
+    # FIX 2: Subquery limits to EXACTLY 5 trading days before aggregating.
+    #   The original LIMIT 5 on a SUM() aggregate was dead code — it limited the
+    #   output rows (already 1 from SUM), not the input rows entering the sum.
+    fii_5d = None
+    try:
+        fii_df = query_dataframe("""
+            SELECT SUM(net_cr) AS net_cr
+            FROM (
+                SELECT trade_date, SUM(buy_value_cr - sell_value_cr) AS net_cr
+                FROM fii_derivatives_stats
+                WHERE category IN (
+                    'NIFTY FUTURES', 'BANKNIFTY FUTURES',
+                    'FINNIFTY FUTURES', 'MIDCPNIFTY FUTURES'
+                )
+                  AND trade_date <= ?
+                GROUP BY trade_date
+                ORDER BY trade_date DESC
+                LIMIT 5
+            ) last5
+        """, [as_of_date])
+
+        if not fii_df.empty and fii_df["net_cr"].notna().any():
+            fii_5d = round(float(fii_df["net_cr"].iloc[0]), 0)
+            if fii_5d > 3000:
+                score += 1.0
+                signals.append(("bull", f"FII all-index 5D net +₹{fii_5d:,.0f} Cr — broad institutional buying"))
+            elif fii_5d > 800:
+                score += 0.5
+                signals.append(("bull", f"FII all-index 5D net +₹{fii_5d:,.0f} Cr — mild institutional buying"))
+            elif fii_5d < -3000:
+                score -= 1.0
+                signals.append(("bear", f"FII all-index 5D net ₹{fii_5d:,.0f} Cr — broad institutional selling"))
+            elif fii_5d < -800:
+                score -= 0.5
+                signals.append(("bear", f"FII all-index 5D net ₹{fii_5d:,.0f} Cr — mild institutional selling"))
+            else:
+                signals.append(("neut", f"FII all-index 5D net ₹{fii_5d:+,.0f} Cr — neutral institutional stance"))
+    except Exception:
+        pass
+
+    # ── Signal 4: HMM statistical regime — staleness-capped ──────────────────
+    # Cap: only use HMM state if it was published within the last 7 calendar days.
+    # Without this, a 30-day-old prediction_log entry would contaminate the score.
+    hmm_state = "—"
+    try:
+        hmm_df = query_dataframe("""
+            SELECT hmm_state FROM prediction_log
+            WHERE fno_symbol = 'NIFTY'
+              AND trade_date <= ?
+              AND trade_date >= (? - INTERVAL 7 DAY)
+            ORDER BY trade_date DESC
+            LIMIT 1
+        """, [as_of_date, as_of_date])
+
+        if not hmm_df.empty:
+            hmm_state = str(hmm_df["hmm_state"].iloc[0])
+            if hmm_state == "Bull":
+                score += 1.0
+                signals.append(("bull", "HMM: BULL — statistical price memory supports upside"))
+            elif hmm_state == "Bear":
+                score -= 1.0
+                signals.append(("bear", "HMM: BEAR — statistical price memory supports downside"))
+            else:
+                signals.append(("neut", f"HMM: {hmm_state} — no statistical directional bias"))
+    except Exception:
+        pass
+
+    # ── Signal 5: Market breadth — % of stocks advancing ─────────────────────
+    # Independent of EMA/FII — measures PARTICIPATION quality.
+    # Low breadth in a rising market = narrow leadership = fragile rally.
+    # High breadth in a falling market = broad-based genuine selling.
+    try:
+        breadth_df = query_dataframe("""
+            SELECT
+                SUM(CASE WHEN close_price > prev_close THEN 1 ELSE 0 END) * 1.0
+                / NULLIF(COUNT(*), 0) AS breadth_frac
+            FROM daily_data
+            WHERE trade_date = (
+                SELECT MAX(trade_date) FROM daily_data WHERE trade_date <= ?
+            )
+              AND series = 'EQ'
+              AND prev_close > 0
+              AND turnover_lacs >= 5
+        """, [as_of_date])
+
+        if not breadth_df.empty and breadth_df["breadth_frac"].notna().any():
+            breadth = float(breadth_df["breadth_frac"].iloc[0])
+            if breadth > 0.65:
+                score += 0.75
+                signals.append(("bull", f"Breadth {breadth*100:.0f}% advancing — broad market participation"))
+            elif breadth > 0.55:
+                score += 0.25
+                signals.append(("bull", f"Breadth {breadth*100:.0f}% advancing — mild positive participation"))
+            elif breadth < 0.35:
+                score -= 0.75
+                signals.append(("bear", f"Breadth {breadth*100:.0f}% advancing — broad-based selling confirmed"))
+            elif breadth < 0.45:
+                score -= 0.25
+                signals.append(("bear", f"Breadth {breadth*100:.0f}% advancing — below-average participation"))
+            # 45–55% = neutral zone = 0 contribution
+    except Exception:
+        pass
+
+    # ── Signal 6: EOD Put-Call Ratio — forward-looking options positioning ────
+    # PCR is the ONLY forward-looking signal in the regime.  Unlike EMA/FII/HMM
+    # (all backward-looking), PCR reflects where option WRITERS (dealers/smart
+    # money) are positioned for the NEXT session.
+    #
+    # PCR interpretation (from the option writer's perspective, not buyer's):
+    #   PCR > 1.3 → dealers sold MORE puts than calls → they expect support below
+    #               (put writers only sell if they believe the floor holds)
+    #   PCR < 0.75 → dealers sold MORE calls than puts → they see a ceiling above
+    #               (call writers only sell if they believe upside is capped)
+    #
+    # Uses feat_pcr from prediction_log (same as DCM prediction engine) — computed
+    # from the most recent fno_bhavcopy near-expiry OI.  Staleness cap: 7 days.
+    try:
+        pcr_df = query_dataframe("""
+            SELECT feat_pcr FROM prediction_log
+            WHERE fno_symbol = 'NIFTY'
+              AND trade_date <= ?
+              AND trade_date >= (? - INTERVAL 7 DAY)
+              AND feat_pcr IS NOT NULL
+            ORDER BY trade_date DESC
+            LIMIT 1
+        """, [as_of_date, as_of_date])
+
+        if not pcr_df.empty and pcr_df["feat_pcr"].notna().any():
+            pcr = float(pcr_df["feat_pcr"].iloc[0])
+            if pcr > 1.3:
+                score += 0.75
+                signals.append(("bull", f"PCR {pcr:.2f} — heavy put writing, dealers expecting market support"))
+            elif pcr > 1.05:
+                score += 0.25
+                signals.append(("bull", f"PCR {pcr:.2f} — mild put writing bias, slight options support"))
+            elif pcr < 0.75:
+                score -= 0.75
+                signals.append(("bear", f"PCR {pcr:.2f} — heavy call writing, dealers capping upside"))
+            elif pcr < 0.90:
+                score -= 0.25
+                signals.append(("bear", f"PCR {pcr:.2f} — mild call writing dominance, options headwind"))
+            # PCR 0.90–1.05 = balanced = 0 contribution
+    except Exception:
+        pass
+
+    score = round(max(0.0, min(10.0, score)), 2)
+
+    # ── Regime classification ─────────────────────────────────────────────────
+    # Bands designed to minimise whipsaw.  With 6 signals (max swing ≈ ±6.25 pts):
+    #  BULL (≥ 7.5)     — majority of signals strongly bullish; clear uptrend
+    #  CAUTIOUS BULL    — trend intact, some mixed signals; reduce size
+    #  SIDEWAYS (4.0–6.0) — widest band (2 pts) to absorb normal daily noise
+    #  CAUTION          — deteriorating but not confirmed bear
+    #  BEAR (< 2.5)     — majority bearish; defer new capital
+    if score >= 7.5:
+        regime = "BULL"
+    elif score >= 6.0:
+        regime = "CAUTIOUS BULL"
+    elif score >= 4.0:
+        regime = "SIDEWAYS"
+    elif score >= 2.5:
+        regime = "CAUTION"
+    else:
+        regime = "BEAR"
+
+    # ── Dynamic headings + guidance based on regime ───────────────────────────
+    _REGIME_CONTEXT = {
+        "BULL": {
+            "invest_label":   "🟢 SECTORS TO INVEST",
+            "invest_caption": (
+                "All accumulation signals — highest score first. "
+                "Market uptrend confirmed: sector alpha + market beta both working for you."
+            ),
+            "avoid_label":    "🔴 SECTORS TO AVOID / EXIT",
+            "avoid_caption":  "Active distribution/selling signals first; then relative laggards.",
+        },
+        "CAUTIOUS BULL": {
+            "invest_label":   "🟡 SECTORS TO OVERWEIGHT",
+            "invest_caption": (
+                "Market up but momentum soft. "
+                "Favour the highest-conviction signals (Secret + Confirmed Accumulation) only. "
+                "Reduce size on early/watch signals."
+            ),
+            "avoid_label":    "🟠 SECTORS TO REDUCE / AVOID",
+            "avoid_caption":  "Distribution and weakness signals — exit before market confirms turn.",
+        },
+        "SIDEWAYS": {
+            "invest_label":   "🔵 RELATIVE ALPHA — SELECTIVE ACCUMULATION",
+            "invest_caption": (
+                "Market in range — no broad tailwind. "
+                "These sectors outperform on a RELATIVE basis. "
+                "Prefer stock-level entry with sector as thesis, not sector ETF/basket. "
+                "Or: long accumulation sectors / short laggard sectors (pairs trade)."
+            ),
+            "avoid_label":    "🔵 SECTORS TO UNDERWEIGHT / SHORT",
+            "avoid_caption":  (
+                "Weakest relative performers in a range-bound market. "
+                "Good short leg for pairs trades against the invest column."
+            ),
+        },
+        "CAUTION": {
+            "invest_label":   "⚠️ RELATIVE ALPHA — HEADWIND FROM MARKET",
+            "invest_caption": (
+                "Market deteriorating. These sectors FALL LESS than the market. "
+                "Absolute returns likely negative even for accumulation signals. "
+                "Use only for pairs (long accumulation / short index) or wait for regime flip."
+            ),
+            "avoid_label":    "🔴 DOUBLE SELL — SECTOR + MARKET BOTH BEARISH",
+            "avoid_caption":  (
+                "Both sector signal AND market regime are against these sectors. "
+                "Exit immediately. Do not average down."
+            ),
+        },
+        "BEAR": {
+            "invest_label":   "🛡️ DEFENSIVE HOLD — RELATIVE ALPHA ONLY",
+            "invest_caption": (
+                "BEAR market confirmed. Even strong accumulation sectors will LOSE money "
+                "in absolute terms as index beta drag exceeds sector alpha. "
+                "These sectors fall LEAST — suitable for: (a) pairs trade vs Nifty short, "
+                "(b) defensive core positioning, or (c) staged accumulation for the regime flip. "
+                "Do NOT deploy fresh capital expecting positive returns until regime improves."
+            ),
+            "avoid_label":    "🔴 REDUCE POSITIONS — SECTOR + MARKET BOTH BEARISH",
+            "avoid_caption":  (
+                "Bear market + sector weakness = double risk. "
+                "Reduce or exit existing positions. Priority: weakest sectors first."
+            ),
+        },
+    }
+
+    ctx = _REGIME_CONTEXT.get(regime, _REGIME_CONTEXT["SIDEWAYS"])
+
+    # ── Bear sub-type: distinguish early-distribution from full-panic bear ─────
+    # VIX < 18 in a BEAR regime = "quiet bear" — FII-driven selling without retail
+    # panic. Less dangerous for holders; regime may reverse faster than a VIX-spike
+    # bear.  VIX ≥ 20 = fear rising = "confirmed bear" — reduce all positions.
+    if regime == "BEAR" and vix is not None:
+        if vix < 18:
+            ctx = dict(ctx)   # copy to avoid mutating the template
+            ctx["invest_caption"] = (
+                "EARLY BEAR / DISTRIBUTION PHASE — VIX still calm ({:.1f}): institutions "
+                "are quietly selling but retail has not panicked yet. "
+                "These sectors fall LESS than the index. "
+                "Strategy: (a) hold existing positions with hard stops, "
+                "(b) do NOT add fresh capital outright, "
+                "(c) if FII selling persists another week, move to pairs or exit. "
+                "Watch for VIX breaking above 18 — that confirms acceleration."
+            ).format(vix)
+            ctx["avoid_caption"] = (
+                "QUIET DISTRIBUTION — Sector weakness in a low-VIX bear. "
+                "Reduce exposure gradually (not panic-exit). "
+                "Priority: exit positions already in loss; hold profitable ones with trailing stop."
+            )
+        elif vix >= 20:
+            ctx = dict(ctx)
+            ctx["invest_caption"] = (
+                "CONFIRMED BEAR + ELEVATED FEAR — VIX {:.1f}: retail is beginning to panic. "
+                "Index beta drag is accelerating. Even the strongest delivery sectors "
+                "will face forced selling from margin calls. "
+                "Exit all but highest-conviction long-term holdings. "
+                "Do not buy ANY new positions. Wait for VIX to peak and turn down."
+            ).format(vix)
+            ctx["avoid_caption"] = (
+                "MAXIMUM RISK — Bear market + elevated fear + sector distribution. "
+                "Exit immediately. Do not average down under any circumstances."
+            )
+
+    # ── Banner guidance: short 1-2 sentence text for the regime badge ───────────
+    # This is VIX-differentiated — a different message for each bear sub-type.
+    # Sourced from ctx["invest_caption"] which was already overridden by VIX check.
+    # The view _REGIME_GUIDANCE dict was a parallel copy that was NOT VIX-aware;
+    # routing through here ensures both the banner AND the section caption are
+    # consistent and show the same calibrated message.
+    _BANNER_GUIDANCE = {
+        "BULL":          "Market uptrend confirmed — sector alpha + market beta both working FOR you. Deploy full size on high-conviction signals.",
+        "CAUTIOUS BULL": "Market rising but momentum is soft. Favour Secret + Confirmed Accumulation only. Reduce size on Watch/Early signals.",
+        "SIDEWAYS":      "No clear market direction. Sector signals are RELATIVE — best as long/short pairs, not outright directional bets.",
+        "CAUTION":       "Market deteriorating. Accumulation sectors likely lose money in absolute terms. Use as pairs (long sector / short Nifty) or wait for regime flip.",
+        "BEAR":          ctx["invest_caption"],   # VIX-differentiated bear guidance
+    }
+    banner_guidance = _BANNER_GUIDANCE.get(regime, ctx["invest_caption"])
+
+    return {
+        "regime":           regime,
+        "score":            score,
+        "nifty_vs_ema20":   ema20_state,
+        "nifty_vs_ema50":   ema50_state,
+        "nifty_1m_pct":     nifty_1m,
+        "vix":              vix,
+        "vix_trend":        vix_trend,
+        "fii_5d_cr":        fii_5d,
+        "hmm_state":        hmm_state,
+        "signals":          signals,
+        "invest_label":     ctx["invest_label"],
+        "invest_caption":   ctx["invest_caption"],
+        "avoid_label":      ctx["avoid_label"],
+        "avoid_caption":    ctx["avoid_caption"],
+        "banner_guidance":  banner_guidance,        # VIX-differentiated, for the banner
+    }
+
+
 def get_sector_stocks_rotation(
     sector: str,
     as_of_date: date,

@@ -66,6 +66,17 @@ def cached_sector_rotation(trade_date: date, min_turnover_lacs: float) -> pd.Dat
 
 
 @st.cache_data(ttl=_TTL)
+def cached_market_regime(trade_date: date) -> dict:
+    """
+    Market regime computed from Nifty50 EMAs + VIX + FII flow + HMM state.
+    Returns a dict with: regime, score, signals, invest_label, invest_caption,
+    avoid_label, avoid_caption — all consumed by _render_smart_money().
+    """
+    from src.analytics.sector_rotation import get_market_regime
+    return get_market_regime(trade_date)
+
+
+@st.cache_data(ttl=_TTL)
 def cached_sector_rotation_history(
     sector: str, trade_date: date, min_turnover_lacs: float
 ) -> pd.DataFrame:
@@ -382,3 +393,44 @@ def cached_sector_accuracy_summary(
 ) -> dict:
     from src.analytics.sector_signal_backtest import get_sector_accuracy_summary
     return get_sector_accuracy_summary(as_of_date, min_turnover_lacs, lookback_dates)
+
+
+# ── Sector Rotation Memory Engine ────────────────────────────────────────────
+
+@st.cache_data(ttl=_TTL)
+def cached_sector_memory_context(
+    as_of_date:     date,
+    sector:         str,
+    signal:         str,
+    regime_label:   str,
+    dv_ratio:       float,
+    z_pct:          float,
+    rs_1w:          "float | None",
+    ema20_above:    bool,
+    ema_cross_bull: "bool | None",
+    vix:            "float | None",
+    fii_5d_cr:      "float | None",
+    hmm_state:      "str | None",
+    pcr:            "float | None",
+):
+    """
+    Historical outcome statistics for (sector, signal, market-regime conditions).
+    Returns a SectorMemoryContext dataclass from sector_memory.py.
+    All arguments are hashable so Streamlit can cache the result for 5 minutes.
+    """
+    from src.analytics.sector_memory import get_sector_memory_context
+    return get_sector_memory_context(
+        as_of_date     = as_of_date,
+        sector         = sector,
+        signal         = signal,
+        regime_label   = regime_label,
+        dv_ratio       = dv_ratio,
+        z_pct          = z_pct,
+        rs_1w          = rs_1w,
+        ema20_above    = ema20_above,
+        ema_cross_bull = ema_cross_bull,
+        vix            = vix,
+        fii_5d_cr      = fii_5d_cr,
+        hmm_state      = hmm_state,
+        pcr            = pcr,
+    )
