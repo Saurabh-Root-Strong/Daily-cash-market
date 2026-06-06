@@ -2,6 +2,13 @@
 cd /d "%~dp0.."
 call venv\Scripts\activate.bat
 
+REM ── DuckDB is single-writer; if the dashboard is open during this run it holds
+REM    the file lock. Give the daily job a long retry budget so it patiently waits
+REM    the dashboard out instead of failing (seen in scheduler.log at 23:30).
+set PYTHONUTF8=1
+set DUCKDB_LOCK_RETRIES=600
+set DUCKDB_LOCK_BASE_DELAY=0.1
+
 REM ── Check if today is an NSE trading day (Mon-Fri, not a holiday) ──────────
 python scripts\market_open_check.py >> logs\scheduler.log 2>&1
 if errorlevel 1 (
