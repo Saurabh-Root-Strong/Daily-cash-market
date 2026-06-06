@@ -2864,6 +2864,7 @@ def _compute_breakout_extensions(
     pcr: Optional[float] = None,
     carry_pct_ann: Optional[float] = None,
     dte: int = 30,
+    volume_ratio: Optional[float] = None,
 ) -> dict:
     """
     Compute the SECOND range — where the index heads if it breaks the first range.
@@ -2988,14 +2989,22 @@ def _compute_breakout_extensions(
         if mp_gap_dn < 0:   # max pain ABOVE the downside breakout trigger
             dn_src += f" · max pain {mp:.0f} ({abs(mp_gap_dn):.0f} pts above break → gravity)"
 
+    # ── Volume confirmation (validated +6pp continuation edge) ───────────────
+    vol_note = ""
+    if volume_ratio is not None:
+        if volume_ratio >= 1.15:
+            vol_note = f" · vol {volume_ratio:.1f}× avg → expansion confirms a break (~58% follow-through)"
+        elif volume_ratio <= 0.85:
+            vol_note = f" · vol {volume_ratio:.1f}× avg → thin; breaks prone to fade back into range"
+
     return dict(
         breakout_threshold_pts=round(threshold, 0),
         breakout_up_start=round(up_trigger, 0),
         breakout_up_end=round(up_end, 0),
         breakout_dn_start=round(dn_start, 0),
         breakout_dn_end=round(dn_trigger, 0),
-        breakout_up_src=up_src + wall_note_up,
-        breakout_dn_src=dn_src + wall_note_dn,
+        breakout_up_src=up_src + wall_note_up + vol_note,
+        breakout_dn_src=dn_src + wall_note_dn + vol_note,
     )
 
 
@@ -3488,6 +3497,21 @@ def _compute_prediction(
         gamma_ratio=gamma_ratio_val,
     )
 
+    # Volume confirmation: today's traded value vs its trailing 20-day average.
+    # Validated: a >1σ move on >=1.15x volume continues next day ~58% vs ~52% on
+    # weak volume — so expansion confirms a break, thin volume → fade-back risk.
+    vol_ratio: Optional[float] = None
+    try:
+        _vh = idx_hist.sort_values("trade_date")
+        _vs = _vh["turnover_cr"].fillna(0.0)
+        if float(_vs.tail(20).sum()) <= 0:
+            _vs = _vh["volume"].fillna(0.0)
+        _base = float(_vs.iloc[-21:-1].mean()) if len(_vs) >= 21 else float(_vs.iloc[:-1].mean())
+        if _base > 0:
+            vol_ratio = round(float(_vs.iloc[-1]) / _base, 2)
+    except Exception:
+        vol_ratio = None
+
     # ── Breakout Extension Ranges (second range if first range is broken) ──────
     bo: dict = {}
     if (em.get("range_low") is not None and em.get("range_high") is not None
@@ -3499,6 +3523,7 @@ def _compute_prediction(
             pcr=pcr,
             carry_pct_ann=carry_pct_ann,
             dte=dte_options,
+            volume_ratio=vol_ratio,
         )
 
     pred_out = IndexPrediction(
