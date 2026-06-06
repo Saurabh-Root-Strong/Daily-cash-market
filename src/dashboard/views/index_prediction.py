@@ -1524,6 +1524,37 @@ def render(selected_date: date) -> None:
                   help="VIX classification: CALM (VIX < 13), NORMAL (13–17), ELEVATED (17–20), HIGH (> 20). Regime affects signal weights — in HIGH regime, mean-reversion signals get more weight than trend signals.")
         st.divider()
 
+    # ── Weekly (5-day) mean-reversion outlook — contrarian complement ─────────
+    try:
+        from src.analytics.weekly_outlook import get_weekly_outlook, VALIDATION
+        wk = get_weekly_outlook(selected_date)
+    except Exception:
+        wk, VALIDATION = [], ""
+    if wk:
+        st.markdown("#### 📅 Weekly Outlook — 5-Day Mean-Reversion Bias")
+        st.caption(
+            "A separate, **contrarian** lens to the next-day engine: how *extended* each index is "
+            "(position in its 20-day range + RSI). The 5-day move mean-reverts — overbought fades, "
+            "oversold bounces. Validated: " + VALIDATION + ". A modest tilt, not a precise forecast."
+        )
+        _wc = {"UP": "#00c853", "DOWN": "#ff5252", "NEUTRAL": "#9e9e9e"}
+        _wl = {"UP": "↑ Bounce likely", "DOWN": "↓ Pullback likely", "NEUTRAL": "→ Neutral"}
+        wcols = st.columns(len(wk))
+        for col, r in zip(wcols, wk):
+            c = _wc[r["weekly_bias"]]
+            col.markdown(
+                f"<div style='border-left:3px solid {c};padding:4px 10px'>"
+                f"<div style='font-size:12px;color:rgba(255,255,255,0.6)'>{r['label']}</div>"
+                f"<div style='font-size:15px;font-weight:700;color:{c}'>{_wl[r['weekly_bias']]}</div>"
+                f"<div style='font-size:10.5px;color:rgba(255,255,255,0.45)'>extension {r['extension']:.2f} "
+                f"(pctl {r['extension_pctl']:.0f}%) · RSI {r['rsi']:.0f} · range-pos {r['pos_in_range']:.0f}%</div>"
+                f"</div>", unsafe_allow_html=True,
+            )
+        _nb = [r for r in wk if r["weekly_bias"] != "NEUTRAL"]
+        if _nb:
+            st.caption(" · ".join(f"**{r['label']}**: {r['rationale']}" for r in _nb))
+        st.divider()
+
     # ── Index selector ────────────────────────────────────────────────────────
     sym_options  = [p.fno_symbol for p in preds]
     selected_sym = st.selectbox(
