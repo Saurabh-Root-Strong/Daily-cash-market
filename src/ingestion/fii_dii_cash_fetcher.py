@@ -150,3 +150,51 @@ def run_fii_dii_cash_daily() -> int:
     if df.empty:
         return 0
     return get_repository().upsert_fii_dii_cash(df)
+
+
+# ── Full-history backfill: insights.market ────────────────────────────────────
+
+_INSIGHTS_URL = "https://insights.market/api/fii-dii/activity?period=daily&type=overall"
+
+
+def fetch_fii_dii_insights_market() -> pd.DataFrame:
+    """
+    Full daily FII/DII cash history from insights.market (buy/sell/net, ₹ Cr).
+    Returns a DataFrame ready for upsert_fii_dii_cash.
+    """
+    s = requests.Session()
+    s.headers.update({
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json", "Accept-Encoding": "gzip, deflate",
+        "Referer": "https://insights.market/fii-dii/activity",
+    })
+    try:
+        r = s.get(_INSIGHTS_URL, timeout=30)
+        r.raise_for_status()
+        rows = r.json().get("data", [])
+    except Exception as exc:
+        log.warning("insights.market FII/DII fetch failed: %s", exc)
+        return pd.DataFrame()
+
+    out = []
+    for x in rows:
+        d = _to_date(x.get("date"))
+        if d is None:
+            continue
+        out.append({
+            "trade_date": d,
+            "fii_buy": _num(x.get("fiiBuy")), "fii_sell": _num(x.get("fiiSell")),
+            "fii_net": _num(x.get("netFII")),
+            "dii_buy": _num(x.get("diiBuy")), "dii_sell": _num(x.get("diiSell")),
+            "dii_net": _num(x.get("netDII")),
+            "source": "insights.market",
+        })
+    return pd.DataFrame(out)
+
+
+def backfill_fii_dii_history() -> int:
+    """Backfill the full FII/DII cash history from insights.market. Returns rows."""
+    df = fetch_fii_dii_insights_market()
+    if df.empty:
+        return 0
+    return get_repository().upsert_fii_dii_cash(df)

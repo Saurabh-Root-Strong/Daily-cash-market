@@ -109,17 +109,25 @@ def render(selected_date: date) -> None:
 
     # ── Data controls: fetch latest + CSV backfill ────────────────────────────
     st.divider()
-    cc1, cc2 = st.columns([1, 2])
+    cc1, cc2, cc3 = st.columns([1, 1, 2])
     with cc1:
-        if st.button("🔄 Fetch latest from NSE"):
+        if st.button("🔄 Fetch latest (NSE)"):
             from src.ingestion.fii_dii_cash_fetcher import run_fii_dii_cash_daily
             with st.spinner("Fetching NSE provisional FII/DII…"):
                 n = run_fii_dii_cash_daily()
             _load.clear()
-            st.success(f"Updated {n} day(s) from NSE.") if n else st.warning("No new NSE data.")
+            st.success(f"Updated {n} day(s).") if n else st.warning("No new NSE data.")
             st.rerun()
     with cc2:
-        up = st.file_uploader("Backfill from Groww/NSE CSV (date, fii_net, dii_net …)", type=["csv"])
+        if st.button("📥 Backfill full history"):
+            from src.ingestion.fii_dii_cash_fetcher import backfill_fii_dii_history
+            with st.spinner("Backfilling full history from insights.market…"):
+                n = backfill_fii_dii_history()
+            _load.clear()
+            st.success(f"Backfilled {n} days.") if n else st.warning("Backfill returned no data.")
+            st.rerun()
+    with cc3:
+        up = st.file_uploader("…or import a CSV (date, fii_net, dii_net …)", type=["csv"])
         if up is not None:
             import tempfile, os
             from src.ingestion.fii_dii_cash_fetcher import import_fii_dii_csv
