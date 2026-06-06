@@ -1748,10 +1748,12 @@ def _render_rotation_clock(selected_date: date, min_turnover: float, all_dates: 
 
 | Phase | Delivery Slope | Price vs Nifty50 | Interpretation | Action |
 |-------|---------------|------------------|----------------|--------|
-| 💰 **Leading**   | Rising ↑ | Above Nifty50 ↑ | Institutions buying + outperforming market | **BUY / HOLD** |
-| 🔍 **Improving** | Rising ↑ | Below Nifty50 ↓ | Institutions accumulating while underperforming — contrarian zone | **ACCUMULATE** |
+| 💰 **Leading**   | Rising ↑ | Above Nifty50 ↑ | Institutions buying + outperforming market | ✅ **ACT — BUY / HOLD** |
+| 🔍 **Improving** | Rising ↑ | Below Nifty50 ↓ | Accumulating but price not confirming — contrarian zone | 👀 **WATCH** (await price confirmation) |
 | ⚠️ **Weakening** | Falling ↓ | Above Nifty50 ↑ | Institutions distributing into outperforming prices | **EXIT / REDUCE** |
 | 📤 **Lagging**   | Falling ↓ | Below Nifty50 ↓ | Institutions exiting, price lagging market | **AVOID** |
+
+> **Walk-forward evidence:** only **Leading** showed a reliable forward edge (~+1.4%/mo relative); **Improving** had none on its own (~−0.1%/mo) — treat it as a watchlist and buy only when it migrates into Leading (price confirmation). Weakening/Lagging underperform.
 
 **Quadrant Center = Nifty50** — The vertical gold dashed line marks the Nifty50 return for the selected period.
 Sectors to the RIGHT of the gold line are outperforming the market; sectors to the LEFT are underperforming.
@@ -1837,18 +1839,29 @@ Ideal entry: sector moving from Improving to Leading (rising delivery + price cr
         if leading.empty and improving.empty:
             st.info("No sectors with strong inflow signal this period.")
         else:
+            # ACT — Leading is the only inflow phase with a validated forward edge
+            # (walk-forward: +1.4%/mo relative). Money entering WITH price confirming.
             if not leading.empty:
                 st.markdown(
-                    f"<div style='font-size:12px;color:#00c853;font-weight:600;margin-bottom:4px'>"
-                    f"💰 LEADING — Money Entering ({len(leading)})</div>",
+                    f"<div style='font-size:12px;color:#00c853;font-weight:600;margin-bottom:2px'>"
+                    f"💰 LEADING — Money Entering · ✅ ACT ({len(leading)})</div>"
+                    f"<div style='font-size:10.5px;color:rgba(255,255,255,0.5);margin-bottom:5px'>"
+                    f"Delivery rising AND price beating the market — the validated, "
+                    f"highest-conviction rotation buy (~+1.4%/mo forward edge).</div>",
                     unsafe_allow_html=True,
                 )
                 for _, row in leading.iterrows():
                     _phase_card(row, "#00c853")
+            # WATCH — Improving (contrarian inflow) had NO forward edge on its own in
+            # the walk-forward (~-0.1%/mo). Accumulation without price confirmation —
+            # a watchlist, not a buy. Wait for it to migrate into Leading.
             if not improving.empty:
                 st.markdown(
-                    f"<div style='font-size:12px;color:#40c4ff;font-weight:600;margin:10px 0 4px 0'>"
-                    f"🔍 IMPROVING — Contrarian Inflow ({len(improving)})</div>",
+                    f"<div style='font-size:12px;color:#40c4ff;font-weight:600;margin:12px 0 2px 0'>"
+                    f"🔍 IMPROVING — Contrarian Inflow · 👀 WATCH ({len(improving)})</div>"
+                    f"<div style='font-size:10.5px;color:rgba(255,255,255,0.5);margin-bottom:5px'>"
+                    f"Delivery accumulating but price NOT yet confirming. No standalone "
+                    f"forward edge — a watchlist. Buy only once it crosses into Leading.</div>",
                     unsafe_allow_html=True,
                 )
                 for _, row in improving.iterrows():
