@@ -109,19 +109,47 @@ def _breadth_trend(as_of_date: date) -> dict:
     return {"breadth": round(recent, 3), "breadth_trend": round(recent - prior, 3)}
 
 
+def _cash_fii_dii_5d(as_of_date: date) -> dict:
+    """5-trading-day cumulative FII + DII CASH net (₹ Cr) from fii_dii_cash."""
+    df = query_dataframe("""
+        SELECT fii_net, dii_net FROM fii_dii_cash
+        WHERE trade_date <= ? ORDER BY trade_date DESC LIMIT 5
+    """, [as_of_date])
+    if df.empty:
+        return {}
+    return {
+        "fii_cash_5d": round(float(df["fii_net"].dropna().sum()), 0),
+        "dii_cash_5d": round(float(df["dii_net"].dropna().sum()), 0),
+        "fii_cash_1d": round(float(df["fii_net"].iloc[0]), 0) if pd.notna(df["fii_net"].iloc[0]) else None,
+    }
+
+
 def classify_scenario(as_of_date: date) -> dict:
     """
     Classify the market into one of 7 scenarios and return the recommended ranking
-    factor + playbook. Reuses get_market_regime for VIX / FII / regime context.
+    factor + playbook. Reuses get_market_regime for VIX / regime context, and the
+    NSE daily CASH FII/DII flow (the cleaner institutional-direction gauge) for the
+    flow signal — falling back to the F&O-derivatives flow only when cash is absent.
     """
     from src.analytics.sector_rotation import get_market_regime
     reg = get_market_regime(as_of_date)
     t = _nifty_trend(as_of_date)
     b = _breadth_trend(as_of_date)
+    cash = _cash_fii_dii_5d(as_of_date)
 
     vix       = reg.get("vix")
     vix_trend = reg.get("vix_trend", "STABLE")
-    fii_5d    = reg.get("fii_5d_cr") or 0.0
+    # Prefer CASH FII 5d net (NSE daily) — larger, cleaner directional signal —
+    # over the derivatives 5d flow. Cash thresholds are ~5x the derivatives ones.
+    _fii_deriv = reg.get("fii_5d_cr") or 0.0
+    fii_cash_5d = cash.get("fii_cash_5d")
+    fii_5d = fii_cash_5d if fii_cash_5d is not None else _fii_deriv
+    _is_cash = fii_cash_5d is not None
+    # Threshold scale: cash flows run ~5x derivatives in magnitude.
+    _sell_hard = -15000 if _is_cash else -3000
+    _sell_soft = -8000  if _is_cash else -2000
+    _buy_soft  = 5000   if _is_cash else 0
+    _buy_hard  = 8000   if _is_cash else 3000
     breadth   = b.get("breadth", 0.5)
     brd_trend = b.get("breadth_trend", 0.0)
     up_ema    = t.get("price_vs_ema20", False)
@@ -138,17 +166,17 @@ def classify_scenario(as_of_date: date) -> dict:
 
     # ── Scenario decision (state + transition) ────────────────────────────────
     if trend == "UP":
-        topping = (r5 < 0) or (brd_trend < -0.05) or (vix_trend == "RISING") or (fii_5d < -3000)
+        topping = (r5 < 0) or (brd_trend < -0.05) or (vix_trend == "RISING") or (fii_5d < _sell_hard)
         scenario = "UPTREND_TOPPING" if topping else "STRONG_UPTREND"
     elif trend == "DOWN":
         # Bottoming = price still below EMAs but momentum + flow + fear turning up.
         bottoming = (r5 > 0.5 and (brd_trend > 0.03 or vix_trend == "FALLING")) or \
-                    (r5 > 1.0 and fii_5d > 0)
+                    (r5 > 1.0 and fii_5d > _buy_soft)
         scenario = "DOWNTREND_BOTTOMING" if bottoming else "STRONG_DOWNTREND"
     else:  # FLAT / range
-        if r5 > 1.0 and brd_trend > 0.03 and fii_5d > 0:
+        if r5 > 1.0 and brd_trend > 0.03 and fii_5d > _buy_soft:
             scenario = "SIDEWAYS_BREAKOUT"
-        elif r5 < -1.0 and (brd_trend < -0.03 or fii_5d < -2000):
+        elif r5 < -1.0 and (brd_trend < -0.03 or fii_5d < _sell_soft):
             scenario = "SIDEWAYS_BREAKDOWN"
         else:
             scenario = "SIDEWAYS"
@@ -164,6 +192,8 @@ def classify_scenario(as_of_date: date) -> dict:
         "nifty_5d":       r5, "nifty_20d": r20, "accel": accel,
         "breadth":        breadth, "breadth_trend": brd_trend,
         "vix":            vix, "vix_trend": vix_trend, "fii_5d_cr": fii_5d,
+        "fii_cash_5d":    fii_cash_5d, "dii_cash_5d": cash.get("dii_cash_5d"),
+        "fii_flow_source": "NSE cash" if _is_cash else "F&O derivatives",
     }
 
 

@@ -2051,7 +2051,9 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         f"<span style='font-size:11px;color:rgba(255,255,255,0.45)'>· Nifty 5d "
         f"{scenario.get('nifty_5d',0):+.1f}% / 20d {scenario.get('nifty_20d',0):+.1f}% · "
         f"breadth {scenario.get('breadth',0)*100:.0f}% ({scenario.get('breadth_trend',0)*100:+.0f}) · "
-        f"VIX {_vix_s} · FII 5d ₹{scenario.get('fii_5d_cr',0):+,.0f} Cr</span>"
+        f"VIX {_vix_s} · {scenario.get('fii_flow_source','FII')} 5d: FII "
+        f"₹{scenario.get('fii_cash_5d') if scenario.get('fii_cash_5d') is not None else scenario.get('fii_5d_cr',0):+,.0f} / "
+        f"DII ₹{(scenario.get('dii_cash_5d') or 0):+,.0f} Cr</span>"
         f"<div style='font-size:11.5px;color:rgba(255,255,255,0.72);margin-top:3px'>"
         f"{scenario.get('playbook','')}</div></div>",
         unsafe_allow_html=True,
