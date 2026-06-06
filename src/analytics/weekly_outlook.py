@@ -5,16 +5,18 @@ the next-day engine.
 WHY MEAN-REVERSION (not trend)
 ------------------------------
 Walk-forward across all four indices (point-in-time, leakage-free) shows the 5-day
-forward index move is reliably MEAN-REVERTING: how *extended* price is (position in
-its 20-day range + RSI) has a consistent NEGATIVE rank-IC vs the forward 5-day
-return (~ -0.11, same sign on every index). i.e. overbought/extended → pulls back;
-oversold/below-VWAP → bounces. The oversold tercile beat the overbought tercile by
-~+0.5%/week.
+forward index move is MEAN-REVERTING: how *extended* price is (position in its
+20-day range + RSI) has a consistent NEGATIVE rank-IC vs the forward 5-day return,
+same sign on every index. i.e. overbought/extended → pulls back; oversold → bounces.
+
+IMPORTANT — honest magnitude: measured on INDEPENDENT (non-overlapping) 5-day
+windows the edge is WEAK — IC ≈ -0.08, oversold−overbought spread ≈ +0.17%/week.
+(An earlier overlapping-window read of -0.11 / +0.5%/wk was autocorrelation-inflated.)
+Thresholds below are the validated non-overlapping terciles (~0.45 / ~0.66).
 
 This is the OPPOSITE of the next-day directional engine (where trend/momentum
-signals like raw VWAP/RSI have no 1-day edge). So this is a separate, contrarian
-*weekly* lens — modest but real (IC ~0.11, ~52% sign-hit). Treat it as a tilt, not
-a precise forecast.
+signals like raw VWAP/RSI have no 1-day edge). Treat it as a weak contrarian TILT
+— "is the tape stretched?" — not a precise forecast or a standalone trade trigger.
 
 EXTENSION SCORE  = mean( position-in-20D-range[0..1] , RSI(14)/100[0..1] )  → 0..1
   high (>=0.65) = overbought / extended  → weekly bias DOWN (fade)
@@ -41,12 +43,16 @@ _INDICES = [
     ("Midcap Nifty", "Nifty Midcap Select"),
 ]
 
-_OVERSOLD   = 0.35   # extension <= this → oversold (weekly UP bias)
-_OVERBOUGHT = 0.65   # extension >= this → overbought (weekly DOWN bias)
-# Validated edge (walk-forward, 5d): oversold tercile +0.36%, overbought -0.14%.
-_REVERT_UP   = 0.36
-_REVERT_DOWN = -0.14
-VALIDATION = "5d rank-IC -0.11 (consistent across 4 indices) · oversold−overbought spread +0.5%/wk · ~52% sign-hit"
+# Thresholds = the validated NON-OVERLAPPING terciles of extension (~0.45 / ~0.66),
+# not arbitrary cuts — so "oversold/overbought" actually matches where the edge lives.
+_OVERSOLD   = 0.45   # extension <= this → oversold (weekly UP bias)
+_OVERBOUGHT = 0.66   # extension >= this → overbought (weekly DOWN bias)
+# Honest edge from INDEPENDENT (non-overlapping) 5d windows — the overlapping-window
+# figures (+0.5%/wk) were autocorrelation-inflated. This is a WEAK contrarian tilt.
+_REVERT_UP   = 0.11
+_REVERT_DOWN = -0.06
+VALIDATION = ("5d rank-IC -0.08 (non-overlapping; same sign on all 4 indices) · "
+              "oversold−overbought spread ~+0.17%/wk — a weak contrarian tilt, not a trade trigger")
 
 
 def _extension_series(h: pd.DataFrame) -> Optional[pd.DataFrame]:

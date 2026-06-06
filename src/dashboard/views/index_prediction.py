@@ -1535,7 +1535,7 @@ def render(selected_date: date) -> None:
         st.caption(
             "A separate, **contrarian** lens to the next-day engine: how *extended* each index is "
             "(position in its 20-day range + RSI). The 5-day move mean-reverts — overbought fades, "
-            "oversold bounces. Validated: " + VALIDATION + ". A modest tilt, not a precise forecast."
+            "oversold bounces. Validated: " + VALIDATION + "."
         )
         _wc = {"UP": "#00c853", "DOWN": "#ff5252", "NEUTRAL": "#9e9e9e"}
         _wl = {"UP": "↑ Bounce likely", "DOWN": "↓ Pullback likely", "NEUTRAL": "→ Neutral"}
