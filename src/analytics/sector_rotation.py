@@ -1365,9 +1365,18 @@ def get_sector_rotation_timeframe(
     s_std  = df["delivery_slope"].std()
     df["slope_z"] = ((df["delivery_slope"] - s_mean) / max(s_std, 1e-9)).round(2)
 
+    # Quadrant CENTER = cross-sectional MEDIAN sector return (the typical sector),
+    # NOT Nifty50. Both this and the Y-axis (slope_z) are then relative to the SECTOR
+    # universe — apples-to-apples for rotation. Benchmarking equal-weight median
+    # sector returns against the cap-weighted Nifty50 created a systematic gap (every
+    # sector looked like it lagged the index when mega-caps led). Nifty is kept only
+    # as a reference annotation.
+    center = float(df["cum_price_ret_pct"].median())
+    df["sector_median_ret"] = round(center, 2)
+
     def _phase_and_confidence(row) -> tuple:
         sz   = row["slope_z"]
-        pr   = row["cum_price_ret_pct"] - nifty_threshold
+        pr   = row["cum_price_ret_pct"] - center
         corr = row["price_deliv_corr"]
 
         if sz > 0.25 and pr > 0.5:
@@ -1493,22 +1502,23 @@ def get_rotation_clock_backtest(
     signals["signal_date"]          = signal_date
     signals["forward_ret_pct"]      = signals["sector"].map(forward_rets)
     signals["forward_nifty_ret"]    = nifty_fwd
-    # Excess return vs Nifty50 over the forward period
-    if nifty_fwd is not None:
-        signals["forward_vs_nifty"] = signals["forward_ret_pct"] - nifty_fwd
-    else:
-        signals["forward_vs_nifty"] = signals["forward_ret_pct"]  # fallback to absolute
+    # Correctness is judged vs PEER SECTORS (cross-sectional median forward return),
+    # matching the clock's cross-sectional classification — apples-to-apples. (Judging
+    # equal-weight median sector returns against the cap-weighted Nifty50 introduced a
+    # systematic gap.) forward_vs_nifty is kept only as a reference column.
+    peer_med = float(pd.Series(forward_rets).median()) if forward_rets else 0.0
+    signals["forward_vs_peers"] = signals["forward_ret_pct"] - peer_med
+    signals["forward_vs_nifty"] = (signals["forward_ret_pct"] - nifty_fwd
+                                   if nifty_fwd is not None else signals["forward_ret_pct"])
 
     def _correct(row) -> Optional[bool]:
         phase = row["phase"]
-        # Use market-relative return: sector correct if it beat Nifty50 (inflow)
-        # or underperformed Nifty50 (outflow). Falls back to absolute if no index data.
-        fwd_r = row.get("forward_vs_nifty") if nifty_fwd is not None else row.get("forward_ret_pct")
+        fwd_r = row.get("forward_vs_peers")
         if fwd_r is None or pd.isna(fwd_r) or phase == "Neutral":
             return None
         if phase in ("Leading", "Improving"):
-            return bool(fwd_r > 0)   # sector beat the market
-        return bool(fwd_r < 0)       # Weakening/Lagging: sector underperformed market
+            return bool(fwd_r > 0)   # sector beat its peers
+        return bool(fwd_r < 0)       # Weakening/Lagging: underperformed peers
 
     signals["signal_correct"] = signals.apply(_correct, axis=1)
 
@@ -1520,6 +1530,116 @@ def get_rotation_clock_backtest(
         .drop(columns="_pr")
         .reset_index(drop=True)
     )
+
+
+def get_rotation_clock_accuracy(
+    as_of_date: date,
+    window_trading_days: int = 22,
+    n_signals: int = 40,
+    min_turnover_lacs: Optional[float] = None,
+) -> dict:
+    """
+    MULTI-PERIOD validation of the rotation clock — a statistically meaningful
+    hit-rate, NOT the single noisy 5-day snapshot.
+
+    Walks back over up to n_signals NON-OVERLAPPING past signal dates (stepped by
+    window_trading_days). At each, classifies phases AS OF that date (point-in-time)
+    and measures the forward median sector return over the next window vs Nifty50.
+    Aggregates per phase: sample count, hit-rate (inflow beat / outflow lagged the
+    index), and average forward excess return.
+
+    Returns {n_signals, n_predictions, overall_hit, inflow_outflow_spread,
+             by_phase: {phase: {n, hit_rate, avg_excess}}}.
+    """
+    if min_turnover_lacs is None:
+        min_turnover_lacs = get_min_turnover_filter()
+
+    dts = query_dataframe(
+        "SELECT DISTINCT trade_date FROM daily_data WHERE trade_date <= ? ORDER BY trade_date",
+        [as_of_date],
+    )
+    if dts.empty:
+        return {}
+    all_dates = [pd.to_datetime(d).date() for d in dts["trade_date"]]
+    n = len(all_dates)
+    w = window_trading_days
+    if n < w * 3:
+        return {}
+
+    # Non-overlapping signal indices: each needs `w` forward days available.
+    sig_idx = list(range(n - 1 - w, w, -w))[:n_signals]
+    if not sig_idx:
+        return {}
+
+    # Forward-return panel (robust median) spanning the whole backtest, one query.
+    span_start = all_dates[min(sig_idx)]
+    panel = query_dataframe("""
+        SELECT s.sector, b.trade_date,
+               MEDIAN(CASE WHEN b.prev_close > 0
+                           THEN (b.close_price - b.prev_close) / b.prev_close * 100 END) AS ret
+        FROM daily_data b JOIN v_sector_master s ON b.symbol = s.symbol
+        WHERE s.sector NOT IN ('ETF', 'Others') AND b.series IN ('EQ','SM','ST')
+          AND b.turnover_lacs >= ? AND b.trade_date >= ? AND b.trade_date <= ?
+        GROUP BY s.sector, b.trade_date
+    """, [min_turnover_lacs, span_start, as_of_date])
+    nif = query_dataframe("""
+        SELECT trade_date, pct_chg AS nret FROM index_data
+        WHERE index_name = 'Nifty 50' AND trade_date >= ? AND trade_date <= ?
+    """, [span_start, as_of_date])
+    if panel.empty:
+        return {}
+    panel["trade_date"] = pd.to_datetime(panel["trade_date"]).dt.date
+    piv = panel.pivot_table("ret", "trade_date", "sector")
+    nser = (nif.assign(trade_date=pd.to_datetime(nif["trade_date"]).dt.date)
+               .set_index("trade_date")["nret"]) if not nif.empty else None
+
+    from collections import defaultdict
+    agg = defaultdict(lambda: {"n": 0, "hit": 0, "exc": 0.0})
+    n_pred = n_hit = 0
+    infl_exc, outf_exc = [], []
+
+    for i in sig_idx:
+        sig_date = all_dates[i]
+        fwd_dates = all_dates[i + 1: i + 1 + w]
+        if len(fwd_dates) < max(3, w // 2):
+            continue
+        try:
+            ph = get_sector_rotation_timeframe(sig_date, w, min_turnover_lacs)
+        except Exception:
+            continue
+        if ph.empty:
+            continue
+        # Peer benchmark = cross-sectional median forward return (apples-to-apples
+        # with the clock's cross-sectional classification).
+        fwd_all = {s: float((1 + piv[s].reindex(fwd_dates) / 100).prod() - 1) * 100
+                   for s in piv.columns}
+        peer_med = float(np.nanmedian([v for v in fwd_all.values() if not pd.isna(v)]))
+        for _, r in ph.iterrows():
+            sec, phase = r["sector"], r["phase"]
+            if phase == "Neutral" or sec not in fwd_all:
+                continue
+            sfwd = fwd_all[sec]
+            if pd.isna(sfwd):
+                continue
+            exc = sfwd - peer_med
+            correct = (exc > 0) if phase in ("Leading", "Improving") else (exc < 0)
+            a = agg[phase]; a["n"] += 1; a["hit"] += int(correct); a["exc"] += exc
+            n_pred += 1; n_hit += int(correct)
+            (infl_exc if phase in ("Leading", "Improving") else outf_exc).append(exc)
+
+    if n_pred == 0:
+        return {}
+    by_phase = {p: {"n": v["n"], "hit_rate": round(v["hit"] / v["n"] * 100, 0),
+                    "avg_excess": round(v["exc"] / v["n"], 2)}
+                for p, v in agg.items()}
+    spread = ((sum(infl_exc) / len(infl_exc) if infl_exc else 0)
+              - (sum(outf_exc) / len(outf_exc) if outf_exc else 0))
+    return {
+        "n_signals": len(sig_idx), "n_predictions": n_pred,
+        "overall_hit": round(n_hit / n_pred * 100, 0),
+        "inflow_outflow_spread": round(spread, 2),
+        "by_phase": by_phase,
+    }
 
 
 def get_sector_rotation_custom_range(
@@ -1612,11 +1732,13 @@ def get_sector_rotation_custom_range(
     df["slope_z"] = ((df["delivery_slope"] - s_mean) / max(s_std, 1e-9)).round(2)
 
     nifty_ret_custom  = get_nifty50_custom_return(from_date, to_date)
-    nifty_thr_custom  = nifty_ret_custom if nifty_ret_custom is not None else 0.0
+    # Cross-sectional center (typical sector), consistent with the timeframe clock.
+    center_custom = float(df["cum_price_ret_pct"].median())
+    df["sector_median_ret"] = round(center_custom, 2)
 
     def _phase_and_confidence_custom(row) -> tuple:
         sz   = row["slope_z"]
-        pr   = row["cum_price_ret_pct"] - nifty_thr_custom
+        pr   = row["cum_price_ret_pct"] - center_custom
         corr = row["price_deliv_corr"]
         if sz > 0.25 and pr > 0.5:
             conf = min(abs(sz) / 1.5, 1.0) * (1.0 + max(corr, 0.0) * 0.5)

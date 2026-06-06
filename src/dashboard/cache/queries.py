@@ -462,6 +462,16 @@ def cached_sector_memory_context(
 
 
 @st.cache_data(ttl=_TTL)
+def cached_rotation_clock_accuracy(selected_date: date, window: int, min_turnover: float):
+    """Multi-period (walk-forward) rotation-clock hit-rate + per-phase forward edge."""
+    from src.analytics.sector_rotation import get_rotation_clock_accuracy
+    try:
+        return get_rotation_clock_accuracy(selected_date, window, 40, min_turnover)
+    except Exception:
+        return {}
+
+
+@st.cache_data(ttl=_TTL)
 def cached_market_scenario(selected_date: date):
     """7-scenario market classification + recommended ranking factor + playbook."""
     from src.analytics.sector_scenario import classify_scenario

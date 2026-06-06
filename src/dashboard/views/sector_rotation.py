@@ -20,6 +20,7 @@ import streamlit as st
 
 from src.dashboard.cache.queries import (
     cached_rotation_clock_backtest,
+    cached_rotation_clock_accuracy,
     cached_sector_rotation,
     cached_sector_overlay,
     cached_market_scenario,
@@ -199,13 +200,14 @@ def _quadrant_chart(df: pd.DataFrame) -> go.Figure:
 # ── Rotation Clock Chart ──────────────────────────────────────────────────────
 
 def _rotation_clock_chart(
-    df: pd.DataFrame, period_name: str, nifty_return: float | None = None
+    df: pd.DataFrame, period_name: str, nifty_return: float | None = None,
+    center: float | None = None,
 ) -> go.Figure:
     """RRG-style bubble chart: X = price return, Y = delivery slope z-score.
 
-    nifty_return shifts the quadrant center from 0% to the market return so that
-    phases (Leading / Improving / Weakening / Lagging) are market-relative —
-    a sector only 'Leading' if it beat Nifty50, not just because it was positive.
+    The quadrant center is the cross-sectional MEDIAN sector return (the typical
+    sector), matching the phase classification — a sector is 'Leading' only if it
+    beats its PEERS, not just Nifty50. Nifty is drawn as a faint reference line.
     """
     if df.empty:
         return go.Figure()
@@ -217,8 +219,10 @@ def _rotation_clock_chart(
     x0, x1 = x_vals.min() - x_pad, x_vals.max() + x_pad
     y0, y1 = y_vals.min() - y_pad, y_vals.max() + y_pad
 
-    # Quadrant center: use Nifty50 return if available, else 0%
-    cx = nifty_return if nifty_return is not None else 0.0
+    # Quadrant center = cross-sectional MEDIAN sector return (matches the phase
+    # classification); fall back to Nifty / 0% only if not supplied.
+    cx = (center if center is not None
+          else (nifty_return if nifty_return is not None else 0.0))
 
     fig = go.Figure()
 
@@ -246,22 +250,21 @@ def _rotation_clock_chart(
         )
 
     fig.add_hline(y=0, line_color="rgba(255,255,255,0.35)", line_width=1.5)
-    # Primary vertical axis: Nifty50 baseline (gold) if available, else 0% (white)
-    if nifty_return is not None:
-        fig.add_vline(x=nifty_return, line_color="#ffd600", line_width=2, line_dash="dash")
+    # Primary vertical axis: the cross-sectional median sector (gold) = quadrant center.
+    fig.add_vline(x=cx, line_color="#ffd600", line_width=2, line_dash="dash")
+    fig.add_annotation(
+        x=cx, y=y1, text=f"<b>Typical sector (median): {cx:+.2f}%</b>",
+        showarrow=False, font=dict(size=11, color="#ffd600"),
+        xanchor="center", yanchor="top", bgcolor="rgba(255,214,0,0.13)", borderpad=4, yshift=-4,
+    )
+    # Nifty50 as a faint secondary reference (where the cap-weighted index sits).
+    if nifty_return is not None and abs(nifty_return - cx) > 0.05:
+        fig.add_vline(x=nifty_return, line_color="rgba(255,255,255,0.30)", line_width=1, line_dash="dot")
         fig.add_annotation(
-            x=nifty_return, y=y1,
-            text=f"<b>Nifty50: {nifty_return:+.2f}%</b>",
-            showarrow=False,
-            font=dict(size=11, color="#ffd600"),
-            xanchor="center", yanchor="top",
-            bgcolor="rgba(255,214,0,0.13)", borderpad=4,
-            yshift=-4,
+            x=nifty_return, y=y0, text=f"Nifty50 {nifty_return:+.1f}%",
+            showarrow=False, font=dict(size=9.5, color="rgba(255,255,255,0.5)"),
+            xanchor="center", yanchor="bottom",
         )
-        # Zero line as a faint reference
-        fig.add_vline(x=0, line_color="rgba(255,255,255,0.20)", line_width=1, line_dash="dot")
-    else:
-        fig.add_vline(x=0, line_color="rgba(255,255,255,0.35)", line_width=1.5)
     fig.add_hline(y= 0.25, line_dash="dot", line_width=1.0, line_color="rgba(0,200,83,0.30)")
     fig.add_hline(y=-0.25, line_dash="dot", line_width=1.0, line_color="rgba(213,0,0,0.30)")
 
@@ -1402,7 +1405,8 @@ def _render_custom_range(all_dates: list, min_turnover: float) -> None:
     # Bubble chart
     period_label = f"{from_snap.strftime('%d %b')} → {to_snap.strftime('%d %b %Y')}"
     st.plotly_chart(
-        _rotation_clock_chart(df, period_label, nifty_return=nifty_ret),
+        _rotation_clock_chart(df, period_label, nifty_return=nifty_ret,
+                              center=(df["sector_median_ret"].iloc[0] if "sector_median_ret" in df.columns else None)),
         use_container_width=True,
         key="cr_clock_chart",
     )
@@ -1748,16 +1752,14 @@ def _render_rotation_clock(selected_date: date, min_turnover: float, all_dates: 
 
 | Phase | Delivery Slope | Price vs Nifty50 | Interpretation | Action |
 |-------|---------------|------------------|----------------|--------|
-| 💰 **Leading**   | Rising ↑ | Above Nifty50 ↑ | Institutions buying + outperforming market | ✅ **ACT — BUY / HOLD** |
-| 🔍 **Improving** | Rising ↑ | Below Nifty50 ↓ | Accumulating but price not confirming — contrarian zone | 👀 **WATCH** (await price confirmation) |
-| ⚠️ **Weakening** | Falling ↓ | Above Nifty50 ↑ | Institutions distributing into outperforming prices | **EXIT / REDUCE** |
-| 📤 **Lagging**   | Falling ↓ | Below Nifty50 ↓ | Institutions exiting, price lagging market | **AVOID** |
+| 💰 **Leading**   | Rising ↑ | Above peer-median ↑ | Institutions buying + outperforming peer sectors | ✅ **ACT — BUY / HOLD** |
+| 🔍 **Improving** | Rising ↑ | Below peer-median ↓ | Accumulating but price not confirming — contrarian zone | 👀 **WATCH** (await price confirmation) |
+| ⚠️ **Weakening** | Falling ↓ | Above peer-median ↑ | Distributing into outperforming prices | **EXIT / REDUCE** |
+| 📤 **Lagging**   | Falling ↓ | Below peer-median ↓ | Institutions exiting, price lagging peers | **AVOID** |
 
-> **Walk-forward evidence:** only **Leading** showed a reliable forward edge (~+1.4%/mo relative); **Improving** had none on its own (~−0.1%/mo) — treat it as a watchlist and buy only when it migrates into Leading (price confirmation). Weakening/Lagging underperform.
+> **Walk-forward evidence (peer-relative, honest):** on the **1-month** clock, Leading modestly beat peers (~+0.8%/mo, ~63% hit) and Lagging underperformed (~−0.9%/mo, ~67% hit); **Improving and Weakening showed no reliable edge**. The **1-week** clock is essentially coin-flip. Treat this as a *flow map* (where institutional delivery is moving now), not a precise alpha signal — use the 1M view, and confirm with the daily Smart-Money signal + FII/DII flow. (Sample is small: ~14 independent monthly windows.)
 
-**Quadrant Center = Nifty50** — The vertical gold dashed line marks the Nifty50 return for the selected period.
-Sectors to the RIGHT of the gold line are outperforming the market; sectors to the LEFT are underperforming.
-This makes the chart valid in both bull AND bear markets — a sector at +5% is "Improving" not "Lagging" if Nifty50 was +15%.
+**Quadrant Center = Typical Sector (cross-sectional median)** — The gold dashed line marks the MEDIAN sector return for the period; sectors to the RIGHT are outperforming their peers, to the LEFT underperforming. This is the correct, apples-to-apples benchmark for *sector rotation* (and is consistent with the cross-sectional slope-Z on the Y-axis). Nifty50 is shown as a faint dotted reference only — benchmarking equal-weight median sector returns against the cap-weighted index made every sector look like it lagged when mega-caps led.
 
 **Delivery Slope** = Linear regression of daily turnover-weighted delivery % over the period.
 Positive slope = institutions are INCREASINGLY committed (building positions).
@@ -1817,7 +1819,8 @@ Ideal entry: sector moving from Improving to Leading (rising delivery + price cr
 
     # Bubble chart
     st.plotly_chart(
-        _rotation_clock_chart(df, sel, nifty_return=nifty_ret),
+        _rotation_clock_chart(df, sel, nifty_return=nifty_ret,
+                              center=(df["sector_median_ret"].iloc[0] if "sector_median_ret" in df.columns else None)),
         use_container_width=True,
         key=f"rot_clock_chart_{window}",
     )
@@ -1846,8 +1849,9 @@ Ideal entry: sector moving from Improving to Leading (rising delivery + price cr
                     f"<div style='font-size:12px;color:#00c853;font-weight:600;margin-bottom:2px'>"
                     f"💰 LEADING — Money Entering · ✅ ACT ({len(leading)})</div>"
                     f"<div style='font-size:10.5px;color:rgba(255,255,255,0.5);margin-bottom:5px'>"
-                    f"Delivery rising AND price beating the market — the validated, "
-                    f"highest-conviction rotation buy (~+1.4%/mo forward edge).</div>",
+                    f"Delivery rising AND price beating peer sectors — the most reliable "
+                    f"phase, but the edge is modest and only on the 1-MONTH clock "
+                    f"(~+0.8% vs peers, ~63% hit); the 1-week clock is near coin-flip.</div>",
                     unsafe_allow_html=True,
                 )
                 for _, row in leading.iterrows():
@@ -1902,11 +1906,48 @@ Ideal entry: sector moving from Improving to Leading (rising delivery + price cr
     # ── Signal Validation ─────────────────────────────────────────────────────
     st.markdown("---")
     st.markdown(f"### 📊 Signal Validation — Did the {sel} Rotation Clock Call It Right?")
+
+    # ── Multi-period aggregate (the statistically meaningful number) ──────────
+    acc = cached_rotation_clock_accuracy(selected_date, window, float(min_turnover))
+    if acc and acc.get("n_predictions"):
+        st.caption(
+            f"**Walk-forward across {acc['n_signals']} past {sel} windows** "
+            f"({acc['n_predictions']} sector-calls) — judged vs PEER sectors. "
+            f"This is the meaningful read; the single window below is just the latest example."
+        )
+        oh = acc["overall_hit"]; sp = acc["inflow_outflow_spread"]
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Overall hit-rate", f"{oh:.0f}%",
+                  delta="edge" if oh > 52 else ("coin-flip" if oh >= 48 else "weak"),
+                  delta_color="normal" if oh > 52 else "off")
+        m2.metric("Inflow − Outflow spread", f"{sp:+.2f}%/win",
+                  delta_color="normal" if sp > 0 else "inverse")
+        bp = acc["by_phase"]
+        _le = bp.get("Leading", {}); _lg = bp.get("Lagging", {})
+        m3.metric("Leading edge vs peers",
+                  f"{_le.get('avg_excess', 0):+.2f}%" if _le else "—",
+                  delta=f"{_le.get('hit_rate', 0):.0f}% hit" if _le else None,
+                  delta_color="normal" if _le.get("avg_excess", 0) > 0 else "off")
+        rows = []
+        for p in ["Leading", "Improving", "Weakening", "Lagging"]:
+            d = bp.get(p)
+            if d:
+                rows.append({"Phase": p, "Samples": d["n"], "Hit-rate %": d["hit_rate"],
+                             "Avg fwd vs peers %": d["avg_excess"]})
+        if rows:
+            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        st.caption(
+            "⚖️ **Honest read:** the clock is a *flow map*, not a precise alpha signal. "
+            "Only **Leading** (act) and **Lagging** (avoid) carry a modest, sample-limited "
+            "edge on the **1-month** window; Improving/Weakening are unreliable, and the "
+            "1-week clock is coin-flip. Confirm with the daily Smart-Money signal + FII/DII flow."
+        )
+        st.markdown("###### 🔬 Latest window — worked example")
+
     st.caption(
-        f"The rotation clock computed signals **{window} trading days ago**. "
-        f"This section shows whether those signals actually predicted what happened since then. "
-        f"Inflow signals (Leading/Improving) should have produced positive returns. "
-        f"Outflow signals (Weakening/Lagging) should have produced negative returns."
+        f"The rotation clock computed signals **{window} trading days ago**; below shows how "
+        f"those specific sectors did since (vs peers). NOTE: one window is a tiny sample — "
+        f"read it as an illustration, not a verdict (use the aggregate above)."
     )
     _render_signal_validation(selected_date, window, min_turnover, sel)
 
