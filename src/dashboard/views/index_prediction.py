@@ -1427,8 +1427,9 @@ def _render_market_context(pred: IndexPrediction) -> None:
 def render(selected_date: date) -> None:
     st.subheader("Index Prediction — Tomorrow's Directional Forecast")
     st.caption(
-        "24-signal quant engine: OI-Price Matrix · Carry · Max Pain · PCR · OI-Premium Matrix · "
-        "Wyckoff Range · Price Mean-Reversion · FII Institutional · FII Options Delta · FII Flow · "
+        "26-signal quant engine: OI-Price Matrix · Carry · Max Pain · PCR · OI-Premium Matrix · "
+        "Wyckoff Range · Price Mean-Reversion · Anchored VWAP · Institutional RSI · "
+        "FII Institutional · FII Options Delta · FII Flow · "
         "FII 5D Cumulative · FII OI Buildup · FII Position Change · Short Squeeze Setup · "
         "India VIX · Sector Breadth · Cyclical/Defensive Rotation · PE Valuation · "
         "Multi-Expiry PCR · Dual Max Pain · Gamma Wall · Hurst · HMM · Entropy"
@@ -1437,7 +1438,7 @@ def render(selected_date: date) -> None:
     with st.expander("📖 How to read this page", expanded=False):
         st.markdown("""
 **Prediction Cards (top row)** — one card per index (Nifty 50, Bank Nifty, Fin Nifty, Midcap Nifty).
-- **Direction badge** (🟢 UP / 🔴 DOWN / 🟡 SIDEWAYS) — tomorrow's expected move from the 24-signal engine
+- **Direction badge** (🟢 UP / 🔴 DOWN / 🟡 SIDEWAYS) — tomorrow's expected move from the 26-signal engine
 - **Bull/Bear Meter (0–100)** — intuitive conviction scale replacing the raw ±20 score:
   - **0–20 = STRONG BEAR** 🔴🔴 — very high bearish conviction, multiple strong signals aligned
   - **21–35 = BEAR** 🔴 — clear bearish bias, institutions positioned short

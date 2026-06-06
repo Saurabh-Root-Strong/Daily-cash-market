@@ -89,6 +89,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 from src.data.repository import query_dataframe
@@ -466,10 +467,13 @@ def _to_date(v) -> Optional[date]:
 
 # ── Data loaders ──────────────────────────────────────────────────────────────
 
-def _load_index_history(index_name: str, trade_date: date, lookback: int = 40) -> pd.DataFrame:
+def _load_index_history(index_name: str, trade_date: date, lookback: int = 60) -> pd.DataFrame:
+    # ~60 trading-day window (×2 calendar buffer) — enough for RSI(14), EMA50 trend
+    # regime and a 20-day anchored VWAP. volume/turnover_cr drive the VWAP weight.
     start = trade_date - timedelta(days=lookback * 2)
     df = query_dataframe("""
-        SELECT trade_date, open_val, high_val, low_val, close_val, prev_close, pct_chg
+        SELECT trade_date, open_val, high_val, low_val, close_val, prev_close, pct_chg,
+               volume, turnover_cr
         FROM index_data
         WHERE index_name = ? AND trade_date BETWEEN ? AND ?
         ORDER BY trade_date
@@ -1078,6 +1082,189 @@ def _sig_price_action(idx_hist: pd.DataFrame) -> Optional[IndexSignal]:
                 "Indian market shows 72% momentum continuation — mild caution only."
             ), emoji="⚠️",
         )
+    return None
+
+
+def _sig_vwap(idx_hist: pd.DataFrame) -> Optional[IndexSignal]:
+    """
+    Anchored VWAP — the institutional cost-basis / control line.
+
+    Institutions benchmark execution to VWAP, so a multi-day anchored VWAP acts as
+    dynamic support/resistance: trading ABOVE it = buyers in control (price above the
+    average institutional cost), BELOW = sellers in control. A fresh RECLAIM or LOSS
+    of VWAP is a directional trigger; price stretched far from VWAP tends to revert
+    (execution algos pull price back toward VWAP). Volume-weighted by the index's own
+    traded value (turnover_cr), typical price = (H+L+C)/3. Point-in-time: ≤ today.
+    """
+    if idx_hist is None or len(idx_hist) < 22:
+        return None
+    df = idx_hist.copy()
+    w = df["turnover_cr"].fillna(0.0)
+    if float(w.sum()) <= 0:
+        w = df["volume"].fillna(0.0)
+    if float(w.sum()) <= 0:
+        return None
+    typ = (df["high_val"] + df["low_val"] + df["close_val"]) / 3.0
+    N = 20  # rolling monthly institutional cost basis
+
+    def _vwap(tp: pd.Series, wt: pd.Series) -> Optional[float]:
+        wt = wt.to_numpy(); tp = tp.to_numpy()
+        return float((tp * wt).sum() / wt.sum()) if wt.sum() > 0 else None
+
+    vwap     = _vwap(typ.iloc[-N:],      w.iloc[-N:])
+    vwap_prev = _vwap(typ.iloc[-(N + 1):-1], w.iloc[-(N + 1):-1])
+    if vwap is None or vwap_prev is None:
+        return None
+    spot = float(df["close_val"].iloc[-1])
+    prev = float(df["close_val"].iloc[-2])
+    dist = (spot - vwap) / vwap * 100.0
+    stretched = abs(dist) > 3.0   # ~3% from 20D VWAP is extended for a broad index
+
+    reclaim = prev <= vwap_prev and spot > vwap
+    loss    = prev >= vwap_prev and spot < vwap
+
+    if reclaim:
+        return IndexSignal(
+            name="VWAP Reclaim", category="Price Action", direction=1,
+            score=1.5, emoji="🟢",
+            headline=f"Reclaimed 20D VWAP ({vwap:,.0f}) — buyers seize control",
+            description=(
+                f"Spot {spot:,.0f} crossed back ABOVE the 20-day anchored VWAP {vwap:,.0f} "
+                f"(+{dist:.2f}%). Institutions are now in profit on the average position — "
+                "a fresh bullish control shift; VWAP becomes support."),
+        )
+    if loss:
+        return IndexSignal(
+            name="VWAP Loss", category="Price Action", direction=-1,
+            score=-1.5, emoji="🔴",
+            headline=f"Lost 20D VWAP ({vwap:,.0f}) — sellers seize control",
+            description=(
+                f"Spot {spot:,.0f} broke BELOW the 20-day anchored VWAP {vwap:,.0f} "
+                f"({dist:.2f}%). Average institutional position now underwater — bearish "
+                "control shift; VWAP becomes resistance."),
+        )
+    if spot > vwap:
+        sc = 0.4 if stretched else 1.0
+        note = (" — but extended +%.1f%% above VWAP (mean-reversion risk)" % dist) if stretched else ""
+        return IndexSignal(
+            name="Above VWAP", category="Price Action", direction=1,
+            score=sc, emoji="📈",
+            headline=f"Holding above 20D VWAP (+{dist:.2f}%){note}",
+            description=(
+                f"Spot {spot:,.0f} is above the 20-day anchored VWAP {vwap:,.0f} — buyers "
+                "in control, trend bias up." + (" Stretched: algos may pull price back toward "
+                "VWAP, fade chasing." if stretched else " VWAP is the support to defend.")),
+        )
+    sc = -0.4 if stretched else -1.0
+    note = (" — but %.1f%% below VWAP (oversold, bounce risk)" % dist) if stretched else ""
+    return IndexSignal(
+        name="Below VWAP", category="Price Action", direction=-1,
+        score=sc, emoji="📉",
+        headline=f"Trading below 20D VWAP ({dist:.2f}%){note}",
+        description=(
+            f"Spot {spot:,.0f} is below the 20-day anchored VWAP {vwap:,.0f} — sellers in "
+            "control, trend bias down." + (" Stretched below: prone to a snap-back toward VWAP."
+            if stretched else " VWAP is the resistance capping rallies.")),
+    )
+
+
+def _sig_rsi(idx_hist: pd.DataFrame) -> Optional[IndexSignal]:
+    """
+    Institution-grade RSI(14) — Cardwell/Brown range rules + divergence, NOT the
+    retail 70/30. Pros read RSI relative to the TREND: in a bull market RSI oscillates
+    ~40–80 (40–50 is support), in a bear market ~20–60 (50–60 is resistance). The
+    highest-value reads are DIVERGENCES (price/momentum disagree) and range
+    breaks/holds. Wilder smoothing on the index close. Point-in-time: ≤ today.
+    """
+    if idx_hist is None or len(idx_hist) < 30:
+        return None
+    close = idx_hist["close_val"].astype(float).reset_index(drop=True)
+    delta = close.diff()
+    gain = delta.clip(lower=0.0)
+    loss = (-delta).clip(lower=0.0)
+    ag = gain.ewm(alpha=1 / 14, adjust=False).mean()
+    al = loss.ewm(alpha=1 / 14, adjust=False).mean()
+    rsi = 100.0 - 100.0 / (1.0 + ag / al.replace(0, np.nan))
+    rsi = rsi.fillna(50.0)
+    cur = float(rsi.iloc[-1]); prev = float(rsi.iloc[-2])
+
+    # Trend regime via EMA structure
+    ema20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
+    ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1] if len(close) >= 50 else ema20
+    last = float(close.iloc[-1])
+    uptrend   = last > ema50 and ema20 >= ema50
+    downtrend = last < ema50 and ema20 <= ema50
+
+    # Divergence over a ~20-bar window (exclude the last 2 bars for the prior pivot)
+    look = min(20, len(close) - 1)
+    p = close.tail(look).reset_index(drop=True)
+    r = rsi.tail(look).reset_index(drop=True)
+    n = len(p)
+    bear_div = bull_div = False
+    if n >= 8:
+        prior = p.iloc[:n - 2]
+        hi_i = int(prior.idxmax()); lo_i = int(prior.idxmin())
+        bear_div = (p.iloc[-1] >= prior.iloc[hi_i] * 0.999) and (r.iloc[-1] < r.iloc[hi_i] - 2.0)
+        bull_div = (p.iloc[-1] <= prior.iloc[lo_i] * 1.001) and (r.iloc[-1] > r.iloc[lo_i] + 2.0)
+
+    _band = ("bull-market 40–80 band" if uptrend else
+             "bear-market 20–60 band" if downtrend else "neutral 30–70 band")
+
+    # Priority: divergence > true extreme > range continuation > centerline
+    if bear_div:
+        return IndexSignal(
+            name="RSI Bearish Divergence", category="Price Action", direction=-1,
+            score=-2.0, emoji="🔴",
+            headline=f"Bearish RSI divergence (RSI {cur:.0f}) — momentum fading at the high",
+            description=("Price made a fresh high but RSI did NOT — institutional momentum is "
+                         "waning into strength. A classic distribution / top-warning read."))
+    if bull_div:
+        return IndexSignal(
+            name="RSI Bullish Divergence", category="Price Action", direction=1,
+            score=2.0, emoji="🟢",
+            headline=f"Bullish RSI divergence (RSI {cur:.0f}) — momentum building at the low",
+            description=("Price made a fresh low but RSI did NOT — selling pressure is exhausting. "
+                         "A classic accumulation / bottoming read."))
+    if cur >= 80:
+        return IndexSignal(
+            name="RSI Extreme Overbought", category="Price Action", direction=-1,
+            score=-1.0, emoji="⚠️",
+            headline=f"RSI {cur:.0f} — true overbought (>80)",
+            description=("Even by institutional bull-market rules (overbought only >80), momentum "
+                         "is stretched — elevated reversion risk into the next session."))
+    if cur <= 20:
+        return IndexSignal(
+            name="RSI Extreme Oversold", category="Price Action", direction=1,
+            score=1.0, emoji="🟢",
+            headline=f"RSI {cur:.0f} — true oversold (<20)",
+            description=("Deep oversold even by bear-market rules (<20) — bounce setup as selling "
+                         "exhausts."))
+    if uptrend and 40 <= cur <= 55 and cur > prev:
+        return IndexSignal(
+            name="RSI Bull-Support Hold", category="Price Action", direction=1,
+            score=1.0, emoji="📈",
+            headline=f"RSI {cur:.0f} held bull-market support (40–50) & turning up",
+            description=("In the uptrend, RSI pulled back to the 40–50 institutional support zone "
+                         "and is turning up — continuation read, not weakness."))
+    if downtrend and 45 <= cur <= 60 and cur < prev:
+        return IndexSignal(
+            name="RSI Bear-Resistance Reject", category="Price Action", direction=-1,
+            score=-1.0, emoji="📉",
+            headline=f"RSI {cur:.0f} rejected at bear-market resistance (50–60)",
+            description=("In the downtrend, RSI rallied into the 50–60 institutional resistance "
+                         "zone and is rolling over — continuation lower."))
+    if cur > 55:
+        return IndexSignal(
+            name="RSI Momentum Up", category="Price Action", direction=1,
+            score=0.5, emoji="📈",
+            headline=f"RSI {cur:.0f} above centerline ({_band})",
+            description="RSI above 50 with positive momentum — mild bullish tilt.")
+    if cur < 45:
+        return IndexSignal(
+            name="RSI Momentum Down", category="Price Action", direction=-1,
+            score=-0.5, emoji="📉",
+            headline=f"RSI {cur:.0f} below centerline ({_band})",
+            description="RSI below 50 with negative momentum — mild bearish tilt.")
     return None
 
 
@@ -3119,6 +3306,8 @@ def _compute_prediction(
 
     # — Signals 1-7: index-specific price/futures/options —
     add(_sig_price_action(idx_hist))
+    add(_sig_vwap(idx_hist))   # institutional cost-basis / control line
+    add(_sig_rsi(idx_hist))    # institution-grade RSI (Cardwell range + divergence)
     sigs.append(_sig_oi_price_matrix(day_change_pct, fut_oi_chg, fut_oi, is_rollover=is_rollover))
     add(_sig_carry(carry_pct_ann, carry_pts))
     # Compare PCR only against the SAME expiry's prior-day OI (via _opt_near_p, which is
