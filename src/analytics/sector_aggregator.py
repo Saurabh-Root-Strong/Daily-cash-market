@@ -225,10 +225,28 @@ def _build_master_performance(
     grp_cols = ["sector"] + (["industry"] if by_industry else [])
     outer_g  = ", industry" if by_industry else ""
 
+    # 100-trading-day trailing window — computed once and reused for the period
+    # return's liquidity weight (below) and the delivery baselines further down.
+    cutoff_100d = _get_cutoff_100d(as_of_date)
+
     # ── Period price + delivery ───────────────────────────────────────────────
+    # Period returns are weighted by each stock's TRAILING-AVERAGE turnover, NOT
+    # its end-day turnover. Contemporaneous (same-period) turnover correlates with
+    # the move — big up-moves trade big — which systematically OVER-weights the
+    # gainers and inflated the sector return by +2-7%/week (measured). A stable,
+    # pre-determined trailing-average turnover keeps the "where the money is"
+    # weighting while removing that bias. Point-in-time: window ends at as_of_date.
     price_sql = f"""
-        WITH end_prices AS (
-            SELECT b.symbol, b.close_price, b.turnover_lacs
+        WITH liq AS (
+            SELECT symbol, AVG(turnover_lacs) AS w
+            FROM daily_data
+            WHERE series IN ('EQ', 'SM', 'ST')
+              AND trade_date >  ?
+              AND trade_date <= ?
+            GROUP BY symbol
+        ),
+        end_prices AS (
+            SELECT b.symbol, b.close_price
             FROM daily_data b
             WHERE b.trade_date = ?
               AND b.series IN ('EQ', 'SM', 'ST')
@@ -249,12 +267,13 @@ def _build_master_performance(
             SUM(
                 CASE WHEN sp.close_price > 0
                 THEN (ep.close_price - sp.close_price) / sp.close_price * 100
-                     * ep.turnover_lacs
+                     * liq.w
                 END
-            ) / NULLIF(SUM(CASE WHEN sp.close_price > 0 THEN ep.turnover_lacs END), 0)
+            ) / NULLIF(SUM(CASE WHEN sp.close_price > 0 THEN liq.w END), 0)
                 AS price_chg_pct
         FROM end_prices ep
-        INNER JOIN start_prices sp ON ep.symbol = sp.symbol
+        INNER JOIN start_prices sp  ON ep.symbol = sp.symbol
+        INNER JOIN liq              ON ep.symbol = liq.symbol
         INNER JOIN v_sector_master s ON ep.symbol = s.symbol
         WHERE s.sector IS NOT NULL
         GROUP BY s.sector{gb}
@@ -276,7 +295,9 @@ def _build_master_performance(
               AND b.trade_date <= ?
             GROUP BY s.sector{gb}
         """
-        p_df = query_dataframe(price_sql, [as_of_date, min_turnover_lacs, start])
+        p_df = query_dataframe(
+            price_sql, [cutoff_100d, as_of_date, as_of_date, min_turnover_lacs, start]
+        )
         p_df.columns = grp_cols + [f"{label}_price_chg_pct"]
 
         d_df = query_dataframe(deliv_sql, [min_turnover_lacs, start, as_of_date])
@@ -292,9 +313,7 @@ def _build_master_performance(
                .merge(m,  on=mo, how="outer")
                .merge(q,  on=mo, how="outer"))
 
-    # ── 100-trading-day baseline (today excluded) ─────────────────────────────
-    cutoff_100d = _get_cutoff_100d(as_of_date)
-
+    # ── 100-trading-day baseline (today excluded; cutoff computed above) ──────
     baseline_sql = f"""
         SELECT s.sector{gs},
                SUM(b.turnover_lacs * b.deliv_per / 100.0) / 100.0 AS deliv_val_cr

@@ -514,6 +514,25 @@ def get_sector_rotation(
         result["top_stock_pct"]      = None
         result["sector_turnover_cr"] = None
 
+    # ── Defensive metrics: beta / downside-capture / defense_score ────────────
+    # Point-in-time, robust (median returns). Lets the dashboard rank by capital
+    # protection in BEAR/CAUTION regimes instead of momentum (accum_score).
+    try:
+        from src.analytics.sector_defensive import get_sector_defensive_metrics
+        dfn = get_sector_defensive_metrics(as_of_date, min_turnover_lacs=min_turnover_lacs)
+        if not dfn.empty:
+            result = result.merge(
+                dfn[["sector", "beta", "down_capture", "up_capture", "defense_score"]],
+                on="sector", how="left",
+            )
+        else:
+            for c in ("beta", "down_capture", "up_capture", "defense_score"):
+                result[c] = None
+    except Exception as exc:
+        log.warning("Sector defensive metrics failed (non-fatal): %s", exc)
+        for c in ("beta", "down_capture", "up_capture", "defense_score"):
+            result[c] = None
+
     return result.sort_values("accum_score", ascending=False).reset_index(drop=True)
 
 

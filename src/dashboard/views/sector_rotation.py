@@ -689,6 +689,24 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
             + "</div>"
         )
 
+    # ── Defensive metrics (β / downside-capture) — the bear-market quality line ─
+    _beta = row.get("beta"); _dcap = row.get("down_capture")
+    defense_html = ""
+    if _beta is not None and not (isinstance(_beta, float) and pd.isna(_beta)):
+        _b_col = "#69f0ae" if _beta < 0.9 else ("#ff9100" if _beta > 1.2 else "rgba(255,255,255,0.55)")
+        _d_txt = ""
+        if _dcap is not None and not (isinstance(_dcap, float) and pd.isna(_dcap)):
+            _d_col = "#69f0ae" if _dcap < 0.85 else ("#ff5252" if _dcap > 1.05 else "rgba(255,255,255,0.55)")
+            _d_lbl = ("falls less than market" if _dcap < 0.85
+                      else "amplifies market falls" if _dcap > 1.05 else "tracks market")
+            _d_txt = (f" · downside-capture <b style='color:{_d_col}'>{_dcap:.2f}×</b> "
+                      f"<span style='color:rgba(255,255,255,0.4)'>({_d_lbl})</span>")
+        defense_html = (
+            f"<div style='margin-top:2px;font-size:10.5px;color:rgba(255,255,255,0.45)'>"
+            f"β <b style='color:{_b_col}'>{_beta:.2f}</b>{_d_txt}</div>"
+        )
+    basket_html = basket_html + defense_html
+
     if "—" in action_text:
         action_prefix, action_desc = action_text.split("—", 1)
         action_html = (
@@ -1956,7 +1974,28 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
     else:
         memory_on = False
 
-    _rank_col = "adj_score" if (memory_on and _has_overlay) else "accum_score"
+    # ── Regime-conditional ranking ────────────────────────────────────────────
+    # MOMENTUM (accum_score / adj_score) predicts forward returns in up-trends,
+    # but in a BEAR/CAUTION regime the momentum leaders are the HIGH-BETA sectors
+    # that amplify the fall — buying them is how a "good signal" still loses money.
+    # So in down-markets we rank by DEFENSE (low beta, low downside-capture,
+    # positive relative strength) instead. This is the core fix for "I bought your
+    # pick in a downtrend and still lost".
+    _bear_regime = regime.get("regime") in ("BEAR", "CAUTION")
+    _has_defense = "defense_score" in rot.columns and rot["defense_score"].notna().any()
+    _defense_mode = bool(_bear_regime and _has_defense)
+
+    if _defense_mode:
+        _rank_col = "defense_score"
+        st.caption(
+            "🛡️ **Defensive ranking active** — market regime is "
+            f"**{regime.get('regime')}**. Sectors are ranked by *capital protection* "
+            "(low β, low downside-capture, positive relative strength), **not** "
+            "momentum. In a downtrend the momentum leaders are the highest-β sectors "
+            "that fall hardest; this ranks the ones that fall LEAST."
+        )
+    else:
+        _rank_col = "adj_score" if (memory_on and _has_overlay) else "accum_score"
     rot = rot.sort_values(_rank_col, ascending=False).reset_index(drop=True)
 
     if "z_score" not in rot.columns:
@@ -2067,9 +2106,17 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
     else:
         _tradable, _n_thin = rot.copy(), 0
 
-    entering  = _tradable[_tradable["signal"].isin(_INVEST_SIGNALS)].copy()
     caution   = _tradable[_tradable["signal"].isin(_CAUTION_SIGNALS)].copy()
-    exiting   = _tradable[_tradable["signal"].isin(_AVOID_SIGNALS)].sort_values(_rank_col, ascending=True).copy()
+    if _defense_mode:
+        # Bear/Caution: the left column is "defensive holds" — the most defensive
+        # tradable sectors by defense_score, regardless of accumulation signal
+        # (the best bear sector, e.g. Pharma, is often "Neutral" on delivery).
+        entering = _tradable.sort_values("defense_score", ascending=False).head(8).copy()
+        # Avoid = the bear amplifiers (lowest defense_score / highest beta).
+        exiting  = _tradable.sort_values("defense_score", ascending=True).head(6).copy()
+    else:
+        entering = _tradable[_tradable["signal"].isin(_INVEST_SIGNALS)].copy()
+        exiting  = _tradable[_tradable["signal"].isin(_AVOID_SIGNALS)].sort_values(_rank_col, ascending=True).copy()
 
     k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric("🔥 Secret Accum",   len(rot[rot["signal"] == "🔥 Secret Accumulation"]),
