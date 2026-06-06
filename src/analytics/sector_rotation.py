@@ -352,10 +352,27 @@ def get_sector_rotation(
         p3m       = float(row.get("3M_price_chg_pct",   float("nan")))
         today_dv  = float(row.get("today_dv_cr",        float("nan")))
         deliv_1w  = float(row.get("1W_deliv_cr",        float("nan")))
+        deliv_1m  = float(row.get("1M_deliv_cr",        float("nan")))
+        deliv_3m  = float(row.get("3M_deliv_cr",        float("nan")))
         deliv_100d = float(row.get("100D_deliv_cr",     float("nan")))
 
         if pd.isna(dv_ratio) or pd.isna(z_score):
             continue
+
+        # ── Multi-timeframe delivery acceleration ─────────────────────────────
+        # Daily delivery RATE in the last week vs the last month vs the last
+        # quarter. accel_short = 1W pace / 1M pace (>1 = institutional interest
+        # ramping recently); accel_med = 1M pace / 3M pace. Sustained acceleration
+        # (both >1) is the leading tell of quiet accumulation before a breakout.
+        _r1w = deliv_1w / max(n_1w_days, 1) if not pd.isna(deliv_1w) else float("nan")
+        _r1m = deliv_1m / 21.0 if not pd.isna(deliv_1m) else float("nan")
+        _r3m = deliv_3m / 63.0 if not pd.isna(deliv_3m) else float("nan")
+        accel_short = (_r1w / _r1m) if (not pd.isna(_r1w) and not pd.isna(_r1m) and _r1m > 0) else float("nan")
+        accel_med   = (_r1m / _r3m) if (not pd.isna(_r1m) and not pd.isna(_r3m) and _r3m > 0) else float("nan")
+        # Composite: recent pace weighted more; neutral 1.0 when missing.
+        delivery_accel = round(
+            0.6 * (accel_short if not pd.isna(accel_short) else 1.0)
+            + 0.4 * (accel_med if not pd.isna(accel_med) else 1.0), 3)
 
         # ── 5-day average delivery ratio ──────────────────────────────────────
         # dv_ratio_5d = (1W total delivery / 5 days) / (100D total delivery / 100 days)
@@ -511,12 +528,15 @@ def get_sector_rotation(
             "deliv_val_1w_cr":      round(dv1w_cr,  1) if not pd.isna(dv1w_cr)  else None,
             "today_wtd_deliv_pct":  round(today_wtd_pct, 1) if not pd.isna(today_wtd_pct) else None,
             "avg_wtd_deliv_pct_100d": round(avg_wtd_pct, 1) if not pd.isna(avg_wtd_pct)  else None,
+            "delivery_accel":       delivery_accel,
             "_dv5d":                dv5d,
             "_dv":                  dv_ratio,
             "_z":                   z_score,
             "_br":                  breadth  if not pd.isna(breadth)  else 0.5,
             "_pm":                  p1w      if not pd.isna(p1w)      else 0.0,
             "_slope":               trend_slope,
+            "_accel":               delivery_accel,
+            "_p1m":                 p1m      if not pd.isna(p1m)      else 0.0,
         })
 
     result = pd.DataFrame(records)
@@ -573,6 +593,28 @@ def get_sector_rotation(
         _rank01(result["_dv"])     * 10 +
         _rank01(result["_br"])     * 15 +
         _rank01(result["_z"])      * 10
+    ).round(1)
+
+    # ── ACCUMULATION score (SIDEWAYS/range) — quiet smart-money delivery, NOT
+    # momentum. In a range, sustained + accelerating delivery with broad breadth
+    # leads the eventual breakout; RS is only a minor tilt.
+    result["accumulation_score"] = (
+        _rank01(result["_dv5d"])   * 30 +   # sustained 5-day delivery
+        _rank01(result["_z"])      * 20 +   # cross-sectional delivery abnormality
+        _rank01(result["_accel"])  * 20 +   # multi-timeframe delivery acceleration
+        _rank01(result["_br"])     * 15 +   # broad participation
+        _rank01(rs_col)            * 15     # relative strength (minor)
+    ).round(1)
+
+    # ── REVERSAL score (DOWNTREND BOTTOMING) — delivery accumulation INTO price
+    # weakness (the Secret-Accumulation thesis at an index bottom): institutions
+    # taking delivery while price is still beaten down → highest risk/reward entry.
+    result["reversal_score"] = (
+        _rank01(result["_dv5d"])   * 30 +   # delivery strength despite weakness
+        _rank01(result["_z"])      * 20 +   # delivery abnormality
+        _rank01(result["_accel"])  * 20 +   # institutions ramping
+        _rank01(-result["_p1m"])   * 15 +   # oversold (more down = higher)
+        _rank01(result["_br"])     * 15     # breadth
     ).round(1)
 
     result = result.drop(columns=[c for c in result.columns if c.startswith("_")])

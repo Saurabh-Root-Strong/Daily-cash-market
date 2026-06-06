@@ -515,7 +515,8 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                  max_price: float = 0.0,
                  regime_label: str = "SIDEWAYS",
                  regime: "dict | None" = None,
-                 defense_mode: bool = False) -> None:
+                 defense_mode: bool = False,
+                 score_col: str = "accum_score") -> None:
     meta       = _SIGNAL_META.get(row["signal"], {})
     color      = meta.get("color", "#888")
     is_avoid   = row["signal"] in _AVOID_SIGNAL_SET
@@ -533,6 +534,9 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
         color = "#00c853" if (_elig and _verdict.startswith("🛡️ Defensive Leader")) else \
                 "#69f0ae" if _elig else \
                 "#ff9100" if _verdict.startswith("⚠️") else "#d50000"
+    elif (score_col and score_col not in ("accum_score",)
+          and score_col in row.index and pd.notna(row.get(score_col))):
+        score = float(row[score_col])   # accumulation / reversal / adj score
     else:
         score = row["accum_score"]
 
@@ -2053,10 +2057,17 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         unsafe_allow_html=True,
     )
 
-    if _defense_mode:
-        _rank_col = "defense_score"
-    else:
-        _rank_col = "adj_score" if (memory_on and _has_overlay) else "accum_score"
+    _momentum_col = "adj_score" if (memory_on and _has_overlay) else "accum_score"
+    _FACTOR_COL = {
+        "momentum":     _momentum_col,
+        "defense":      "defense_score",
+        "accumulation": "accumulation_score",
+        "reversal":     "reversal_score",
+    }
+    _rank_col = _FACTOR_COL.get(_factor, _momentum_col)
+    if _rank_col not in rot.columns:
+        _rank_col = "accum_score"
+    _accum_mode = _factor in ("accumulation", "reversal")
     rot = rot.sort_values(_rank_col, ascending=False).reset_index(drop=True)
 
     if "z_score" not in rot.columns:
@@ -2179,6 +2190,14 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         entering = _tradable[_elig].sort_values("defense_score", ascending=False).copy()
         caution  = _tradable.iloc[0:0].copy()   # no separate "caution" tier in defense mode
         exiting  = _tradable[~_elig].sort_values("defense_score", ascending=True).head(8).copy()
+    elif _accum_mode:
+        # Sideways (accumulation) / Bottoming (reversal): rank by the scenario's
+        # score. The buy column is the top sectors on quiet delivery accumulation
+        # (and, for reversal, accumulation INTO weakness); the avoid column is the
+        # weakest on that score (distribution / no flow).
+        entering = _tradable.sort_values(_rank_col, ascending=False).head(8).copy()
+        caution  = _tradable.iloc[0:0].copy()
+        exiting  = _tradable.sort_values(_rank_col, ascending=True).head(6).copy()
     else:
         caution  = _tradable[_tradable["signal"].isin(_CAUTION_SIGNALS)].copy()
         entering = _tradable[_tradable["signal"].isin(_INVEST_SIGNALS)].copy()
@@ -2416,7 +2435,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                     shown_divider = True
                 _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
                              min_price=min_price, max_price=max_price,
-                             regime_label=r_label, regime=regime, defense_mode=_defense_mode)
+                             regime_label=r_label, regime=regime, defense_mode=_defense_mode,
+                             score_col=_rank_col)
 
     with col_avoid:
         st.markdown(f"### {regime.get('avoid_label', '🔴 SECTORS TO AVOID / EXIT')}")
@@ -2435,7 +2455,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             for _, row in exiting.iterrows():
                 _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
                              min_price=min_price, max_price=max_price,
-                             regime_label=r_label, regime=regime, defense_mode=_defense_mode)
+                             regime_label=r_label, regime=regime, defense_mode=_defense_mode,
+                             score_col=_rank_col)
 
         # Tier 2 — relative laggards: weakest sectors by score, excluding any
         # already shown in the invest / caution / distribution lists. The absolute
@@ -2458,7 +2479,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             for _, row in laggards.iterrows():
                 _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
                              min_price=min_price, max_price=max_price,
-                             regime_label=r_label, regime=regime, defense_mode=_defense_mode)
+                             regime_label=r_label, regime=regime, defense_mode=_defense_mode,
+                             score_col=_rank_col)
 
     if not caution.empty:
         st.markdown("---")
@@ -2471,7 +2493,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         for _, row in caution.iterrows():
             _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
                          min_price=min_price, max_price=max_price,
-                         regime_label=r_label, regime=regime, defense_mode=_defense_mode)
+                         regime_label=r_label, regime=regime, defense_mode=_defense_mode,
+                         score_col=_rank_col)
 
     st.markdown("---")
 
