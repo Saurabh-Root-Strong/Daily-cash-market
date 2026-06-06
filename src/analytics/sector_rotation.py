@@ -290,9 +290,8 @@ def get_sector_rotation(
             SUM(b.deliv_per * b.turnover_lacs)
                 / NULLIF(SUM(b.turnover_lacs), 0)             AS wtd_deliv_per,
             SUM(b.deliv_per / 100.0 * b.turnover_lacs) / 100 AS deliv_value_cr,
-            SUM(b.turnover_lacs * (b.close_price - b.prev_close)
-                    / NULLIF(b.prev_close, 0) * 100)
-                / NULLIF(SUM(CASE WHEN b.prev_close > 0 THEN b.turnover_lacs END), 0)
+            MEDIAN(CASE WHEN b.prev_close > 0
+                        THEN (b.close_price - b.prev_close) / b.prev_close * 100 END)
                                                               AS wtd_daily_ret_pct
         FROM daily_data b
         INNER JOIN v_sector_master s ON b.symbol = s.symbol
@@ -1267,8 +1266,13 @@ def get_sector_rotation_timeframe(
                 / NULLIF(SUM(b.turnover_lacs), 0)              AS wtd_deliv_pct,
             SUM(b.deliv_per / 100.0 * b.turnover_lacs) / 100  AS deliv_value_cr,
             SUM(b.turnover_lacs) / 100                         AS turnover_cr,
-            SUM(b.turnover_lacs * (b.close_price - b.prev_close) / NULLIF(b.prev_close, 0) * 100)
-                / NULLIF(SUM(CASE WHEN b.prev_close > 0 THEN b.turnover_lacs END), 0)
+            -- ROBUST daily sector return = MEDIAN of constituent returns. Turnover-
+            -- weighting uses contemporaneous volume (big moves trade big) → a
+            -- systematic upward bias that inflated the clock's price axis and made
+            -- almost every sector look "above market" (Improving/Lagging empty).
+            -- Median is unbiased and immune to penny-stock / corporate-action spikes.
+            MEDIAN(CASE WHEN b.prev_close > 0
+                        THEN (b.close_price - b.prev_close) / b.prev_close * 100 END)
                                                                AS wtd_daily_ret_pct
         FROM daily_data b
         INNER JOIN v_sector_master s ON b.symbol = s.symbol
@@ -1456,9 +1460,8 @@ def get_rotation_clock_backtest(
         SELECT
             s.sector,
             b.trade_date,
-            SUM(b.turnover_lacs * (b.close_price - b.prev_close)
-                    / NULLIF(b.prev_close, 0) * 100)
-                / NULLIF(SUM(CASE WHEN b.prev_close > 0 THEN b.turnover_lacs END), 0)
+            MEDIAN(CASE WHEN b.prev_close > 0
+                        THEN (b.close_price - b.prev_close) / b.prev_close * 100 END)
                                                         AS wtd_daily_ret_pct
         FROM daily_data b
         INNER JOIN v_sector_master s ON b.symbol = s.symbol
@@ -1544,10 +1547,9 @@ def get_sector_rotation_custom_range(
                 / NULLIF(SUM(b.turnover_lacs), 0)              AS wtd_deliv_pct,
             SUM(b.deliv_per / 100.0 * b.turnover_lacs) / 100  AS deliv_value_cr,
             SUM(b.turnover_lacs) / 100                         AS turnover_cr,
-            SUM(b.turnover_lacs * (b.close_price - b.prev_close)
-                    / NULLIF(b.prev_close, 0) * 100)
-                / NULLIF(SUM(CASE WHEN b.prev_close > 0
-                             THEN b.turnover_lacs END), 0)     AS wtd_daily_ret_pct
+            MEDIAN(CASE WHEN b.prev_close > 0
+                        THEN (b.close_price - b.prev_close) / b.prev_close * 100 END)
+                                                               AS wtd_daily_ret_pct
         FROM daily_data b
         INNER JOIN v_sector_master s ON b.symbol = s.symbol
         WHERE s.sector NOT IN ('ETF', 'Others')
