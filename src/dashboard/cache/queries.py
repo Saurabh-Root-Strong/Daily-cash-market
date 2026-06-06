@@ -462,6 +462,24 @@ def cached_sector_memory_context(
 
 
 @st.cache_data(ttl=_TTL)
+def cached_market_scenario(selected_date: date):
+    """7-scenario market classification + recommended ranking factor + playbook."""
+    from src.analytics.sector_scenario import classify_scenario
+    return classify_scenario(selected_date)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_sector_fno_buildup(selected_date: date):
+    """Per-sector stock-futures OI buildup (long/short/covering) — F&O confirmation."""
+    from src.analytics.sector_scenario import get_sector_fno_buildup
+    try:
+        return get_sector_fno_buildup(selected_date)
+    except Exception:
+        import pandas as pd
+        return pd.DataFrame()
+
+
+@st.cache_data(ttl=_TTL)
 def cached_sector_overlay(selected_date: date, min_turnover: float):
     """
     get_sector_rotation() sharpened by the memory overlay.

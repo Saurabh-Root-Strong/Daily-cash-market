@@ -22,6 +22,7 @@ from src.dashboard.cache.queries import (
     cached_rotation_clock_backtest,
     cached_sector_rotation,
     cached_sector_overlay,
+    cached_market_scenario,
     cached_sector_rotation_history,
     cached_sector_rotation_custom_range,
     cached_sector_rotation_timeframe,
@@ -2019,19 +2020,41 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
     # So in down-markets we rank by DEFENSE (low beta, low downside-capture,
     # positive relative strength) instead. This is the core fix for "I bought your
     # pick in a downtrend and still lost".
-    _bear_regime = regime.get("regime") in ("BEAR", "CAUTION")
+    # The scenario engine classifies WHERE the market is + where it's HEADED
+    # (7 scenarios incl. transitions) and recommends the ranking factor:
+    # momentum (uptrend/breakout) · accumulation (range) · defense (downtrend) ·
+    # reversal (bottoming). The dashboard ranks accordingly.
+    try:
+        scenario = cached_market_scenario(selected_date)
+    except Exception:
+        scenario = {"label": "—", "playbook": "", "ranking_factor":
+                    ("defense" if regime.get("regime") in ("BEAR", "CAUTION") else "momentum"),
+                    "nifty_5d": 0, "nifty_20d": 0, "breadth": 0.5, "breadth_trend": 0,
+                    "vix": regime.get("vix"), "fii_5d_cr": regime.get("fii_5d_cr") or 0}
+    _factor = scenario.get("ranking_factor", "momentum")
     _has_defense = "defense_score" in rot.columns and rot["defense_score"].notna().any()
-    _defense_mode = bool(_bear_regime and _has_defense)
+    _defense_mode = bool(_factor == "defense" and _has_defense)
+
+    # ── Scenario playbook banner ──────────────────────────────────────────────
+    _SCEN_COL = {"momentum": "#00c853", "accumulation": "#40c4ff",
+                 "defense": "#ff9100", "reversal": "#69f0ae"}
+    _sc = _SCEN_COL.get(_factor, "#888")
+    _vix_s = scenario.get("vix"); _vix_s = f"{_vix_s:.1f}" if isinstance(_vix_s, (int, float)) else "—"
+    st.markdown(
+        f"<div style='border-left:4px solid {_sc};background:rgba(255,255,255,0.03);"
+        f"padding:8px 12px;margin:6px 0;border-radius:0 6px 6px 0'>"
+        f"<b style='font-size:14px;color:{_sc}'>{scenario.get('label','—')}</b> "
+        f"<span style='font-size:11px;color:rgba(255,255,255,0.45)'>· Nifty 5d "
+        f"{scenario.get('nifty_5d',0):+.1f}% / 20d {scenario.get('nifty_20d',0):+.1f}% · "
+        f"breadth {scenario.get('breadth',0)*100:.0f}% ({scenario.get('breadth_trend',0)*100:+.0f}) · "
+        f"VIX {_vix_s} · FII 5d ₹{scenario.get('fii_5d_cr',0):+,.0f} Cr</span>"
+        f"<div style='font-size:11.5px;color:rgba(255,255,255,0.72);margin-top:3px'>"
+        f"{scenario.get('playbook','')}</div></div>",
+        unsafe_allow_html=True,
+    )
 
     if _defense_mode:
         _rank_col = "defense_score"
-        st.caption(
-            "🛡️ **Defensive ranking active** — market regime is "
-            f"**{regime.get('regime')}**. Sectors are ranked by *capital protection* "
-            "(low β, low downside-capture, positive relative strength), **not** "
-            "momentum. In a downtrend the momentum leaders are the highest-β sectors "
-            "that fall hardest; this ranks the ones that fall LEAST."
-        )
     else:
         _rank_col = "adj_score" if (memory_on and _has_overlay) else "accum_score"
     rot = rot.sort_values(_rank_col, ascending=False).reset_index(drop=True)
