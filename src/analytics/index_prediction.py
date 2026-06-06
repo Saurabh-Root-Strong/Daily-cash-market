@@ -1268,6 +1268,21 @@ def _sig_rsi(idx_hist: pd.DataFrame) -> Optional[IndexSignal]:
     return None
 
 
+def _context_only(sig: Optional[IndexSignal]) -> Optional[IndexSignal]:
+    """Keep a signal's institutional read for display but zero its composite vote.
+
+    Used for signals that are informative context yet have no validated standalone
+    forward edge (VWAP, RSI) — they should not move the next-day directional score.
+    """
+    if sig is not None:
+        sig.score = 0.0
+        if "Context only" not in sig.description:
+            sig.description += (
+                " · 📊 Context only — institutional reference; walk-forward showed no "
+                "standalone next-day edge, so it informs but does not vote.")
+    return sig
+
+
 def _sig_oi_price_matrix(
     pct_chg: Optional[float],
     fut_oi_chg: int,
@@ -3306,8 +3321,13 @@ def _compute_prediction(
 
     # — Signals 1-7: index-specific price/futures/options —
     add(_sig_price_action(idx_hist))
-    add(_sig_vwap(idx_hist))   # institutional cost-basis / control line
-    add(_sig_rsi(idx_hist))    # institution-grade RSI (Cardwell range + divergence)
+    # VWAP + RSI are shown as institutional CONTEXT but do NOT vote in the composite.
+    # Walk-forward (pooled 4 indices, point-in-time) found no standalone next-day edge
+    # at 1/5/10-day horizons — in fact slightly mean-reverting. So we keep the read
+    # (where price sits vs the institutional control line, RSI regime/divergence) but
+    # zero its score, exactly like the FII put-hedge context signal.
+    add(_context_only(_sig_vwap(idx_hist)))   # institutional cost-basis / control line
+    add(_context_only(_sig_rsi(idx_hist)))    # institution-grade RSI (Cardwell + divergence)
     sigs.append(_sig_oi_price_matrix(day_change_pct, fut_oi_chg, fut_oi, is_rollover=is_rollover))
     add(_sig_carry(carry_pct_ann, carry_pts))
     # Compare PCR only against the SAME expiry's prior-day OI (via _opt_near_p, which is
