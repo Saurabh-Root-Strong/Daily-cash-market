@@ -2846,8 +2846,11 @@ def _compute_expected_move(
     return out
 
 
-# Breakout threshold: 50 pts on NIFTY (~0.21% of spot). Scales proportionally for other indices.
-_BREAKOUT_PCT = 0.21
+# Breakout confirmation buffer as a FRACTION OF THE 1σ EXPECTED MOVE (volatility-
+# based, not a fixed % of price). 0.40σ = the same noise zone as the sideways band,
+# so a "new range" needs a vol-scaled break beyond the 1σ range — auto-scaling with
+# the VIX/realized-vol regime (wide buffer when vol is high, tight when calm).
+_BREAKOUT_SIGMA_FRAC = 0.40
 
 
 def _compute_breakout_extensions(
@@ -2866,7 +2869,10 @@ def _compute_breakout_extensions(
     Compute the SECOND range — where the index heads if it breaks the first range.
 
     Logic (asymmetric quant framework):
-      Threshold = max(50 pts, 0.21% of spot) — scales across all 4 indices.
+      Confirmation buffer = 0.40 × the 1σ expected move (VOLATILITY-based, not a
+      fixed % of price) AND the trigger lifts to clear the nearest OI wall just
+      beyond the range. So a "new range" requires a vol-scaled, structure-aware
+      break — wide in a high-VIX regime, tight when calm.
 
       UPSIDE EXTENSION (base = spot + 2σ):
         FII short squeeze amplification — when FII is massively net short, covering
@@ -2886,15 +2892,31 @@ def _compute_breakout_extensions(
       OI WALL OVERRIDE: if a call/put wall sits inside the computed extension zone,
         it replaces the statistical cap as the structural target.
     """
-    threshold      = max(50.0, round(spot_close * _BREAKOUT_PCT / 100, 0))
+    if expected_move_pts <= 0:
+        return {}
+    # Volatility-based confirmation buffer (fraction of 1σ) — scales with the regime.
+    buffer         = round(_BREAKOUT_SIGMA_FRAC * expected_move_pts, 0)
     two_sigma      = expected_move_pts * 2.0
 
-    # Guard: if vol is too low relative to threshold, no meaningful second range
-    if expected_move_pts <= threshold:
-        return {}
+    call_wall = levels.top_call_strike if levels else None
+    put_wall  = levels.top_put_strike  if levels else None
 
-    up_trigger     = range_high + threshold
-    dn_trigger     = range_low  - threshold
+    up_trigger     = range_high + buffer
+    dn_trigger     = range_low  - buffer
+    # OI-wall confirmation: a genuine breakout must ALSO clear the nearest option
+    # wall sitting just beyond the range (the structural OI resistance/support). If
+    # such a wall is within ~one buffer of the statistical trigger, lift the trigger
+    # to the wall — price hasn't really "broken out" until that OI barrier is taken.
+    wall_note_up = wall_note_dn = ""
+    if call_wall and range_high < call_wall <= up_trigger + buffer:
+        if call_wall > up_trigger:
+            wall_note_up = f" (clears call wall {call_wall:.0f})"
+        up_trigger = max(up_trigger, call_wall)
+    if put_wall and dn_trigger - buffer <= put_wall < range_low:
+        if put_wall < dn_trigger:
+            wall_note_dn = f" (clears put wall {put_wall:.0f})"
+        dn_trigger = min(dn_trigger, put_wall)
+    threshold = buffer   # reported as the minimum break-confirmation distance
 
     # ── Upside extension: FII short squeeze amplification ────────────────────
     up_sigma_mult = 1.0
@@ -2972,8 +2994,8 @@ def _compute_breakout_extensions(
         breakout_up_end=round(up_end, 0),
         breakout_dn_start=round(dn_start, 0),
         breakout_dn_end=round(dn_trigger, 0),
-        breakout_up_src=up_src,
-        breakout_dn_src=dn_src,
+        breakout_up_src=up_src + wall_note_up,
+        breakout_dn_src=dn_src + wall_note_dn,
     )
 
 
