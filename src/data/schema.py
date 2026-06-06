@@ -209,6 +209,21 @@ def initialize_schema() -> None:
         "CREATE INDEX IF NOT EXISTS idx_plog_date    ON prediction_log(trade_date)",
         "CREATE INDEX IF NOT EXISTS idx_plog_symbol  ON prediction_log(fno_symbol)",
         "CREATE INDEX IF NOT EXISTS idx_plog_outcome ON prediction_log(outcome_filled)",
+        # FII/DII daily CASH-market provisional figures (₹ Cr). NSE = going-forward,
+        # Groww/CSV = backfill. net = buy − sell.
+        """
+        CREATE TABLE IF NOT EXISTS fii_dii_cash (
+            trade_date   DATE PRIMARY KEY,
+            fii_buy      DOUBLE,
+            fii_sell     DOUBLE,
+            fii_net      DOUBLE,
+            dii_buy      DOUBLE,
+            dii_sell     DOUBLE,
+            dii_net      DOUBLE,
+            source       VARCHAR,
+            last_updated TIMESTAMP DEFAULT now()
+        )
+        """,
     )
 
     # ── Non-destructive migrations (ALTER TABLE — may already exist) ───────────

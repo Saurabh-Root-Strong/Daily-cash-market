@@ -199,6 +199,26 @@ class MarketDataRepository:
             """)
         return len(df)
 
+    def upsert_fii_dii_cash(self, df: pd.DataFrame) -> int:
+        """Upsert FII/DII daily cash rows (one per trade_date). Overwrites by date."""
+        if df.empty:
+            return 0
+        for c in ("fii_buy", "fii_sell", "fii_net", "dii_buy", "dii_sell", "dii_net", "source"):
+            if c not in df.columns:
+                df = df.copy(); df[c] = None
+        dates = df["trade_date"].unique().tolist()
+        ph = ", ".join("?" * len(dates))
+        with self._cm.connect() as conn:
+            conn.execute(f"DELETE FROM fii_dii_cash WHERE trade_date IN ({ph})", dates)
+            conn.register("_fiidii_df", df)
+            conn.execute("""
+                INSERT INTO fii_dii_cash
+                    (trade_date, fii_buy, fii_sell, fii_net, dii_buy, dii_sell, dii_net, source, last_updated)
+                SELECT trade_date, fii_buy, fii_sell, fii_net, dii_buy, dii_sell, dii_net, source, now()
+                FROM _fiidii_df
+            """)
+        return len(df)
+
     def upsert_index_data(self, df: pd.DataFrame) -> int:
         if df.empty:
             return 0

@@ -37,6 +37,15 @@ def cmd_daily(_args) -> int:
     except Exception as exc:
         print(f"Index prediction logging failed (non-fatal): {exc}")
 
+    # FII/DII daily cash flows — fetch NSE provisional figures.
+    try:
+        from src.ingestion.fii_dii_cash_fetcher import run_fii_dii_cash_daily
+        n = run_fii_dii_cash_daily()
+        if n:
+            print(f"FII/DII cash: updated {n} day(s) from NSE")
+    except Exception as exc:
+        print(f"FII/DII cash fetch failed (non-fatal): {exc}")
+
     # Fill prediction outcomes AFTER ingestion completes.
     # CLI sits above all layers and may call both ingestion and analytics.
     try:
