@@ -513,12 +513,27 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                  min_price: float = 0.0,
                  max_price: float = 0.0,
                  regime_label: str = "SIDEWAYS",
-                 regime: "dict | None" = None) -> None:
+                 regime: "dict | None" = None,
+                 defense_mode: bool = False) -> None:
     meta       = _SIGNAL_META.get(row["signal"], {})
     color      = meta.get("color", "#888")
-    score      = row["accum_score"]
     is_avoid   = row["signal"] in _AVOID_SIGNAL_SET
     invest_signal = meta.get("invest", False)
+
+    # In a BEAR/CAUTION regime the headline number is the DEFENSE score (capital
+    # protection), not the momentum accum_score — and the card is coloured by the
+    # defensive verdict, so a low-beta sector no longer looks like "Active Selling".
+    _dscore  = row.get("defense_score")
+    _verdict = str(row.get("defensive_verdict", "") or "")
+    _has_def = defense_mode and _dscore is not None and not (isinstance(_dscore, float) and pd.isna(_dscore))
+    if _has_def:
+        score = float(_dscore)
+        _elig = bool(row.get("bear_eligible", False))
+        color = "#00c853" if (_elig and _verdict.startswith("🛡️ Defensive Leader")) else \
+                "#69f0ae" if _elig else \
+                "#ff9100" if _verdict.startswith("⚠️") else "#d50000"
+    else:
+        score = row["accum_score"]
 
     # ── Regime override badge ──────────────────────────────────────────────────
     # When market regime conflicts with or qualifies the sector signal, show a
@@ -742,13 +757,36 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
             + "</div>"
         )
 
+    # ── Defensive verdict badge (BEAR/CAUTION) — replaces the momentum framing ─
+    defense_badge_html = ""
+    if _has_def and _verdict:
+        _vcol = ("#00c853" if _verdict.startswith("🛡️ Defensive Leader")
+                 else "#69f0ae" if _verdict.startswith("🛡️")
+                 else "#ff9100" if _verdict.startswith("⚠️") else "#ff5252")
+        _vbg = ("rgba(0,200,83,0.12)" if _verdict.startswith("🛡️")
+                else "rgba(255,145,0,0.12)" if _verdict.startswith("⚠️")
+                else "rgba(213,0,0,0.12)")
+        _b = row.get("beta"); _dc = row.get("down_capture")
+        _det = ""
+        if (_b is not None and not pd.isna(_b) and _dc is not None and not pd.isna(_dc)):
+            _det = (f"<br><span style='color:rgba(255,255,255,0.55)'>β {float(_b):.2f} · "
+                    f"falls {float(_dc):.2f}× the market on down days</span>")
+        defense_badge_html = (
+            f"<div style='background:{_vbg};border:1px solid {_vcol};border-radius:4px;"
+            f"padding:4px 8px;margin-bottom:5px;font-size:10.5px;color:{_vcol};line-height:1.4'>"
+            f"<b>{_verdict}</b>{_det}</div>"
+        )
+        regime_badge_html = ""   # suppress momentum DOUBLE-RISK framing in defense mode
+
+    _score_tag = "🛡️ " if _has_def else ""
     st.markdown(
         f"<div style='border-left:3px solid {color};padding:8px 12px;margin:4px 0;"
         f"background:rgba(255,255,255,0.03);border-radius:0 6px 6px 0'>"
         f"<div style='display:flex;justify-content:space-between;align-items:center'>"
         f"<b style='font-size:14px'>{row['sector']}</b>"
-        f"<span style='font-size:11px;color:{color};font-weight:600'>{score:.0f}/100</span></div>"
+        f"<span style='font-size:11px;color:{color};font-weight:600'>{_score_tag}{score:.0f}/100</span></div>"
         f"{bar_html}"
+        f"{defense_badge_html}"
         f"{regime_badge_html}"
         f"{conviction_badge_html}"
         f"<div style='font-size:11px;margin-bottom:4px'>{row['signal']} &nbsp; {action_html}</div>"
@@ -2106,15 +2144,20 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
     else:
         _tradable, _n_thin = rot.copy(), 0
 
-    caution   = _tradable[_tradable["signal"].isin(_CAUTION_SIGNALS)].copy()
     if _defense_mode:
-        # Bear/Caution: the left column is "defensive holds" — the most defensive
-        # tradable sectors by defense_score, regardless of accumulation signal
-        # (the best bear sector, e.g. Pharma, is often "Neutral" on delivery).
-        entering = _tradable.sort_values("defense_score", ascending=False).head(8).copy()
-        # Avoid = the bear amplifiers (lowest defense_score / highest beta).
-        exiting  = _tradable.sort_values("defense_score", ascending=True).head(6).copy()
+        # Bear/Caution: show ONLY sectors that are ELIGIBLE for this market — the
+        # ones that genuinely cushion a downtrend AND still have institutional flow
+        # (bear_eligible). Everything else (amplifiers that fall MORE than the
+        # market, and value-traps institutions are exiting) goes to the avoid
+        # column. The best bear sector (e.g. Pharma) is often "Neutral" on the
+        # momentum signal, so we rank by defense, not by accumulation label.
+        _elig = (_tradable["bear_eligible"].fillna(False)
+                 if "bear_eligible" in _tradable.columns else pd.Series(False, index=_tradable.index))
+        entering = _tradable[_elig].sort_values("defense_score", ascending=False).copy()
+        caution  = _tradable.iloc[0:0].copy()   # no separate "caution" tier in defense mode
+        exiting  = _tradable[~_elig].sort_values("defense_score", ascending=True).head(8).copy()
     else:
+        caution  = _tradable[_tradable["signal"].isin(_CAUTION_SIGNALS)].copy()
         entering = _tradable[_tradable["signal"].isin(_INVEST_SIGNALS)].copy()
         exiting  = _tradable[_tradable["signal"].isin(_AVOID_SIGNALS)].sort_values(_rank_col, ascending=True).copy()
 
@@ -2350,7 +2393,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                     shown_divider = True
                 _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
                              min_price=min_price, max_price=max_price,
-                             regime_label=r_label, regime=regime)
+                             regime_label=r_label, regime=regime, defense_mode=_defense_mode)
 
     with col_avoid:
         st.markdown(f"### {regime.get('avoid_label', '🔴 SECTORS TO AVOID / EXIT')}")
@@ -2369,7 +2412,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             for _, row in exiting.iterrows():
                 _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
                              min_price=min_price, max_price=max_price,
-                             regime_label=r_label, regime=regime)
+                             regime_label=r_label, regime=regime, defense_mode=_defense_mode)
 
         # Tier 2 — relative laggards: weakest sectors by score, excluding any
         # already shown in the invest / caution / distribution lists. The absolute
@@ -2392,7 +2435,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             for _, row in laggards.iterrows():
                 _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
                              min_price=min_price, max_price=max_price,
-                             regime_label=r_label, regime=regime)
+                             regime_label=r_label, regime=regime, defense_mode=_defense_mode)
 
     if not caution.empty:
         st.markdown("---")
@@ -2405,7 +2448,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         for _, row in caution.iterrows():
             _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
                          min_price=min_price, max_price=max_price,
-                         regime_label=r_label, regime=regime)
+                         regime_label=r_label, regime=regime, defense_mode=_defense_mode)
 
     st.markdown("---")
 

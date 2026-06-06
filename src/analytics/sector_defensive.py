@@ -129,19 +129,13 @@ def get_sector_defensive_metrics(
             "sector": sector, "beta": round(beta, 2),
             "down_capture": round(dcap, 2) if not np.isnan(dcap) else None,
             "up_capture":   round(ucap, 2) if not np.isnan(ucap) else None,
-            "rs": round(rs, 1), "cum_ret": round(cum_s, 1), "n_obs": int(len(g)),
+            "rel_strength": round(rs, 1), "cum_ret": round(cum_s, 1), "n_obs": int(len(g)),
         })
 
     out = pd.DataFrame(rows)
     if out.empty:
         return out
-
-    # Defense score: cross-sectional rank blend (higher = more defensive).
-    # Sectors missing down_capture fall back to neutral 0.5 rank contribution.
-    dcap = out["down_capture"].fillna(out["down_capture"].median())
-    out["defense_score"] = (
-        (_rank01(-dcap)        * DEFENSE_WEIGHTS["down_capture"] +
-         _rank01(out["rs"])    * DEFENSE_WEIGHTS["rs"] +
-         _rank01(-out["beta"]) * DEFENSE_WEIGHTS["beta"]) * 100
-    ).round(1)
-    return out.sort_values("defense_score", ascending=False).reset_index(drop=True)
+    # Raw point-in-time metrics. The COMBINED defense_score (structure + flow) is
+    # computed in get_sector_rotation, where delivery/breadth flow data is joined —
+    # a low-beta sector that smart money is FLEEING is a value trap, not a safe buy.
+    return out.sort_values("down_capture", na_position="last").reset_index(drop=True)

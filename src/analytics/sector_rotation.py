@@ -156,6 +156,81 @@ def _sector_liquidity_stats(as_of_date: date, min_turnover_lacs: float) -> pd.Da
     ]]
 
 
+# ── Bear-market defense score + per-regime eligibility verdict ─────────────────
+
+# Structure (falls less) + flow (smart money still holding). Weights sum to 1.0.
+_DEFENSE_WEIGHTS = {
+    "down_capture": 0.30,   # falls least on down days (primary protection)
+    "rel_strength": 0.25,   # actually outperforming over the bear window
+    "beta":         0.15,   # low market sensitivity
+    "breadth":      0.20,   # institutions still participating (not fleeing)
+    "dv_ratio":     0.10,   # delivery vs own norm (accumulation, not a value trap)
+}
+
+
+def _add_defense_score(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Add defense_score (0-100), a human defensive_verdict, and bear_eligible flag.
+
+    A sector is bear-ELIGIBLE only if it genuinely cushions a downtrend AND smart
+    money is not fleeing it. The verdict separates: Defensive Leader / Buy / Hold
+    (eligible) vs Value-trap risk / Amplifier (NOT eligible — they fall as much or
+    more than the market, or institutions are exiting). This is what powers
+    "only sectors eligible for the current market appear" in a bear regime.
+    """
+    if df.empty or "down_capture" not in df.columns or df["down_capture"].isna().all():
+        df["defense_score"] = None
+        df["defensive_verdict"] = ""
+        df["bear_eligible"] = False
+        return df
+
+    dcap = df["down_capture"].astype(float)
+    dcap_f = dcap.fillna(dcap.median())
+    beta_f = df["beta"].astype(float).fillna(df["beta"].astype(float).median())
+    rels_f = df["rel_strength"].astype(float).fillna(0.0)
+    brd_f  = (df["breadth"].astype(float).fillna(df["breadth"].astype(float).median())
+              if "breadth" in df.columns else pd.Series(0.5, index=df.index))
+    dvr_f  = (df["dv_ratio"].astype(float).fillna(1.0)
+              if "dv_ratio" in df.columns else pd.Series(1.0, index=df.index))
+
+    w = _DEFENSE_WEIGHTS
+    df["defense_score"] = ((
+        _rank01(-dcap_f)  * w["down_capture"] +
+        _rank01(rels_f)   * w["rel_strength"] +
+        _rank01(-beta_f)  * w["beta"] +
+        _rank01(brd_f)    * w["breadth"] +
+        _rank01(dvr_f)    * w["dv_ratio"]
+    ) * 100).round(1)
+
+    verdicts, eligible = [], []
+    for _, r in df.iterrows():
+        dc = r.get("down_capture"); b = r.get("beta")
+        rs = r.get("rel_strength"); rs = float(rs) if rs is not None and not pd.isna(rs) else 0.0
+        br = r.get("breadth"); br = float(br) if br is not None and not pd.isna(br) else 0.5
+        if dc is None or pd.isna(dc):
+            verdicts.append(""); eligible.append(False); continue
+        dc = float(dc); b = float(b) if b is not None and not pd.isna(b) else 1.0
+        if dc > 1.05 or b > 1.30:
+            verdicts.append("🔴 Amplifier — falls MORE than the market"); eligible.append(False)
+        elif dc <= 0.95 and br < 0.30 and rs < 0:
+            verdicts.append("⚠️ Value-trap risk — cushions the fall but smart money is exiting")
+            eligible.append(False)
+        elif dc <= 1.00 and rs > 0 and br >= 0.35:
+            verdicts.append("🛡️ Defensive Leader — falls less AND outperforming, flow holding")
+            eligible.append(True)
+        elif dc <= 1.00 and (rs > 0 or br >= 0.38):
+            verdicts.append("🛡️ Defensive Buy — cushions the fall with stable flow")
+            eligible.append(True)
+        elif dc <= 1.00:
+            verdicts.append("🛡️ Defensive Hold — low beta cushions the fall (weak catalyst)")
+            eligible.append(True)
+        else:
+            verdicts.append("⚖️ Tracks the market — no defensive edge"); eligible.append(False)
+    df["defensive_verdict"] = verdicts
+    df["bear_eligible"] = eligible
+    return df
+
+
 def get_sector_rotation(
     as_of_date: date,
     min_turnover_lacs: Optional[float] = None,
@@ -514,24 +589,29 @@ def get_sector_rotation(
         result["top_stock_pct"]      = None
         result["sector_turnover_cr"] = None
 
-    # ── Defensive metrics: beta / downside-capture / defense_score ────────────
-    # Point-in-time, robust (median returns). Lets the dashboard rank by capital
-    # protection in BEAR/CAUTION regimes instead of momentum (accum_score).
+    # ── Defensive metrics + bear-market defense score & eligibility ───────────
+    # Point-in-time. defense_score combines STRUCTURE (falls less: low downside-
+    # capture + low beta + positive relative strength) with FLOW (institutions
+    # still holding: breadth + delivery). A low-beta sector that smart money is
+    # FLEEING is a value trap, not a safe buy — so flow matters. This is what
+    # should rank picks in a BEAR/CAUTION regime, not momentum (accum_score).
     try:
         from src.analytics.sector_defensive import get_sector_defensive_metrics
         dfn = get_sector_defensive_metrics(as_of_date, min_turnover_lacs=min_turnover_lacs)
         if not dfn.empty:
             result = result.merge(
-                dfn[["sector", "beta", "down_capture", "up_capture", "defense_score"]],
+                dfn[["sector", "beta", "down_capture", "up_capture", "rel_strength"]],
                 on="sector", how="left",
             )
         else:
-            for c in ("beta", "down_capture", "up_capture", "defense_score"):
+            for c in ("beta", "down_capture", "up_capture", "rel_strength"):
                 result[c] = None
     except Exception as exc:
         log.warning("Sector defensive metrics failed (non-fatal): %s", exc)
-        for c in ("beta", "down_capture", "up_capture", "defense_score"):
+        for c in ("beta", "down_capture", "up_capture", "rel_strength"):
             result[c] = None
+
+    result = _add_defense_score(result)
 
     return result.sort_values("accum_score", ascending=False).reset_index(drop=True)
 
