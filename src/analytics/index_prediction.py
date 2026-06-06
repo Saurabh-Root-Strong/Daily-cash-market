@@ -391,6 +391,22 @@ class IndexPrediction:
     breakout_up_src: str = ""                       # driver: "call wall 23900" / "2σ statistical"
     breakout_dn_src: str = ""                       # driver: "put wall 23100" / "2σ statistical"
 
+    # ── Weekly (to-expiry) range — where price can travel until the NEXT expiry ──
+    # Forward-looking, recomputed each EOD: rolls to the next expiry on expiry day,
+    # shrinks as expiry approaches. Built from the ATM straddle (market-implied move),
+    # σ√T statistical move, and the OI walls / max-pain that writers defend.
+    wk_expiry: Optional[date] = None                # the target expiry this range runs to
+    wk_dte_cal: Optional[int] = None                # calendar days to that expiry
+    wk_kind: str = ""                               # "weekly" | "monthly"
+    wk_move_pts: Optional[float] = None             # expected move to expiry (points)
+    wk_range_low: Optional[float] = None            # spot − weekly move
+    wk_range_high: Optional[float] = None           # spot + weekly move
+    wk_straddle_pts: Optional[float] = None         # ATM straddle premium (implied move)
+    wk_put_floor: Optional[float] = None            # put-wall support (OI-defended)
+    wk_call_cap: Optional[float] = None             # call-wall resistance (OI-defended)
+    wk_max_pain: Optional[float] = None             # gravity / pin into expiry
+    wk_basis: str = ""                              # one-line explanation
+
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
@@ -3008,6 +3024,91 @@ def _compute_breakout_extensions(
     )
 
 
+def _compute_weekly_range(
+    fno_today: pd.DataFrame,
+    spot_close: Optional[float],
+    sigma_daily_pct: Optional[float],
+    trade_date: date,
+    is_nifty: bool,
+) -> dict:
+    """
+    Forward WEEKLY range — where price can travel until the NEXT expiry.
+
+    Expiry-aware & dynamic: targets the nearest option expiry STRICTLY AFTER today,
+    so on an expiry day it automatically ROLLS to the next cycle (Nifty → next
+    Tuesday weekly; Bank/Fin/Midcap → next monthly, their only series). Recomputed
+    each EOD — the range shrinks as expiry nears and resets after it.
+
+    Width = blend of the ATM STRADDLE premium (the market's implied move to expiry,
+    forward-looking — the institutional measure) and the statistical σ·√T move,
+    bounded by the OI walls (call wall = resistance cap, put wall = support floor)
+    and annotated with max pain (the pin/gravity into expiry). Point-in-time.
+    """
+    out: dict = {}
+    if not spot_close or spot_close <= 0 or fno_today is None or fno_today.empty:
+        return out
+    opt = fno_today[fno_today["instrument"] == "OPTIDX"]
+    if opt.empty:
+        return out
+    fut_exp = sorted({e for e in opt["expiry_date"].tolist() if e and e > trade_date})
+    if not fut_exp:
+        return out
+    target = fut_exp[0]
+    chain = opt[opt["expiry_date"] == target]
+    if chain.empty:
+        return out
+
+    days_cal = (target - trade_date).days
+    days_trd = max(1, round(days_cal * 5.0 / 7.0))
+    kind = "monthly" if (not is_nifty or _is_monthly_expiry_day(target)) else "weekly"
+
+    # ATM straddle = market-implied move to expiry
+    strikes  = [float(k) for k in chain["strike_price"].unique()]
+    atm      = min(strikes, key=lambda k: abs(k - spot_close)) if strikes else None
+    straddle = None
+    if atm is not None:
+        ce = chain[(chain["strike_price"] == atm) & (chain["option_type"] == "CE")]["close_price"]
+        pe = chain[(chain["strike_price"] == atm) & (chain["option_type"] == "PE")]["close_price"]
+        if not ce.empty and not pe.empty:
+            s = float(ce.iloc[0]) + float(pe.iloc[0])
+            straddle = s if s > 0 else None
+
+    stat_move = (spot_close * (sigma_daily_pct or 0) / 100.0) * (days_trd ** 0.5)
+    if straddle:
+        weekly_move = 0.6 * straddle + 0.4 * stat_move
+        basis = f"0.6×ATM straddle {straddle:.0f} + 0.4×σ√{days_trd}d {stat_move:.0f}"
+    elif stat_move > 0:
+        weekly_move = stat_move
+        basis = f"σ√{days_trd}d statistical {stat_move:.0f} (no ATM straddle)"
+    else:
+        return out
+
+    levels    = _compute_key_levels(chain, spot_close)
+    call_cap  = (levels.top_call_strike if levels.top_call_strike and levels.top_call_strike > spot_close else None)
+    put_floor = (levels.top_put_strike  if levels.top_put_strike  and levels.top_put_strike  < spot_close else None)
+    range_low, range_high = spot_close - weekly_move, spot_close + weekly_move
+
+    notes = []
+    if call_cap:
+        notes.append(f"call wall {call_cap:.0f} ({'caps range' if call_cap <= range_high else 'beyond range'})")
+    if put_floor:
+        notes.append(f"put wall {put_floor:.0f} ({'floors range' if put_floor >= range_low else 'beyond range'})")
+    if levels.max_pain:
+        notes.append(f"max pain {levels.max_pain:.0f}")
+
+    out.update(
+        wk_expiry=target, wk_dte_cal=days_cal, wk_kind=kind,
+        wk_move_pts=round(weekly_move, 0),
+        wk_range_low=round(range_low, 0), wk_range_high=round(range_high, 0),
+        wk_straddle_pts=round(straddle, 0) if straddle else None,
+        wk_put_floor=put_floor, wk_call_cap=call_cap,
+        wk_max_pain=levels.max_pain,
+        wk_basis=f"to {target:%d %b} · {days_cal}d {kind} · {basis}"
+                 + ((" · " + " · ".join(notes)) if notes else ""),
+    )
+    return out
+
+
 def _compute_verdict(
     composite: float,
     signals: list[IndexSignal],
@@ -3526,6 +3627,12 @@ def _compute_prediction(
             volume_ratio=vol_ratio,
         )
 
+    # ── Weekly (to-expiry) range — forward range until the next expiry ─────────
+    wk = _compute_weekly_range(
+        fno_today, spot_close, em.get("expected_move_pct"),
+        trade_date, is_nifty=(fno_symbol == "NIFTY"),
+    )
+
     pred_out = IndexPrediction(
         fno_symbol=fno_symbol, display_name=display_name, as_of_date=trade_date,
         spot_close=spot_close, prev_close=prev_close_price,
@@ -3568,6 +3675,13 @@ def _compute_prediction(
         breakout_dn_end=bo.get("breakout_dn_end"),
         breakout_up_src=bo.get("breakout_up_src", ""),
         breakout_dn_src=bo.get("breakout_dn_src", ""),
+        # Weekly (to-expiry) range
+        wk_expiry=wk.get("wk_expiry"), wk_dte_cal=wk.get("wk_dte_cal"),
+        wk_kind=wk.get("wk_kind", ""), wk_move_pts=wk.get("wk_move_pts"),
+        wk_range_low=wk.get("wk_range_low"), wk_range_high=wk.get("wk_range_high"),
+        wk_straddle_pts=wk.get("wk_straddle_pts"), wk_put_floor=wk.get("wk_put_floor"),
+        wk_call_cap=wk.get("wk_call_cap"), wk_max_pain=wk.get("wk_max_pain"),
+        wk_basis=wk.get("wk_basis", ""),
     )
 
     # Auto-store prediction in memory engine (non-fatal).

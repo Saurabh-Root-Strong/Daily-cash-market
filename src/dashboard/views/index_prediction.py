@@ -757,6 +757,38 @@ def _render_key_levels(pred: IndexPrediction) -> None:
 
 # ── Verdict panel ─────────────────────────────────────────────────────────────
 
+def _weekly_range_box(pred: "IndexPrediction") -> str:
+    """
+    Forward WEEKLY range to the next expiry — straddle-implied + σ√T, bounded by OI
+    walls / max pain. Rolls to the next cycle on expiry day; recomputed each EOD.
+    """
+    if pred.wk_range_low is None or pred.wk_range_high is None or pred.spot_close is None:
+        return ""
+    lo, hi, mv = pred.wk_range_low, pred.wk_range_high, pred.wk_move_pts or 0
+    exp = pred.wk_expiry.strftime("%d %b") if pred.wk_expiry else "—"
+    kind = (pred.wk_kind or "").upper()
+    dte = pred.wk_dte_cal
+    pct = (mv / pred.spot_close * 100) if pred.spot_close else 0
+    impl = (f"ATM straddle {pred.wk_straddle_pts:,.0f} (market-implied) + σ√T"
+            if pred.wk_straddle_pts else "σ√T statistical")
+    oi_bits = []
+    if pred.wk_put_floor:  oi_bits.append(f"🛡️ put floor <b>{pred.wk_put_floor:,.0f}</b>")
+    if pred.wk_max_pain:   oi_bits.append(f"🎯 max pain <b>{pred.wk_max_pain:,.0f}</b>")
+    if pred.wk_call_cap:   oi_bits.append(f"🧱 call cap <b>{pred.wk_call_cap:,.0f}</b>")
+    oi_line = " &nbsp;·&nbsp; ".join(oi_bits)
+    return (
+        f"<div style='background:#0d1117;border:1px solid #1e3a4a;border-radius:8px;"
+        f"padding:8px 14px;margin-bottom:10px'>"
+        f"<div style='color:#40c4ff;font-size:0.68em;text-transform:uppercase;letter-spacing:0.5px;"
+        f"margin-bottom:4px'>📆 Weekly Range → expiry {exp} ({kind} · {dte}d) · updates daily</div>"
+        f"<div style='color:#40c4ff;font-weight:700;font-size:1.05em'>{lo:,.0f} &nbsp;—&nbsp; {hi:,.0f}</div>"
+        f"<div style='color:#7fdbff;font-size:0.74em'>±{mv:,.0f} pts ({pct:.1f}%) — where price can travel until expiry</div>"
+        f"<div style='color:#888;font-size:0.70em;margin-top:3px'>implied by {impl}</div>"
+        + (f"<div style='color:#aaa;font-size:0.72em;margin-top:2px'>{oi_line}</div>" if oi_line else "")
+        + "</div>"
+    )
+
+
 def _render_verdict(pred: IndexPrediction) -> None:
     dir_color  = pred.direction_color
     conf_color = _CONF_COLOR.get(pred.confidence, "#78909C")
@@ -782,6 +814,7 @@ def _render_verdict(pred: IndexPrediction) -> None:
             </div>
             <div style="color:#ddd;font-size:0.9em;margin-bottom:10px">{pred.headline}</div>
             {_expected_move_box(pred)}
+            {_weekly_range_box(pred)}
             {_breakout_extension_box(pred)}
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.82em">
                 <div>
