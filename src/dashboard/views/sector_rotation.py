@@ -1907,42 +1907,39 @@ Ideal entry: sector moving from Improving to Leading (rising delivery + price cr
     st.markdown("---")
     st.markdown(f"### 📊 Signal Validation — Did the {sel} Rotation Clock Call It Right?")
 
-    # ── Multi-period aggregate (the statistically meaningful number) ──────────
-    acc = cached_rotation_clock_accuracy(selected_date, window, float(min_turnover))
-    if acc and acc.get("n_predictions"):
+    # ── Walk-forward reliability across timeframes (1W / 2W / 1M) ─────────────
+    st.caption(
+        "**Walk-forward reliability — judged vs PEER sectors across many past windows.** "
+        "Compare timeframes: this is the meaningful read; the single window further down "
+        "is just the latest worked example."
+    )
+    _WINS = [(5, "1W (~5d)"), (10, "2W (~10d)"), (22, "1M (~22d)")]
+    with st.spinner("Computing walk-forward reliability across 1W / 2W / 1M…"):
+        comp = []
+        for w, lbl in _WINS:
+            a = cached_rotation_clock_accuracy(selected_date, w, float(min_turnover))
+            if not a or not a.get("n_predictions"):
+                continue
+            bp = a["by_phase"]; le = bp.get("Leading", {}); lg = bp.get("Lagging", {})
+            im = bp.get("Improving", {})
+            comp.append({
+                "Timeframe": lbl, "Windows": a["n_signals"],
+                "Overall hit %": a["overall_hit"],
+                "Inflow−Outflow %/win": a["inflow_outflow_spread"],
+                "Leading hit %": le.get("hit_rate"), "Leading edge %": le.get("avg_excess"),
+                "Improving edge %": im.get("avg_excess"),
+                "Lagging hit %": lg.get("hit_rate"), "Lagging edge %": lg.get("avg_excess"),
+            })
+    if comp:
+        st.dataframe(pd.DataFrame(comp), hide_index=True, use_container_width=True)
         st.caption(
-            f"**Walk-forward across {acc['n_signals']} past {sel} windows** "
-            f"({acc['n_predictions']} sector-calls) — judged vs PEER sectors. "
-            f"This is the meaningful read; the single window below is just the latest example."
+            "⚖️ **Read across timeframes:** the **1-week** clock is essentially coin-flip; "
+            "reliability rises with horizon — the **1-month** clock carries the edge "
+            "(Leading = act, Lagging = avoid; Improving/Weakening unreliable). A flow map, "
+            "not a standalone alpha signal — confirm with the daily Smart-Money signal + "
+            "FII/DII flow. (Limited samples: ~14–40 windows each.)"
         )
-        oh = acc["overall_hit"]; sp = acc["inflow_outflow_spread"]
-        m1, m2, m3 = st.columns(3)
-        m1.metric("Overall hit-rate", f"{oh:.0f}%",
-                  delta="edge" if oh > 52 else ("coin-flip" if oh >= 48 else "weak"),
-                  delta_color="normal" if oh > 52 else "off")
-        m2.metric("Inflow − Outflow spread", f"{sp:+.2f}%/win",
-                  delta_color="normal" if sp > 0 else "inverse")
-        bp = acc["by_phase"]
-        _le = bp.get("Leading", {}); _lg = bp.get("Lagging", {})
-        m3.metric("Leading edge vs peers",
-                  f"{_le.get('avg_excess', 0):+.2f}%" if _le else "—",
-                  delta=f"{_le.get('hit_rate', 0):.0f}% hit" if _le else None,
-                  delta_color="normal" if _le.get("avg_excess", 0) > 0 else "off")
-        rows = []
-        for p in ["Leading", "Improving", "Weakening", "Lagging"]:
-            d = bp.get(p)
-            if d:
-                rows.append({"Phase": p, "Samples": d["n"], "Hit-rate %": d["hit_rate"],
-                             "Avg fwd vs peers %": d["avg_excess"]})
-        if rows:
-            st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
-        st.caption(
-            "⚖️ **Honest read:** the clock is a *flow map*, not a precise alpha signal. "
-            "Only **Leading** (act) and **Lagging** (avoid) carry a modest, sample-limited "
-            "edge on the **1-month** window; Improving/Weakening are unreliable, and the "
-            "1-week clock is coin-flip. Confirm with the daily Smart-Money signal + FII/DII flow."
-        )
-        st.markdown("###### 🔬 Latest window — worked example")
+    st.markdown("###### 🔬 Latest window — worked example")
 
     st.caption(
         f"The rotation clock computed signals **{window} trading days ago**; below shows how "
