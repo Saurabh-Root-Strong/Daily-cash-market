@@ -372,9 +372,34 @@ def cached_fpi_15d_outlook(as_of_date: date) -> dict:
 # ── Index Prediction ──────────────────────────────────────────────────────────
 
 @st.cache_data(ttl=_TTL)
+def cached_market_context(trade_date: date):
+    """
+    Shared market context for a trade date — the heaviest single piece of the
+    prediction pipeline (VIX, FAO/FII flows, constituents, breadth). Cached once
+    per date and reused across all indices AND across the Index Prediction and
+    Prediction Memory pages, so switching index / page never rebuilds it.
+    """
+    from src.analytics.index_prediction import _build_market_context
+    return _build_market_context(trade_date)
+
+
+@st.cache_data(ttl=_TTL)
 def cached_index_predictions(trade_date: date) -> list:
+    # persist=False: read-only display path — daily logging is done by cmd_daily,
+    # so the dashboard never needs to take a prediction_log write lock on render.
     from src.analytics.index_prediction import get_index_predictions
-    return get_index_predictions(trade_date)
+    return get_index_predictions(
+        trade_date, persist=False, market_ctx=cached_market_context(trade_date),
+    )
+
+
+@st.cache_data(ttl=_TTL)
+def cached_index_prediction_one(trade_date: date, fno_symbol: str):
+    """Single-index prediction — for views that display one index at a time."""
+    from src.analytics.index_prediction import get_index_prediction_for
+    return get_index_prediction_for(
+        trade_date, fno_symbol, persist=False, market_ctx=cached_market_context(trade_date),
+    )
 
 
 # ── Sector Signal Backtest ────────────────────────────────────────────────────
@@ -434,3 +459,25 @@ def cached_sector_memory_context(
         hmm_state      = hmm_state,
         pcr            = pcr,
     )
+
+
+@st.cache_data(ttl=_TTL)
+def cached_sector_overlay(selected_date: date, min_turnover: float):
+    """
+    get_sector_rotation() sharpened by the memory overlay.
+
+    Adds adj_score / conviction / memory_edge / expected_rs_2w / mem_episodes /
+    mem_basis and re-sorts by adj_score. The ~39 per-sector memory lookups run
+    once per 5-minute cache window. Falls back to the plain rotation frame on any
+    error so the page never hard-fails on the memory layer.
+    """
+    from src.analytics.sector_rotation import get_sector_rotation, get_market_regime
+    from src.analytics.sector_memory import apply_memory_overlay
+    rot = get_sector_rotation(selected_date, min_turnover_lacs=min_turnover)
+    if rot is None or rot.empty:
+        return rot
+    try:
+        regime = get_market_regime(selected_date)
+        return apply_memory_overlay(rot, selected_date, regime)
+    except Exception:
+        return rot

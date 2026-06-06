@@ -458,3 +458,8 @@ PRINCEPIPE,Capital Goods,Building Materials,Plastic Pipes & Fittings,Large turno
 MOREALTY,Real Estate,Residential Real Estate,Residential Developer,Large turnover unmapped
 AXISTECETF,ETF,ETF / Index Fund,,Technology ETF — excluded from sector analysis
 ITIETF,ETF,ETF / Index Fund,,Technology ETF — excluded from sector analysis
+TBZ,Consumer Goods,Jewellery,Jewellery Retail,Listed jewellery missing from master (added)
+VAIBHAVGBL,Consumer Goods,Jewellery,Fashion Jewellery / E-Retail,Listed jewellery missing from master (added)
+MOTISONS,Consumer Goods,Jewellery,Jewellery Retail,Listed jewellery missing from master (added)
+RAJESHEXPO,Consumer Goods,Jewellery,Gold Refining / Jewellery,Listed jewellery missing from master (inactive since 2025-12)
+JYOTISTRUC,Capital Goods,Power T&D Equipment,Transmission Towers / Structures,Listed T&D missing from master (added)

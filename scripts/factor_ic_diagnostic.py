@@ -55,7 +55,7 @@ def load_panel() -> pd.DataFrame:
                 / NULLIF(SUM(CASE WHEN b.prev_close > 0
                              THEN b.turnover_lacs END), 0)              AS wtd_ret_pct
         FROM daily_data b
-        INNER JOIN sector_master s ON b.symbol = s.symbol
+        INNER JOIN v_sector_master s ON b.symbol = s.symbol
         WHERE b.series IN ('EQ', 'SM', 'ST')
           AND s.sector NOT IN ('ETF', 'Others')
           AND b.turnover_lacs >= ?
@@ -173,7 +173,8 @@ def evaluate(df: pd.DataFrame, factor: str, fwd: str) -> dict:
     for _, day in sub.groupby("trade_date"):
         if len(day) < MIN_SECTORS_DAY:
             continue
-        ic = day[factor].corr(day[fwd], method="spearman")
+        # Spearman = Pearson of ranks (pandas default corr is Pearson → numpy, no scipy)
+        ic = day[factor].rank().corr(day[fwd].rank())
         if not np.isnan(ic):
             daily_ic.append(ic)
         n3 = max(1, len(day) // 3)

@@ -22,6 +22,21 @@ def cmd_backfill(args) -> int:
 def cmd_daily(_args) -> int:
     from src.ingestion.orchestrator import run_daily_job
     run_daily_job()
+
+    # Compute & LOG today's index predictions deterministically (persist=True).
+    # This makes prediction_log complete every trading day regardless of whether
+    # anyone opens the dashboard — the dashboard now renders read-only
+    # (persist=False) to avoid taking a write lock on every page load.
+    try:
+        from datetime import date
+        from src.analytics.index_prediction import get_index_predictions
+        preds = get_index_predictions(date.today(), persist=True)
+        logged = sum(1 for p in preds if getattr(p, "data_available", False))
+        if logged:
+            print(f"Index predictions: logged {logged} prediction(s) for today")
+    except Exception as exc:
+        print(f"Index prediction logging failed (non-fatal): {exc}")
+
     # Fill prediction outcomes AFTER ingestion completes.
     # CLI sits above all layers and may call both ingestion and analytics.
     try:
@@ -32,6 +47,23 @@ def cmd_daily(_args) -> int:
             print(f"Memory engine: filled outcomes for {filled} predictions")
     except Exception as exc:
         print(f"Memory engine outcome update failed (non-fatal): {exc}")
+
+    # Sector rotation memory — record today's sector signals + fill matured
+    # forward outcomes so the engine self-improves with each new trading day.
+    # Same layering rationale as above: CLI orchestrates ingestion + analytics.
+    try:
+        from datetime import date
+        from src.analytics.sector_memory import (
+            record_daily_snapshot, fill_forward_outcomes,
+        )
+        recorded = record_daily_snapshot(date.today())
+        if recorded:
+            print(f"Sector memory: recorded {recorded} sector rows for today")
+        sec_filled = fill_forward_outcomes(date.today())
+        if sec_filled:
+            print(f"Sector memory: filled forward outcomes for {sec_filled} records")
+    except Exception as exc:
+        print(f"Sector memory update failed (non-fatal): {exc}")
     return 0
 
 

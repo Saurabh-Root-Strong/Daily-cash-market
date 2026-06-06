@@ -501,6 +501,15 @@ def seed_sectors(
 
     _apply_overrides(repo)
 
+    # Recompute canonical sectors (+ refresh v_sector_master) for the full master
+    # after seeding/overrides, so new or re-classified symbols get a canonical sector.
+    try:
+        from src.analytics.sector_taxonomy import populate_canonical_sectors
+        n = populate_canonical_sectors()
+        log.info("Canonical sectors recomputed for %d symbols", n)
+    except Exception as exc:
+        log.warning("Canonical sector recompute failed (non-fatal): %s", exc)
+
 
 def _apply_overrides(repo: MarketDataRepository) -> None:
     from src.core.config import PROJECT_ROOT

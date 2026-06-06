@@ -45,6 +45,7 @@ def initialize_schema() -> None:
             symbol              VARCHAR PRIMARY KEY,
             company_name        VARCHAR,
             sector              VARCHAR,
+            canonical_sector    VARCHAR,
             industry            VARCHAR,
             category            VARCHAR,
             market_cap_category VARCHAR,
@@ -243,3 +244,11 @@ def initialize_schema() -> None:
             repo.execute_ddl(f"ALTER TABLE prediction_log ADD COLUMN IF NOT EXISTS {col}")
         except Exception as exc:
             log.debug("prediction_log.%s migration skipped: %s", col.split()[0], exc)
+
+    # Canonical sector view (v_sector_master) — exposes canonical_sector AS sector
+    # so rotation/memory queries group by clean NSE-aligned sectors. Safe on empty DB.
+    try:
+        from src.analytics.sector_taxonomy import ensure_canonical_view
+        ensure_canonical_view()
+    except Exception as exc:
+        log.debug("canonical view init skipped: %s", exc)

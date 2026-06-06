@@ -393,13 +393,43 @@ class IndexPrediction:
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
-def get_index_predictions(trade_date: date) -> list[IndexPrediction]:
-    """Compute next-day predictions for all major F&O indices."""
-    ctx = _build_market_context(trade_date)
+def get_index_predictions(
+    trade_date: date, persist: bool = True,
+    market_ctx: Optional[MarketContext] = None,
+) -> list[IndexPrediction]:
+    """
+    Compute next-day predictions for all major F&O indices.
+
+    persist=True (default, used by cmd_daily) logs each prediction to
+    prediction_log. The read-only dashboard passes persist=False to avoid a write
+    on every render. market_ctx lets a caller pass a pre-built (cached) context so
+    the ~7s-cold MarketContext isn't rebuilt per call.
+    """
+    ctx = market_ctx if market_ctx is not None else _build_market_context(trade_date)
     return [
-        _compute_prediction(trade_date, sym, name, idx_name, ctx)
+        _compute_prediction(trade_date, sym, name, idx_name, ctx, persist=persist)
         for sym, (name, idx_name) in _INDEX_MAP.items()
     ]
+
+
+def get_index_prediction_for(
+    trade_date: date, fno_symbol: str, persist: bool = True,
+    market_ctx: Optional[MarketContext] = None,
+) -> Optional[IndexPrediction]:
+    """
+    Compute the next-day prediction for a SINGLE index.
+
+    Views that show one index at a time (e.g. Prediction Memory) should call this
+    rather than get_index_predictions(), which computes all four. market_ctx lets
+    the caller supply a cached MarketContext so switching index doesn't rebuild it.
+    persist defaults True; the dashboard passes persist=False.
+    """
+    entry = _INDEX_MAP.get(fno_symbol)
+    if entry is None:
+        return None
+    name, idx_name = entry
+    ctx = market_ctx if market_ctx is not None else _build_market_context(trade_date)
+    return _compute_prediction(trade_date, fno_symbol, name, idx_name, ctx, persist=persist)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
@@ -2868,6 +2898,7 @@ def _compute_prediction(
     display_name: str,
     index_name: str,
     market_ctx: MarketContext,
+    persist: bool = True,
 ) -> IndexPrediction:
     _no_data = dict(
         fno_symbol=fno_symbol, display_name=display_name, as_of_date=trade_date,
@@ -2919,6 +2950,7 @@ def _compute_prediction(
     futures_price = carry_pts = carry_pct_ann = None
     carry_label = "No Data"
     fut_oi = fut_oi_chg = 0
+    is_rollover = False   # default when no active futures exist (else set below)
 
     fut_rows = fno_today[
         (fno_today["instrument"] == "FUTIDX") &
@@ -3288,12 +3320,16 @@ def _compute_prediction(
     # similarity query (_FeatProxy.composite_score = composite_prelim). Without this,
     # the stored feat_oi_score reflects the final composite (including Signal 24 ±2.5)
     # while every future query uses the pre-memory composite — a systematic mismatch.
-    try:
-        from src.analytics.memory_engine import store_prediction
-        pred_out.composite_score = composite_prelim
-        store_prediction(pred_out, trade_date)
-        pred_out.composite_score = composite   # restore final for the caller
-    except Exception:
-        pred_out.composite_score = composite   # always restore on error path
+    # persist=False on the read-only dashboard path avoids a prediction_log WRITE
+    # (and its exclusive DuckDB lock) on every render. Daily logging is guaranteed
+    # by cmd_daily, so viewing never needs to write.
+    if persist:
+        try:
+            from src.analytics.memory_engine import store_prediction
+            pred_out.composite_score = composite_prelim
+            store_prediction(pred_out, trade_date)
+            pred_out.composite_score = composite   # restore final for the caller
+        except Exception:
+            pred_out.composite_score = composite   # always restore on error path
 
     return pred_out

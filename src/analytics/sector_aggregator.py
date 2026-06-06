@@ -192,7 +192,7 @@ def get_sector_history(sector_name: str, days: int = 60) -> pd.DataFrame:
             SUM(b.turnover_lacs) / 100 AS total_turnover_cr,
             COUNT(DISTINCT b.symbol) AS stock_count
         FROM daily_data b
-        INNER JOIN sector_master s ON b.symbol = s.symbol
+        INNER JOIN v_sector_master s ON b.symbol = s.symbol
         WHERE s.sector = ?
           AND b.series IN ('EQ', 'SM', 'ST')
           AND b.turnover_lacs >= ?
@@ -255,7 +255,7 @@ def _build_master_performance(
                 AS price_chg_pct
         FROM end_prices ep
         INNER JOIN start_prices sp ON ep.symbol = sp.symbol
-        INNER JOIN sector_master s ON ep.symbol = s.symbol
+        INNER JOIN v_sector_master s ON ep.symbol = s.symbol
         WHERE s.sector IS NOT NULL
         GROUP BY s.sector{gb}
     """
@@ -268,7 +268,7 @@ def _build_master_performance(
                 SUM(b.turnover_lacs * b.deliv_per / 100.0) / 100.0 AS deliv_val_cr
                 {count_col}
             FROM daily_data b
-            INNER JOIN sector_master s ON b.symbol = s.symbol
+            INNER JOIN v_sector_master s ON b.symbol = s.symbol
             WHERE s.sector IS NOT NULL
               AND b.series IN ('EQ', 'SM', 'ST')
               AND b.turnover_lacs >= ?
@@ -299,7 +299,7 @@ def _build_master_performance(
         SELECT s.sector{gs},
                SUM(b.turnover_lacs * b.deliv_per / 100.0) / 100.0 AS deliv_val_cr
         FROM daily_data b
-        INNER JOIN sector_master s ON b.symbol = s.symbol
+        INNER JOIN v_sector_master s ON b.symbol = s.symbol
         WHERE s.sector IS NOT NULL
           AND b.series IN ('EQ', 'SM', 'ST')
           AND b.turnover_lacs >= ?
@@ -315,7 +315,7 @@ def _build_master_performance(
         SELECT s.sector{gs},
                SUM(b.turnover_lacs * b.deliv_per / 100.0) / 100.0 AS today_dv_cr
         FROM daily_data b
-        INNER JOIN sector_master s ON b.symbol = s.symbol
+        INNER JOIN v_sector_master s ON b.symbol = s.symbol
         WHERE s.sector IS NOT NULL
           AND b.series IN ('EQ', 'SM', 'ST')
           AND b.turnover_lacs >= ?
@@ -335,7 +335,7 @@ def _build_master_performance(
                    b.trade_date,
                    SUM(b.turnover_lacs * b.deliv_per / 100.0) / 100.0 AS daily_dv
             FROM daily_data b
-            INNER JOIN sector_master s ON b.symbol = s.symbol
+            INNER JOIN v_sector_master s ON b.symbol = s.symbol
             WHERE s.sector IS NOT NULL
               AND b.series IN ('EQ', 'SM', 'ST')
               AND b.turnover_lacs >= ?
@@ -359,7 +359,7 @@ def _build_master_performance(
                    SUM(b.deliv_per * b.turnover_lacs) / NULLIF(SUM(b.turnover_lacs), 0)
                        AS today_wtd_deliv_pct
             FROM daily_data b
-            INNER JOIN sector_master s ON b.symbol = s.symbol
+            INNER JOIN v_sector_master s ON b.symbol = s.symbol
             WHERE s.sector IS NOT NULL
               AND b.series IN ('EQ', 'SM', 'ST')
               AND b.turnover_lacs >= ?
@@ -377,7 +377,7 @@ def _build_master_performance(
                        SUM(b.deliv_per * b.turnover_lacs) / NULLIF(SUM(b.turnover_lacs), 0)
                            AS daily_wtd_deliv_pct
                 FROM daily_data b
-                INNER JOIN sector_master s ON b.symbol = s.symbol
+                INNER JOIN v_sector_master s ON b.symbol = s.symbol
                 WHERE s.sector IS NOT NULL
                   AND b.series IN ('EQ', 'SM', 'ST')
                   AND b.turnover_lacs >= ?
@@ -430,7 +430,7 @@ def _build_master_performance(
                    / NULLIF(SUM(CASE WHEN h.avg_dv_cr IS NOT NULL THEN 1 ELSE 0 END), 0)
                    AS breadth
         FROM today_dv t
-        INNER JOIN sector_master s ON t.symbol = s.symbol
+        INNER JOIN v_sector_master s ON t.symbol = s.symbol
         LEFT JOIN hist_avg h ON t.symbol = h.symbol
         WHERE s.sector IS NOT NULL
         GROUP BY s.sector{gb}
@@ -479,7 +479,7 @@ def get_all_stocks() -> pd.DataFrame:
             COALESCE(s.industry, 'Others') AS industry,
             MAX(b.turnover_lacs) AS recent_turnover
         FROM daily_data b
-        LEFT JOIN sector_master s ON b.symbol = s.symbol
+        LEFT JOIN v_sector_master s ON b.symbol = s.symbol
         WHERE b.series IN ('EQ', 'SM', 'ST')
         GROUP BY b.symbol, COALESCE(s.company_name, b.symbol),
                  COALESCE(s.sector, 'Others'), COALESCE(s.industry, 'Others')
@@ -511,7 +511,7 @@ def search_stock_suggestions(query: str, limit: int = 15) -> pd.DataFrame:
             COALESCE(s.industry, 'Others') AS industry,
             MAX(b.turnover_lacs) AS recent_turnover
         FROM daily_data b
-        INNER JOIN sector_master s ON b.symbol = s.symbol
+        INNER JOIN v_sector_master s ON b.symbol = s.symbol
         WHERE b.series IN ('EQ', 'SM', 'ST')
           AND (UPPER(b.symbol) LIKE ? OR UPPER(COALESCE(s.company_name, b.symbol)) LIKE ?)
         GROUP BY b.symbol, COALESCE(s.company_name, b.symbol),
@@ -557,7 +557,7 @@ def search_stocks_performance(
                        ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING
                    ) AS vol_20d_avg
             FROM daily_data b
-            INNER JOIN sector_master s ON b.symbol = s.symbol
+            INNER JOIN v_sector_master s ON b.symbol = s.symbol
             WHERE b.series IN ('EQ', 'SM', 'ST')
               AND (UPPER(b.symbol) LIKE ? OR UPPER(COALESCE(s.company_name, b.symbol)) LIKE ?)
         )
@@ -649,7 +649,7 @@ def get_subsector_stocks_performance(
                        ROWS BETWEEN 20 PRECEDING AND 1 PRECEDING
                    ) AS vol_20d_avg
             FROM daily_data b
-            INNER JOIN sector_master s ON b.symbol = s.symbol
+            INNER JOIN v_sector_master s ON b.symbol = s.symbol
             WHERE b.series IN ('EQ', 'SM', 'ST')
               AND s.sector = ?
               AND COALESCE(s.industry, 'Others') = ?
@@ -676,7 +676,7 @@ def get_subsector_stocks_performance(
               AND series IN ('EQ', 'SM', 'ST')
             GROUP BY symbol
         ) t ON b.symbol = t.symbol AND b.trade_date = t.td
-        INNER JOIN sector_master s ON b.symbol = s.symbol
+        INNER JOIN v_sector_master s ON b.symbol = s.symbol
         WHERE s.sector = ?
           AND COALESCE(s.industry, 'Others') = ?
     """
@@ -685,7 +685,7 @@ def get_subsector_stocks_performance(
         SELECT b.symbol,
                SUM(b.turnover_lacs * b.deliv_per / 100.0) / 100.0 AS deliv_val_cr
         FROM daily_data b
-        INNER JOIN sector_master s ON b.symbol = s.symbol
+        INNER JOIN v_sector_master s ON b.symbol = s.symbol
         WHERE b.trade_date > ?
           AND b.trade_date <= ?
           AND b.series IN ('EQ', 'SM', 'ST')

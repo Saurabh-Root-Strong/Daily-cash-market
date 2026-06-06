@@ -69,9 +69,12 @@ from src.data.repository import query_dataframe, get_repository
 
 __all__ = [
     "SectorMemoryContext",
+    "MemoryEdge",
     "record_daily_snapshot",
     "fill_forward_outcomes",
     "get_sector_memory_context",
+    "compute_memory_edge",
+    "apply_memory_overlay",
     "backfill_sector_memory",
     "SCHEMA_DDL",
 ]
@@ -149,9 +152,11 @@ _FEAT_WEIGHTS: dict[str, float] = {
 }
 assert abs(sum(_FEAT_WEIGHTS.values()) - 1.0) < 1e-9, "Weights must sum to 1"
 
-_TOP_K          = 20    # retrieve up to 20 most similar historical setups
-_MIN_SIMILARITY = 0.40  # discard very dissimilar days (< 40% similarity)
-_MIN_RECORDS    = 5     # need at least 5 similar filled records to show memory
+_TOP_K           = 20   # retrieve up to 20 most similar INDEPENDENT setups
+_MIN_SIMILARITY  = 0.40 # discard very dissimilar days (< 40% similarity)
+_MIN_RECORDS     = 5    # need at least 5 similar filled records to show memory
+_EPISODE_GAP_DAYS = 10  # min calendar gap between retained neighbours so their
+                        # forward windows don't overlap (independent-episode k_eff)
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
@@ -184,6 +189,8 @@ class SectorMemoryContext:
     signal:           str
     n_similar:        int            # number of similar setups found
     n_filled:         int            # number with outcome data
+    n_episodes:       int = 0        # INDEPENDENT episodes after overlap de-dup (k_eff)
+    avg_similarity:   float = 0.0    # mean similarity of the retained neighbours [0,1]
     similar_setups:   list[SimilarSetup] = field(default_factory=list)
 
     # 1-week outcomes
@@ -290,26 +297,50 @@ def _ensure_schema() -> None:
 def record_daily_snapshot(
     as_of_date:       date,
     min_turnover_lacs: float = 1.0,
+    replace:          bool = False,
 ) -> int:
     """
     Compute today's sector rotation signals and market regime, then write
     one row per sector to sector_rotation_log and one row to sector_regime_log.
+
+    This is the SINGLE source of truth for the fingerprint. The historical
+    backfill replays this exact function per past date, so stored history is
+    byte-for-byte consistent with the live daily job — there is no second
+    feature implementation to drift out of sync.
+
+    Parameters
+    ----------
+    replace : if False (daily default) skip dates already recorded — idempotent.
+              if True (backfill) delete the date's existing rows first and
+              re-record, so a corrected fingerprint definition can be rebuilt.
 
     Returns the number of sector rows written (0 on failure or if already done).
     Called by sector_memory_daily.py after nightly_sync completes.
     """
     _ensure_schema()
 
-    # Idempotency guard — skip if today is already recorded
     try:
         existing = query_dataframe(
             "SELECT COUNT(*) AS n FROM sector_rotation_log WHERE trade_date = ?",
             [as_of_date],
         )
-        if not existing.empty and int(existing["n"].iloc[0]) > 0:
-            return 0
+        n_existing = int(existing["n"].iloc[0]) if not existing.empty else 0
     except Exception:
-        pass
+        n_existing = 0
+
+    if n_existing > 0:
+        if not replace:
+            return 0   # idempotent: already recorded, leave matured outcomes intact
+        # replace=True → wipe this date's rows in both tables before re-recording
+        try:
+            repo = get_repository()
+            with repo._cm.connect() as conn:
+                conn.execute("DELETE FROM sector_rotation_log WHERE trade_date = ?", [as_of_date])
+                conn.execute("DELETE FROM sector_regime_log   WHERE trade_date = ?", [as_of_date])
+        except Exception as exc:
+            import sys
+            print(f"[SectorMemory] replace-delete failed for {as_of_date}: {exc}",
+                  file=sys.stderr)
 
     try:
         from src.analytics.sector_rotation import get_sector_rotation, get_market_regime
@@ -360,7 +391,7 @@ def record_daily_snapshot(
                 as_of_date, r_label, r_score,
                 1 if ema20_above else 0,
                 (1 if ema_cross_bull is True else 0 if ema_cross_bull is False else None),
-                r_vix, regime.get("vix_trend"),
+                r_vix, None,   # vix_5d_chg: numeric Δ not exposed by get_market_regime
                 r_fii, r_hmm, r_pcr,
                 None,   # market_breadth — filled separately if available
             ])
@@ -452,7 +483,7 @@ def _sector_forward_return(
             WITH start_prices AS (
                 SELECT b.symbol, b.close_price AS price_start, b.turnover_lacs
                 FROM daily_data b
-                JOIN sector_master sm ON b.symbol = sm.symbol
+                JOIN v_sector_master sm ON b.symbol = sm.symbol
                 WHERE sm.sector = ?
                   AND b.series = 'EQ'
                   AND b.turnover_lacs >= ?
@@ -655,10 +686,20 @@ def get_sector_memory_context(
         ctx.error = f"Feature normalisation failed: {exc}"
         return ctx
 
-    # Fetch all filled historical records for this sector
+    # Fetch all filled historical records for this sector.
+    #
+    # POINT-IN-TIME GATE: a setup is only usable if its forward window had fully
+    # RESOLVED by as_of_date — otherwise viewing a historical date would consume
+    # outcomes that were not yet knowable then (look-ahead leakage). outcome_filled
+    # alone is insufficient because it is set at fill/backfill time (≈ now), not
+    # relative to as_of. So we additionally require trade_date ≤ as_of − 31 days
+    # (the longest, 1-month, horizon). For live use (as_of = today) this is a no-op
+    # since sub-31-day setups are not yet outcome_filled; for historical / backtest
+    # use it is what makes the memory honest.
+    _OUTCOME_HORIZON_DAYS = 31
     try:
         sig_filter = "AND signal = ?" if same_signal_only else ""
-        params     = [sector, as_of_date - timedelta(days=1)]
+        params     = [sector, as_of_date - timedelta(days=_OUTCOME_HORIZON_DAYS)]
         if same_signal_only:
             params.insert(1, signal)
 
@@ -705,10 +746,31 @@ def get_sector_memory_context(
                     "Current conditions may be unprecedented in the logged history.")
         return ctx
 
-    # Sort by similarity descending, take top K
+    # Sort by similarity descending.
     scored.sort(key=lambda x: x[0], reverse=True)
-    top = scored[:_TOP_K]
-    ctx.n_similar = len(top)
+
+    # ── Independent-episode de-duplication ────────────────────────────────────
+    # Recording every trading day means neighbours are often consecutive days
+    # whose forward windows overlap ~80% — counting them all fakes statistical
+    # confidence ("10/14 positive" backed by ~2 real events). Greedily keep, in
+    # similarity order, only setups ≥ _EPISODE_GAP_DAYS apart so each contributes
+    # an (almost) independent forward outcome. n_episodes (k_eff) is the honest
+    # sample size used downstream for shrinkage.
+    kept: list[tuple[float, pd.Series]] = []
+    kept_dates: list[date] = []
+    for sim, hrow in scored:
+        td_raw = hrow["trade_date"]
+        td_d = td_raw.date() if hasattr(td_raw, "date") else td_raw
+        if all(abs((td_d - kd).days) >= _EPISODE_GAP_DAYS for kd in kept_dates):
+            kept.append((sim, hrow))
+            kept_dates.append(td_d)
+        if len(kept) >= _TOP_K:
+            break
+
+    top = kept
+    ctx.n_similar   = len(top)
+    ctx.n_episodes  = len(top)   # already de-duplicated → these ARE independent episodes
+    ctx.avg_similarity = round(sum(s for s, _ in top) / len(top), 4) if top else 0.0
 
     # Build similar setup list and compute stats
     filled: list[SimilarSetup] = []
@@ -790,23 +852,31 @@ def backfill_sector_memory(
     min_turnover_lacs: float = 1.0,
     fill_outcomes:     bool  = True,
     verbose:           bool  = True,
+    replace:           bool  = True,
 ) -> dict[str, int]:
     """
-    Backfill sector_rotation_log for all available trading dates in [start_date, end_date].
+    Backfill sector_rotation_log + sector_regime_log for every trading day in
+    [start_date, end_date] by REPLAYING record_daily_snapshot() per date.
 
-    Uses DuckDB window functions to compute rolling delivery metrics efficiently
-    across all sectors and all dates in a SINGLE SQL pass — O(n) not O(n²).
-
-    After recording all signals, optionally fills forward outcomes for records
-    old enough to have measurable outcomes.
+    Why replay rather than a bulk SQL pass: the stored fingerprint must match the
+    live daily job EXACTLY. The previous bulk implementation re-derived features
+    independently and drifted out of sync — it un-normalised FII flow with the
+    wrong scale, never computed 1-week relative strength (feat_rs_n was dead),
+    produced degenerate signal labels (price unknown → no Secret/Confirmed), and
+    sourced regime dims only from prediction_log, which starts 2026-04. Replaying
+    the real recording path makes history identical to live by construction.
+    Regime VIX/FII/EMA come from raw tables via get_market_regime() and so are
+    populated across the full range; only HMM/PCR fall back to neutral on the
+    older dates that genuinely predate the prediction engine.
 
     Parameters
     ----------
     end_date        : most recent date to include (typically today)
     start_date      : earliest date; defaults to end_date − 365 days
-    min_turnover_lacs : turnover filter for delivery data
+    min_turnover_lacs : turnover filter passed through to get_sector_rotation
     fill_outcomes   : whether to fill forward returns after recording
     verbose         : print progress
+    replace         : re-record dates already present (True for a clean rebuild)
 
     Returns
     -------
@@ -817,256 +887,50 @@ def backfill_sector_memory(
     if start_date is None:
         start_date = end_date - timedelta(days=365)
 
-    # ── Step 1: Compute rolling sector metrics for ALL dates in a single query ─
-    # This is O(n) using DuckDB window functions — far more efficient than
-    # calling get_sector_rotation() for each date individually (O(n × k) queries).
-    if verbose:
-        print(f"[SectorMemory] Backfill: computing rolling metrics {start_date} → {end_date}")
-
+    # Trading days actually present in daily_data within the window.
     try:
-        rolling_df = query_dataframe("""
-            WITH daily_sector AS (
-                SELECT sm.sector, b.trade_date,
-                       SUM(b.deliv_per * b.turnover_lacs)
-                           / NULLIF(SUM(b.turnover_lacs), 0)             AS wtd_deliv_pct,
-                       SUM(b.deliv_per / 100.0 * b.turnover_lacs) / 100  AS deliv_value_cr,
-                       COUNT(DISTINCT b.symbol)                           AS n_stocks,
-                       SUM(CASE WHEN b.deliv_per > 0 THEN 1 ELSE 0 END) * 1.0
-                           / NULLIF(COUNT(*), 0)                         AS breadth_raw
-                FROM daily_data b
-                JOIN sector_master sm ON b.symbol = sm.symbol
-                WHERE b.series IN ('EQ', 'SM', 'ST')
-                  AND sm.sector NOT IN ('ETF', 'Others')
-                  AND b.turnover_lacs >= ?
-                  AND b.trade_date >= (? - INTERVAL 150 DAY)
-                  AND b.trade_date <= ?
-                GROUP BY sm.sector, b.trade_date
-            ),
-            rolling AS (
-                SELECT *,
-                       AVG(deliv_value_cr)    OVER w100 AS avg_100d,
-                       STDDEV(deliv_value_cr) OVER w100 AS std_100d,
-                       AVG(deliv_value_cr)    OVER w5   AS avg_5d,
-                       AVG(wtd_deliv_pct)     OVER w100 AS avg_wtd_pct_100d
-                FROM daily_sector
-                WINDOW
-                    w100 AS (PARTITION BY sector ORDER BY trade_date
-                             ROWS BETWEEN 100 PRECEDING AND 1 PRECEDING),
-                    w5   AS (PARTITION BY sector ORDER BY trade_date
-                             ROWS BETWEEN 5 PRECEDING AND 1 PRECEDING)
-            )
-            SELECT sector, trade_date,
-                   deliv_value_cr,
-                   avg_100d, std_100d, avg_5d, avg_wtd_pct_100d,
-                   CASE WHEN avg_100d > 0
-                        THEN deliv_value_cr / avg_100d
-                        ELSE NULL END                                     AS dv_ratio,
-                   CASE WHEN std_100d > 0
-                        THEN (deliv_value_cr - avg_100d) / std_100d
-                        ELSE NULL END                                     AS z_score,
-                   CASE WHEN avg_100d > 0
-                        THEN (avg_5d / (avg_100d / 100 * 5))
-                        ELSE NULL END                                     AS dv_ratio_5d,
-                   breadth_raw                                            AS breadth,
-                   wtd_deliv_pct
-            FROM rolling
-            WHERE avg_100d IS NOT NULL
-              AND trade_date >= ?
-              AND trade_date <= ?
-            ORDER BY trade_date, sector
-        """, [min_turnover_lacs, start_date, end_date, start_date, end_date])
+        dates_df = query_dataframe("""
+            SELECT DISTINCT trade_date
+            FROM daily_data
+            WHERE trade_date >= ? AND trade_date <= ? AND series = 'EQ'
+            ORDER BY trade_date
+        """, [start_date, end_date])
     except Exception as exc:
         if verbose:
-            print(f"[SectorMemory] Rolling metrics query failed: {exc}")
+            print(f"[SectorMemory] Trading-date scan failed: {exc}")
         return {"dates_processed": 0, "rows_recorded": 0, "outcomes_filled": 0}
 
-    if rolling_df.empty:
+    if dates_df.empty:
         if verbose:
-            print("[SectorMemory] No data returned from rolling metrics query.")
+            print("[SectorMemory] No trading dates in range.")
         return {"dates_processed": 0, "rows_recorded": 0, "outcomes_filled": 0}
 
-    # ── Step 2: Get Nifty 50 returns for each date (for RS computation) ──────
-    try:
-        nifty_df = query_dataframe("""
-            SELECT trade_date, close_val,
-                   LAG(close_val, 7)  OVER (ORDER BY trade_date) AS close_7d_ago
-            FROM index_data
-            WHERE index_name = 'Nifty 50'
-              AND trade_date >= (? - INTERVAL 15 DAY)
-              AND trade_date <= ?
-            ORDER BY trade_date
-        """, [start_date, end_date])
-        nifty_df["trade_date"] = pd.to_datetime(nifty_df["trade_date"]).dt.date
-        nifty_1w_map = {}
-        for _, nr in nifty_df.iterrows():
-            if nr["close_7d_ago"] and nr["close_7d_ago"] > 0:
-                nifty_1w_map[nr["trade_date"]] = round(
-                    (nr["close_val"] - nr["close_7d_ago"]) / nr["close_7d_ago"] * 100, 2)
-    except Exception:
-        nifty_1w_map = {}
+    trade_dates = [
+        d.date() if hasattr(d, "date") else d
+        for d in dates_df["trade_date"].tolist()
+    ]
+    if verbose:
+        print(f"[SectorMemory] Backfill: replaying {len(trade_dates)} dates "
+              f"{trade_dates[0]} → {trade_dates[-1]}")
 
-    # ── Step 3: Get regime fingerprints from prediction_log ──────────────────
-    try:
-        regime_df = query_dataframe("""
-            SELECT trade_date, hmm_state, feat_pcr,
-                   feat_vix, feat_fii_5d_cumul, feat_breadth
-            FROM prediction_log
-            WHERE fno_symbol = 'NIFTY'
-              AND trade_date >= ?  AND trade_date <= ?
-            ORDER BY trade_date
-        """, [start_date, end_date])
-        regime_df["trade_date"] = pd.to_datetime(regime_df["trade_date"]).dt.date
-        regime_map = regime_df.set_index("trade_date").to_dict("index")
-    except Exception:
-        regime_map = {}
-
-    # ── Step 4: Get EMA positions for each date ───────────────────────────────
-    try:
-        nifty_hist = query_dataframe("""
-            SELECT trade_date, close_val FROM index_data
-            WHERE index_name = 'Nifty 50'
-              AND trade_date >= (? - INTERVAL 200 DAY)
-              AND trade_date <= ?
-            ORDER BY trade_date
-        """, [start_date, end_date])
-        nifty_hist["trade_date"] = pd.to_datetime(nifty_hist["trade_date"]).dt.date
-        nifty_hist["ema20"] = nifty_hist["close_val"].ewm(span=20, adjust=False).mean()
-        nifty_hist["ema50"] = nifty_hist["close_val"].ewm(span=50, adjust=False).mean()
-        nifty_hist["ema20_above"] = nifty_hist["close_val"] > nifty_hist["ema20"]
-        nifty_hist["ema_cross"]   = nifty_hist["ema20"] > nifty_hist["ema50"]
-        ema_map = nifty_hist.set_index("trade_date")[
-            ["ema20_above", "ema_cross"]].to_dict("index")
-    except Exception:
-        ema_map = {}
-
-    # ── Step 5: Process each date and write to sector_rotation_log ───────────
-    rolling_df["trade_date"] = pd.to_datetime(rolling_df["trade_date"]).dt.date
-    all_dates   = sorted(rolling_df["trade_date"].unique())
-    rows_written = 0
-
-    for td in all_dates:
-        day_df = rolling_df[rolling_df["trade_date"] == td].copy()
-        if day_df.empty:
-            continue
-
-        # Cross-sectional z-percentile for this date
-        z_scores = day_df["z_score"].dropna()
-        if len(z_scores) > 1:
-            day_df["z_pct"] = day_df["z_score"].rank(pct=True)
-        else:
-            day_df["z_pct"] = 0.5
-
-        # Nifty RS for this date
-        nifty_1w = nifty_1w_map.get(td)
-
-        # Regime features
-        rg       = regime_map.get(td, {})
-        hmm      = rg.get("hmm_state", "Sideways")
-        pcr      = rg.get("feat_pcr")
-        vix_raw  = rg.get("feat_vix")
-        fii_5d   = rg.get("feat_fii_5d_cumul")
-        if fii_5d is not None:
-            fii_5d = float(fii_5d) * 10_000  # feat_fii_5d_cumul is normalised; undo
-
-        em       = ema_map.get(td, {})
-        ema20_ab = bool(em.get("ema20_above", False))
-        ema_cr   = (True if em.get("ema_cross") else False) if em else None
-
-        # Derive regime label from score (simplified for backfill)
-        score = 5.0
-        if ema20_ab:   score += 1.5
-        else:          score -= 1.5
-        if ema_cr is True:  score += 1.0
-        elif ema_cr is False: score -= 1.0
-        if hmm == "Bull":  score += 1.0
-        elif hmm == "Bear": score -= 1.0
-        score = max(0, min(10, score))
-        r_label = ("BULL" if score >= 7.5 else "CAUTIOUS BULL" if score >= 6.0
-                   else "SIDEWAYS" if score >= 4.0 else "CAUTION" if score >= 2.5 else "BEAR")
-
+    rows_recorded = 0
+    processed     = 0
+    for td in trade_dates:
         try:
-            repo = get_repository()
-            with repo._cm.connect() as conn:
-                for _, sr in day_df.iterrows():
-                    sector  = str(sr["sector"])
-                    dv      = sr["dv_ratio"]
-                    dv5d    = sr["dv_ratio_5d"]
-                    z       = sr["z_score"]
-                    zpct    = sr["z_pct"]
-                    breadth = sr["breadth"]
-                    p1w     = None   # not computable in bulk without another query
-                    rs1w    = None
-                    if dv is None or pd.isna(dv):
-                        continue
-
-                    # Classify signal (same gates as get_sector_rotation)
-                    z_pct_v = float(zpct) if not pd.isna(zpct) else 0.5
-                    dv5d_v  = float(dv5d) if dv5d is not None and not pd.isna(dv5d) else 1.0
-                    wtd_pct = sr.get("wtd_deliv_pct")
-                    avg_pct = sr.get("avg_wtd_pct_100d")
-                    pct_ok  = (float(wtd_pct) >= float(avg_pct) * 0.85
-                               if wtd_pct is not None and avg_pct is not None
-                                  and not pd.isna(wtd_pct) and not pd.isna(avg_pct)
-                                  and avg_pct > 0
-                               else True)
-                    d_surge_conf = (z_pct_v >= 0.50 and dv5d_v >= 1.15) or (z_pct_v >= 0.90 and dv5d_v >= 0.9)
-                    d_weak_conf  = z_pct_v <= 0.25 and dv5d_v <= 0.90
-                    d_surge      = z_pct_v >= 0.50
-                    p1w_val      = 0.0   # unknown at backfill time
-
-                    if d_surge_conf and pct_ok:
-                        signal = ("🔥 Secret Accumulation" if p1w_val < -1.0
-                                  else "✅ Confirmed Accumulation" if p1w_val > 1.0
-                                  else "👀 Early Accumulation")
-                    elif d_surge and not pct_ok:
-                        signal = "📊 Volume Spike"
-                    elif p1w_val > 1.0 and d_weak_conf:
-                        signal = "⚠️ Distribution Trap"
-                    elif p1w_val < -1.0 and d_weak_conf:
-                        signal = "❌ Active Selling"
-                    elif z_pct_v <= 0.25 and dv5d_v < 1.05:
-                        signal = "📉 Weakening"
-                    else:
-                        signal = "⚖️ Neutral"
-
-                    feat = _normalize(
-                        dv_ratio=float(dv), z_pct=z_pct_v, rs_1w=None,
-                        ema20_above=ema20_ab, ema_cross_bull=ema_cr,
-                        vix=float(vix_raw) if vix_raw else None,
-                        fii_5d_cr=fii_5d, hmm_state=hmm, pcr=float(pcr) if pcr else None,
-                    )
-
-                    conn.execute("""
-                        INSERT OR IGNORE INTO sector_rotation_log (
-                            trade_date, sector, signal, accum_score,
-                            dv_ratio, dv_ratio_5d, z_score, z_pct, breadth,
-                            price_1w, rs_1w,
-                            feat_dv_n, feat_zpct_n, feat_rs_n,
-                            feat_ema20, feat_ema_x, feat_vix_n,
-                            feat_fii_n, feat_hmm_n, feat_pcr_n,
-                            regime_label, outcome_filled
-                        ) VALUES (?,?,?,?, ?,?,?,?,?, ?,?, ?,?,?, ?,?,?, ?,?,?, ?, ?)
-                    """, [
-                        td, sector, signal, 50.0,
-                        float(dv),
-                        float(dv5d) if dv5d is not None and not pd.isna(dv5d) else None,
-                        float(z) if not pd.isna(z) else None, z_pct_v,
-                        float(breadth) if breadth is not None and not pd.isna(breadth) else None,
-                        p1w, rs1w,
-                        feat["feat_dv_n"], feat["feat_zpct_n"], feat["feat_rs_n"],
-                        feat["feat_ema20"], feat["feat_ema_x"], feat["feat_vix_n"],
-                        feat["feat_fii_n"], feat["feat_hmm_n"], feat["feat_pcr_n"],
-                        r_label, False,
-                    ])
-                    rows_written += 1
+            rows_recorded += record_daily_snapshot(
+                td, min_turnover_lacs=min_turnover_lacs, replace=replace,
+            )
+            processed += 1
+            if verbose and processed % 25 == 0:
+                print(f"[SectorMemory]   {processed}/{len(trade_dates)} dates "
+                      f"({rows_recorded} rows)")
         except Exception as exc:
             if verbose:
-                print(f"[SectorMemory] Write failed for {td}: {exc}")
+                print(f"[SectorMemory] Record failed for {td}: {exc}")
 
     if verbose:
-        print(f"[SectorMemory] Recorded {rows_written} rows across {len(all_dates)} dates")
+        print(f"[SectorMemory] Recorded {rows_recorded} rows across {processed} dates")
 
-    # ── Step 6: Fill forward outcomes for old records ─────────────────────────
     outcomes_filled = 0
     if fill_outcomes:
         if verbose:
@@ -1076,7 +940,182 @@ def backfill_sector_memory(
             print(f"[SectorMemory] Filled outcomes for {outcomes_filled} records")
 
     return {
-        "dates_processed": len(all_dates),
-        "rows_recorded":   rows_written,
+        "dates_processed": processed,
+        "rows_recorded":   rows_recorded,
         "outcomes_filled": outcomes_filled,
     }
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Memory-sharpened signal overlay
+# ──────────────────────────────────────────────────────────────────────────────
+# Turns the passive "here's what history did" readout into an ACTIVE conviction
+# adjustment on the cross-sectional accumulation score. Design contract:
+#   • Memory is a SHRUNK overlay, never a replacement. It tilts the IC-validated
+#     accum_score by at most ±_ALPHA and only in proportion to evidence quality.
+#   • It scales conviction; it NEVER flips a signal's direction.
+#   • Thin / autocorrelated / low-similarity evidence → edge collapses to 0 and
+#     the base score is used untouched ("Unproven").
+# ══════════════════════════════════════════════════════════════════════════════
+
+_ALPHA                  = 0.25   # max fractional tilt memory may apply to accum_score
+_K0                     = 8.0    # episode count at which sample-confidence = 0.5
+_RS_SCALE               = 2.0    # forward RS% that ~saturates the tanh effect size
+_SPREAD_SCALE           = 6.0    # outcome IQR% reference for the consistency factor
+_MIN_EPISODES_FOR_EDGE  = 5      # below this k_eff → edge forced to 0 (Unproven)
+_HIGH_CONV_EPISODES     = 8      # k_eff needed to qualify for High Conviction
+
+_BULL_SIGNALS = {"🔥 Secret Accumulation", "✅ Confirmed Accumulation", "👀 Early Accumulation"}
+_BEAR_SIGNALS = {"❌ Active Selling", "⚠️ Distribution Trap", "📉 Weakening"}
+
+
+@dataclass
+class MemoryEdge:
+    """Memory-derived conviction adjustment for one sector's current setup."""
+    edge:             float          # shrunk signed edge in [-1, +1]
+    confidence:       float          # evidence-quality weight in [0, 1]
+    conviction:       str            # HIGH | CONFIRM | NEUTRAL | DISAGREE | UNPROVEN
+    score_multiplier: float          # 1 + _ALPHA*edge — multiply accum_score by this
+    expected_rs:      Optional[float] = None   # median forward RS vs Nifty (2W) %
+    hit_rate:         Optional[float] = None   # % of episodes that outperformed Nifty
+    n_episodes:       int = 0                   # independent episodes (k_eff)
+    basis:            str = ""                  # human-readable evidence summary
+
+
+def _classify_conviction(edge: float, k: int, base_bull: bool, base_bear: bool) -> str:
+    """Label the edge RELATIVE to the base signal's intended direction."""
+    if base_bull:
+        if edge >= 0.30 and k >= _HIGH_CONV_EPISODES:
+            return "HIGH"        # history strongly rewards this accumulation setup
+        if edge >= 0.10:
+            return "CONFIRM"
+        if edge <= -0.20:
+            return "DISAGREE"    # looks like a buy today but historically faded
+        return "NEUTRAL"
+    if base_bear:
+        # For an avoid/weakness signal, NEGATIVE forward RS confirms the thesis.
+        if edge <= -0.30 and k >= _HIGH_CONV_EPISODES:
+            return "HIGH"        # history strongly rewards avoiding/shorting this
+        if edge <= -0.10:
+            return "CONFIRM"
+        if edge >= 0.20:
+            return "DISAGREE"    # flagged weak today but historically bounced
+        return "NEUTRAL"
+    return "NEUTRAL"
+
+
+def compute_memory_edge(ctx: SectorMemoryContext, base_signal: str) -> MemoryEdge:
+    """
+    Convert a SectorMemoryContext into a shrunk conviction adjustment.
+
+    edge = (0.6·tanh(rs/RS_SCALE) + 0.4·(2·hit−1)) × confidence
+    confidence = k/(k+K0) × avg_similarity × consistency,  all ∈ [0,1]
+
+    Below _MIN_EPISODES_FOR_EDGE independent episodes the edge is forced to 0 so
+    a thin sample can never move the validated base score.
+    """
+    rs_med = ctx.rs_2w_median if ctx.rs_2w_median is not None else ctx.rs_1w_median
+    hit    = ctx.rs_2w_pos_pct if ctx.rs_2w_pos_pct is not None else ctx.rs_1w_pos_pct
+    k      = int(ctx.n_episodes or 0)
+
+    if k < _MIN_EPISODES_FOR_EDGE or rs_med is None:
+        return MemoryEdge(
+            edge=0.0, confidence=0.0, conviction="UNPROVEN", score_multiplier=1.0,
+            expected_rs=rs_med, hit_rate=hit, n_episodes=k,
+            basis=f"only {k} independent episode(s) — using base score",
+        )
+
+    eff = math.tanh(rs_med / _RS_SCALE)                       # effect size  [-1,1]
+    hr  = (2.0 * (hit / 100.0) - 1.0) if hit is not None else 0.0  # hit rate [-1,1]
+    raw = 0.6 * eff + 0.4 * hr
+
+    samp = k / (k + _K0)
+    consistency = 1.0
+    if ctx.ret_2w_p25 is not None and ctx.ret_2w_p75 is not None:
+        spread = abs(ctx.ret_2w_p75 - ctx.ret_2w_p25)
+        consistency = 1.0 / (1.0 + spread / _SPREAD_SCALE)
+    conf = max(0.0, min(1.0, samp * float(ctx.avg_similarity or 0.0) * consistency))
+
+    edge = max(-1.0, min(1.0, raw * conf))
+    mult = 1.0 + _ALPHA * edge
+
+    conviction = _classify_conviction(
+        edge, k, base_signal in _BULL_SIGNALS, base_signal in _BEAR_SIGNALS,
+    )
+    basis = (f"{k} episodes · {rs_med:+.1f}% med RS·2W · "
+             f"{(hit or 0):.0f}% outperformed · conf {conf:.2f}")
+    return MemoryEdge(
+        edge=round(edge, 3), confidence=round(conf, 3), conviction=conviction,
+        score_multiplier=round(mult, 4), expected_rs=round(rs_med, 2),
+        hit_rate=hit, n_episodes=k, basis=basis,
+    )
+
+
+def apply_memory_overlay(
+    rotation_df: pd.DataFrame,
+    as_of_date:  date,
+    regime:      dict,
+) -> pd.DataFrame:
+    """
+    Attach a memory-sharpened conviction layer to a get_sector_rotation() frame.
+
+    Adds columns: memory_edge, memory_conf, conviction, expected_rs_2w,
+    mem_episodes, mem_basis, adj_score (= accum_score × score_multiplier).
+    Returns a NEW frame re-sorted by adj_score descending. Pure analytics — no
+    Streamlit, no lookahead (retrieval is gated to trade_date < as_of_date).
+    """
+    if rotation_df is None or rotation_df.empty:
+        return rotation_df
+
+    df = rotation_df.copy()
+
+    ema20_above    = (regime.get("nifty_vs_ema20") == "ABOVE")
+    _ema_x         = regime.get("nifty_vs_ema50")
+    ema_cross_bull = (True if _ema_x == "ABOVE" else False if _ema_x == "BELOW" else None)
+    vix            = float(regime["vix"])       if regime.get("vix")       is not None else None
+    fii_5d_cr      = float(regime["fii_5d_cr"]) if regime.get("fii_5d_cr") is not None else None
+    hmm_state      = regime.get("hmm_state")
+    regime_label   = regime.get("regime", "SIDEWAYS")
+
+    edges, confs, convs, exp_rs, eps, bases, adj = [], [], [], [], [], [], []
+    for _, row in df.iterrows():
+        signal = str(row.get("signal", ""))
+        rs1w   = row.get("rs_1w")
+        rs1w   = (float(rs1w) if rs1w is not None
+                  and not (isinstance(rs1w, float) and pd.isna(rs1w)) else None)
+        try:
+            ctx = get_sector_memory_context(
+                as_of_date     = as_of_date,
+                sector         = str(row["sector"]),
+                signal         = signal,
+                regime_label   = regime_label,
+                dv_ratio       = float(row.get("dv_ratio", 1.0) or 1.0),
+                z_pct          = float(row.get("z_pct", 0.5) or 0.5),
+                rs_1w          = rs1w,
+                ema20_above    = ema20_above,
+                ema_cross_bull = ema_cross_bull,
+                vix            = vix,
+                fii_5d_cr      = fii_5d_cr,
+                hmm_state      = hmm_state,
+                pcr            = None,
+            )
+            me = compute_memory_edge(ctx, signal)
+        except Exception:
+            me = MemoryEdge(edge=0.0, confidence=0.0, conviction="UNPROVEN",
+                            score_multiplier=1.0, basis="memory unavailable")
+
+        base_score = float(row.get("accum_score", 0.0) or 0.0)
+        edges.append(me.edge);        confs.append(me.confidence)
+        convs.append(me.conviction);  exp_rs.append(me.expected_rs)
+        eps.append(me.n_episodes);    bases.append(me.basis)
+        adj.append(round(base_score * me.score_multiplier, 1))
+
+    df["memory_edge"]    = edges
+    df["memory_conf"]    = confs
+    df["conviction"]     = convs
+    df["expected_rs_2w"] = exp_rs
+    df["mem_episodes"]   = eps
+    df["mem_basis"]      = bases
+    df["adj_score"]      = adj
+
+    return df.sort_values("adj_score", ascending=False).reset_index(drop=True)

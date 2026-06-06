@@ -34,6 +34,17 @@ log = get_logger(__name__)
 
 _LOOKBACK_DAYS = 100
 
+# ── Sector tradability gate ───────────────────────────────────────────────────
+# A "sector" is only a meaningful rotation signal if it's a diversified, liquid
+# basket. Many sector_master buckets are thin (e.g. "Oil & Gas" = 7 small-caps,
+# the real majors sit in "Energy") or single-name dominated (one stock = 80% of
+# turnover). Those produce single-stock momentum dressed up as sector rotation,
+# so we flag them is_thin=True and exclude them from the ranked invest/avoid
+# lists (still visible in the full reference). Tunable, evidence-based defaults:
+_MIN_LIQUID_STOCKS      = 5      # need ≥5 liquid constituents to be a "sector"
+_MAX_TOP_STOCK_PCT      = 50.0   # one name may not exceed this share of turnover
+_MIN_SECTOR_TURNOVER_CR = 500.0  # total liquid turnover floor (₹ Cr)
+
 
 def _get_nifty50_period_returns(as_of_date: date) -> dict:
     """
@@ -85,6 +96,64 @@ def _slope(series: pd.Series) -> float:
 # Shared normalizers live in analytics.base (deduped — were copied here and in
 # the Sector Performance view). Aliased to keep existing call sites unchanged.
 from src.analytics.base import minmax01 as _normalize, rank01 as _rank01  # noqa: E402
+
+
+def _sector_liquidity_stats(as_of_date: date, min_turnover_lacs: float) -> pd.DataFrame:
+    """
+    Per-sector basket-quality metrics for the tradability gate.
+
+    Returns one row per sector with:
+      n_liquid_stocks    — count of constituents with turnover ≥ min_turnover_lacs
+      top_stock_pct      — single largest stock's share of the sector's liquid turnover
+      sector_turnover_cr — total liquid turnover in ₹ Cr
+      is_thin            — True if the basket is too thin / concentrated / illiquid
+      thin_reason        — short human-readable reason ("" when tradable)
+    """
+    df = query_dataframe("""
+        WITH liq AS (
+            SELECT sm.sector, b.turnover_lacs
+            FROM daily_data b
+            JOIN v_sector_master sm ON b.symbol = sm.symbol
+            WHERE b.series IN ('EQ', 'SM', 'ST')
+              AND sm.sector NOT IN ('ETF', 'Others')
+              AND b.turnover_lacs >= ?
+              AND b.trade_date = (
+                  SELECT MAX(trade_date) FROM daily_data WHERE trade_date <= ?
+              )
+        )
+        SELECT sector,
+               COUNT(*)              AS n_liquid_stocks,
+               SUM(turnover_lacs)    AS tot_lacs,
+               MAX(turnover_lacs)    AS top1_lacs
+        FROM liq
+        GROUP BY sector
+    """, [min_turnover_lacs, as_of_date])
+
+    if df.empty:
+        return pd.DataFrame(columns=[
+            "sector", "n_liquid_stocks", "top_stock_pct",
+            "sector_turnover_cr", "is_thin", "thin_reason",
+        ])
+
+    df["top_stock_pct"]      = (df["top1_lacs"] / df["tot_lacs"] * 100).round(0)
+    df["sector_turnover_cr"] = (df["tot_lacs"] / 100).round(0)
+
+    def _reason(r) -> str:
+        bits = []
+        if r["n_liquid_stocks"] < _MIN_LIQUID_STOCKS:
+            bits.append(f"only {int(r['n_liquid_stocks'])} liquid names")
+        if r["top_stock_pct"] > _MAX_TOP_STOCK_PCT:
+            bits.append(f"top stock {int(r['top_stock_pct'])}% of turnover")
+        if r["sector_turnover_cr"] < _MIN_SECTOR_TURNOVER_CR:
+            bits.append(f"₹{int(r['sector_turnover_cr'])} Cr total turnover")
+        return " · ".join(bits)
+
+    df["thin_reason"] = df.apply(_reason, axis=1)
+    df["is_thin"]     = df["thin_reason"] != ""
+    return df[[
+        "sector", "n_liquid_stocks", "top_stock_pct",
+        "sector_turnover_cr", "is_thin", "thin_reason",
+    ]]
 
 
 def get_sector_rotation(
@@ -143,7 +212,7 @@ def get_sector_rotation(
                 / NULLIF(SUM(CASE WHEN b.prev_close > 0 THEN b.turnover_lacs END), 0)
                                                               AS wtd_daily_ret_pct
         FROM daily_data b
-        INNER JOIN sector_master s ON b.symbol = s.symbol
+        INNER JOIN v_sector_master s ON b.symbol = s.symbol
         WHERE b.series IN ('EQ', 'SM', 'ST')
           AND s.sector NOT IN ('ETF', 'Others')
           AND b.trade_date > ?
@@ -400,19 +469,51 @@ def get_sector_rotation(
     #   • Trend slope dropped — it had ~0 information coefficient at every horizon.
     # New IC beat the old min-max score at 5/10/20d (e.g. 20d: +0.165 vs +0.140).
     #
-    # 30% RS vs Nifty (2W) + 25% 5-day avg DV + 15% today DV +
-    # 15% Breadth + 15% Z-Score
-    # RS falls back to raw 1W price momentum when index data is unavailable.
+    # 45% RS vs Nifty (2W) + 20% 5-day avg DV + 10% today DV +
+    # 15% Breadth + 10% Z-Score
+    #
+    # Re-tuned 2026-06 after a walk-forward IC study on the CANONICAL 22-sector
+    # universe (scripts/factor_ic_diagnostic.py + sector_score_compare.py). RS/2W
+    # momentum is by far the strongest predictor (IC ≈ +0.10, ICIR ≈ +0.46 @5-10d)
+    # while delivery factors are weak (IC ≈ +0.03). IC rises MONOTONICALLY with RS
+    # weight (live 0.30 → 0.45 → 0.60 → pure RS), so RS was raised 0.30 → 0.45.
+    # We deliberately do NOT go to pure RS: (a) the ~250-day sample is essentially
+    # one regime — momentum's edge is regime-sensitive and would over-fit; (b)
+    # delivery is the differentiated smart-money thesis and drives the signal
+    # labels. 0.45 captures most of the measured lift (~+40% IC) while keeping
+    # delivery + breadth as the majority. RS falls back to 1W momentum if index
+    # data is unavailable.
     rs_col = result["rs_2w"] if result["rs_2w"].notna().any() else result["_pm"]
     result["accum_score"] = (
-        _rank01(rs_col)            * 30 +
-        _rank01(result["_dv5d"])   * 25 +
-        _rank01(result["_dv"])     * 15 +
+        _rank01(rs_col)            * 45 +
+        _rank01(result["_dv5d"])   * 20 +
+        _rank01(result["_dv"])     * 10 +
         _rank01(result["_br"])     * 15 +
-        _rank01(result["_z"])      * 15
+        _rank01(result["_z"])      * 10
     ).round(1)
 
     result = result.drop(columns=[c for c in result.columns if c.startswith("_")])
+
+    # ── Tradability gate: flag thin / single-name / illiquid baskets ──────────
+    # These columns let the dashboard exclude non-tradable buckets from the
+    # ranked invest/avoid lists and disclose basket quality on each card.
+    try:
+        liq = _sector_liquidity_stats(as_of_date, min_turnover_lacs)
+        result = result.merge(liq, on="sector", how="left")
+        # Sectors missing from the liquidity query (no liquid names) are thin.
+        result["is_thin"] = result["is_thin"].fillna(True)
+        result["thin_reason"] = result["thin_reason"].fillna("no liquid constituents")
+        result["n_liquid_stocks"]    = result["n_liquid_stocks"].fillna(0).astype(int)
+        result["top_stock_pct"]      = result["top_stock_pct"]
+        result["sector_turnover_cr"] = result["sector_turnover_cr"]
+    except Exception as exc:
+        log.warning("Sector liquidity gate failed (non-fatal): %s", exc)
+        result["is_thin"]            = False
+        result["thin_reason"]        = ""
+        result["n_liquid_stocks"]    = None
+        result["top_stock_pct"]      = None
+        result["sector_turnover_cr"] = None
+
     return result.sort_values("accum_score", ascending=False).reset_index(drop=True)
 
 
@@ -909,7 +1010,7 @@ def get_sector_stocks_rotation(
                 ) / NULLIF(SUM(CASE WHEN b.prev_close > 0 THEN b.turnover_lacs END), 0)
                     AS price_chg_pct
             FROM daily_data b
-            INNER JOIN sector_master s ON b.symbol = s.symbol
+            INNER JOIN v_sector_master s ON b.symbol = s.symbol
             WHERE b.series IN ('EQ', 'SM', 'ST')
               AND s.sector = ?
               AND b.trade_date > ?
@@ -926,7 +1027,7 @@ def get_sector_stocks_rotation(
                    SUM(b.deliv_per * b.turnover_lacs)
                        / NULLIF(SUM(b.turnover_lacs), 0) AS avg_deliv_per_100d
             FROM daily_data b
-            INNER JOIN sector_master s ON b.symbol = s.symbol
+            INNER JOIN v_sector_master s ON b.symbol = s.symbol
             WHERE b.series IN ('EQ', 'SM', 'ST')
               AND s.sector = ?
               AND b.turnover_lacs >= ?
@@ -970,7 +1071,7 @@ def get_sector_rotation_history(
                 END
             )                                                 AS avg_price_chg
         FROM daily_data b
-        INNER JOIN sector_master s ON b.symbol = s.symbol
+        INNER JOIN v_sector_master s ON b.symbol = s.symbol
         WHERE b.series IN ('EQ', 'SM', 'ST')
           AND s.sector = ?
           AND b.trade_date > ?
@@ -1021,7 +1122,7 @@ def get_sector_rotation_timeframe(
                 / NULLIF(SUM(CASE WHEN b.prev_close > 0 THEN b.turnover_lacs END), 0)
                                                                AS wtd_daily_ret_pct
         FROM daily_data b
-        INNER JOIN sector_master s ON b.symbol = s.symbol
+        INNER JOIN v_sector_master s ON b.symbol = s.symbol
         WHERE s.sector NOT IN ('ETF', 'Others')
           AND b.series IN ('EQ', 'SM', 'ST')
           AND b.turnover_lacs >= ?
@@ -1211,7 +1312,7 @@ def get_rotation_clock_backtest(
                 / NULLIF(SUM(CASE WHEN b.prev_close > 0 THEN b.turnover_lacs END), 0)
                                                         AS wtd_daily_ret_pct
         FROM daily_data b
-        INNER JOIN sector_master s ON b.symbol = s.symbol
+        INNER JOIN v_sector_master s ON b.symbol = s.symbol
         WHERE s.sector NOT IN ('ETF', 'Others')
           AND b.series IN ('EQ', 'SM', 'ST')
           AND b.turnover_lacs >= ?
@@ -1299,7 +1400,7 @@ def get_sector_rotation_custom_range(
                 / NULLIF(SUM(CASE WHEN b.prev_close > 0
                              THEN b.turnover_lacs END), 0)     AS wtd_daily_ret_pct
         FROM daily_data b
-        INNER JOIN sector_master s ON b.symbol = s.symbol
+        INNER JOIN v_sector_master s ON b.symbol = s.symbol
         WHERE s.sector NOT IN ('ETF', 'Others')
           AND b.series IN ('EQ', 'SM', 'ST')
           AND b.turnover_lacs >= ?
@@ -1478,7 +1579,7 @@ def get_sector_stocks_custom_range(
             SUM(b.turnover_lacs) / 100                          AS turnover_cr,
             COUNT(DISTINCT b.trade_date)                        AS trading_days
         FROM daily_data b
-        INNER JOIN sector_master s ON b.symbol = s.symbol
+        INNER JOIN v_sector_master s ON b.symbol = s.symbol
         WHERE b.series IN ('EQ', 'SM', 'ST')
           AND s.sector = ?
           AND b.trade_date >= ?

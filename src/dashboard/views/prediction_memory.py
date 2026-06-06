@@ -22,7 +22,7 @@ from src.analytics.memory_engine import (
     get_pending_predictions,
     update_outcomes,
 )
-from src.dashboard.cache.queries import cached_index_predictions
+from src.dashboard.cache.queries import cached_index_prediction_one
 
 _SYMBOLS    = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
 _SYM_LABELS = {
@@ -124,10 +124,9 @@ def render(selected_date: date) -> None:
             key="mem_window",
         )
 
-    # Load
+    # Load — single-index compute (this view shows one index at a time).
     report     = get_accuracy_report(sym, days=window)
-    preds      = cached_index_predictions(selected_date)
-    today_pred = next((p for p in preds if p.fno_symbol == sym), None)
+    today_pred = cached_index_prediction_one(selected_date, sym)
 
     # ── 1. Accuracy Summary ───────────────────────────────────────────────────
     st.markdown("---")

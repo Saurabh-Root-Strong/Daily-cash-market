@@ -21,6 +21,7 @@ import streamlit as st
 from src.dashboard.cache.queries import (
     cached_rotation_clock_backtest,
     cached_sector_rotation,
+    cached_sector_overlay,
     cached_sector_rotation_history,
     cached_sector_rotation_custom_range,
     cached_sector_rotation_timeframe,
@@ -669,6 +670,25 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
             + f" &nbsp;|&nbsp; Delivery Value 1W: {dv1w_str}"
         )
 
+    # ── Basket-quality disclosure: how many liquid names + single-stock concentration ──
+    # Makes it visible whether a sector signal is a diversified basket or one name.
+    _nliq = row.get("n_liquid_stocks")
+    _topp = row.get("top_stock_pct")
+    _tcr  = row.get("sector_turnover_cr")
+    basket_html = ""
+    if _nliq is not None and not (isinstance(_nliq, float) and pd.isna(_nliq)):
+        _conc_hot = _topp is not None and not (isinstance(_topp, float) and pd.isna(_topp)) and _topp > 40
+        _conc_col = "#ff9100" if _conc_hot else "rgba(255,255,255,0.45)"
+        basket_html = (
+            f"<div style='margin-top:3px;font-size:10.5px;color:rgba(255,255,255,0.4)'>"
+            f"Basket: {int(_nliq)} liquid name{'s' if int(_nliq) != 1 else ''}"
+            + (f" · top stock <b style='color:{_conc_col}'>{int(_topp)}%</b> of turnover"
+               if _topp is not None and not (isinstance(_topp, float) and pd.isna(_topp)) else "")
+            + (f" · ₹{int(_tcr):,} Cr"
+               if _tcr is not None and not (isinstance(_tcr, float) and pd.isna(_tcr)) else "")
+            + "</div>"
+        )
+
     if "—" in action_text:
         action_prefix, action_desc = action_text.split("—", 1)
         action_html = (
@@ -678,6 +698,32 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
     else:
         action_html = f"<span style='color:{color}'>{action_text}</span>"
 
+    # ── Memory conviction badge ────────────────────────────────────────────────
+    # Shown only when the memory overlay has an ACTIONABLE opinion, so most cards
+    # stay clean and the eye is drawn to setups history strongly confirms — or,
+    # critically, contradicts (a footprint that looks strong today but faded in
+    # similar past regimes). Neutral / Unproven setups show nothing.
+    conviction_badge_html = ""
+    _conv = row.get("conviction")
+    if _conv in ("HIGH", "CONFIRM", "DISAGREE"):
+        _basis = row.get("mem_basis", "")
+        _CONV_STYLE = {
+            "HIGH":     ("#00c853", "rgba(0,200,83,0.14)",   "rgba(0,200,83,0.40)",   "🔥 High Conviction — history strongly rewards this setup"),
+            "CONFIRM":  ("#69f0ae", "rgba(0,200,83,0.08)",   "rgba(0,200,83,0.28)",   "✅ Memory Confirms"),
+            "DISAGREE": ("#ff6d00", "rgba(255,109,0,0.14)",  "rgba(255,109,0,0.40)",  "⚠️ History Disagrees — similar past setups underperformed"),
+        }
+        _cc, _cbg, _cbord, _clabel = _CONV_STYLE[_conv]
+        _adj = row.get("adj_score")
+        _adj_txt = (f" &nbsp;·&nbsp; adj {float(_adj):.0f}/100"
+                    if _adj is not None and not (isinstance(_adj, float) and pd.isna(_adj)) else "")
+        conviction_badge_html = (
+            f"<div style='background:{_cbg};border:1px solid {_cbord};border-radius:4px;"
+            f"padding:4px 8px;margin-bottom:5px;font-size:10.5px;color:{_cc};line-height:1.4'>"
+            f"<b>{_clabel}</b>{_adj_txt}"
+            + (f"<br><span style='color:rgba(255,255,255,0.55)'>{_basis}</span>" if _basis else "")
+            + "</div>"
+        )
+
     st.markdown(
         f"<div style='border-left:3px solid {color};padding:8px 12px;margin:4px 0;"
         f"background:rgba(255,255,255,0.03);border-radius:0 6px 6px 0'>"
@@ -686,6 +732,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
         f"<span style='font-size:11px;color:{color};font-weight:600'>{score:.0f}/100</span></div>"
         f"{bar_html}"
         f"{regime_badge_html}"
+        f"{conviction_badge_html}"
         f"<div style='font-size:11px;margin-bottom:4px'>{row['signal']} &nbsp; {action_html}</div>"
         f"<div style='display:flex;flex-wrap:wrap;gap:8px 16px;margin-top:4px;font-size:12px'>"
         f"<span>DV Today: <b>{dv_str}</b></span>"
@@ -696,6 +743,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
         f"</div>"
         f"<div style='margin-top:4px;font-size:11px;color:rgba(255,255,255,0.5)'>"
         f"{bottom_row}</div>"
+        f"{basket_html}"
         f"</div>",
         unsafe_allow_html=True,
     )
@@ -1883,12 +1931,33 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         """)
 
     with st.spinner("Computing 100-day rotation signals…"):
-        rot    = cached_sector_rotation(selected_date, min_turnover)
         regime = cached_market_regime(selected_date)
+        rot    = cached_sector_overlay(selected_date, min_turnover)
 
-    if rot.empty:
+    if rot is None or rot.empty:
         st.warning("Insufficient data. Need at least 10 trading days of history.")
         return
+
+    # ── Memory-sharpened ranking (default ON) ────────────────────────────────
+    # adj_score = accum_score tilted by historical forward-outcome conviction in
+    # similar past setups (regime-aware, shrunk by evidence quality). The toggle
+    # lets the user fall back to the raw cross-sectional accum_score for compare.
+    _has_overlay = "adj_score" in rot.columns
+    if _has_overlay:
+        memory_on = st.toggle(
+            "🧠 Memory-sharpened ranking",
+            value=True,
+            key="sector_memory_on",
+            help="Re-rank sectors by accumulation score tilted with how this exact "
+                 "footprint actually performed in similar past regimes. Conviction "
+                 "badges: 🔥 High · ✅ Confirm · ⚠️ History Disagrees · ❔ Unproven. "
+                 "Off = raw cross-sectional score only.",
+        )
+    else:
+        memory_on = False
+
+    _rank_col = "adj_score" if (memory_on and _has_overlay) else "accum_score"
+    rot = rot.sort_values(_rank_col, ascending=False).reset_index(drop=True)
 
     if "z_score" not in rot.columns:
         st.cache_data.clear()
@@ -1986,9 +2055,21 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
     _CAUTION_SIGNALS  = {"📊 Volume Spike"}
     _AVOID_SIGNALS    = {"⚠️ Distribution Trap", "❌ Active Selling", "📉 Weakening"}
 
-    entering  = rot[rot["signal"].isin(_INVEST_SIGNALS)].copy()
-    caution   = rot[rot["signal"].isin(_CAUTION_SIGNALS)].copy()
-    exiting   = rot[rot["signal"].isin(_AVOID_SIGNALS)].sort_values("accum_score", ascending=True).copy()
+    # Tradability gate: keep thin / single-name / illiquid baskets OUT of the
+    # ranked invest/avoid lists — they are single-stock momentum dressed up as
+    # sector rotation (e.g. "Oil & Gas" = 7 small-caps, top name 43% of turnover;
+    # the real majors sit in "Energy"). They remain visible, flagged, in the full
+    # Sector Reference below so nothing is hidden.
+    if "is_thin" in rot.columns:
+        _thin_mask = rot["is_thin"].fillna(False).astype(bool)
+        _tradable  = rot[~_thin_mask].copy()
+        _n_thin    = int(_thin_mask.sum())
+    else:
+        _tradable, _n_thin = rot.copy(), 0
+
+    entering  = _tradable[_tradable["signal"].isin(_INVEST_SIGNALS)].copy()
+    caution   = _tradable[_tradable["signal"].isin(_CAUTION_SIGNALS)].copy()
+    exiting   = _tradable[_tradable["signal"].isin(_AVOID_SIGNALS)].sort_values(_rank_col, ascending=True).copy()
 
     k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric("🔥 Secret Accum",   len(rot[rot["signal"] == "🔥 Secret Accumulation"]),
@@ -2014,7 +2095,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
 
     with st.expander("🗂️ Sector Reference — full list ranked by score", expanded=False):
         ref_cols = ["sector", "signal", "accum_score", "coverage",
-                    "dv_ratio", "z_score", "breadth", "price_1w", "action"]
+                    "dv_ratio", "dv_ratio_5d", "z_score", "breadth", "price_1w", "action",
+                    "is_thin", "thin_reason"]
         ref_df = rot[[c for c in ref_cols if c in rot.columns]].copy()
 
         def _action_colors(action: str):
@@ -2081,9 +2163,17 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             action_short = action.split("—")[0].strip() if "—" in action else action[:18]
             txt_c, _ = _action_colors(action)
 
+            _is_thin = bool(row.get("is_thin", False))
+            _thin_reason = str(row.get("thin_reason", "") or "")
+            _thin_badge = (
+                f"<span title='{_thin_reason}' style='margin-left:6px;font-size:10px;"
+                f"color:#ff9100;border:1px solid rgba(255,145,0,0.4);border-radius:3px;"
+                f"padding:0 4px'>🔒 thin</span>" if _is_thin else ""
+            )
+
             rows_html += (
                 f"<tr style='border-bottom:1px solid rgba(255,255,255,0.05)'>"
-                f"<td style='padding:6px 10px;font-size:13px;font-weight:500'>{row.get('sector','')}</td>"
+                f"<td style='padding:6px 10px;font-size:13px;font-weight:500'>{row.get('sector','')}{_thin_badge}</td>"
                 f"<td style='padding:6px 8px'>{_signal_badge(signal)}</td>"
                 f"<td style='padding:6px 8px;width:130px'>{_score_bar(score, action)}</td>"
                 f"<td style='padding:6px 8px;font-size:12px;color:#aaa'>{coverage}</td>"
@@ -2182,6 +2272,15 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             ),
         ))
 
+    if _n_thin:
+        st.caption(
+            f"🔒 {_n_thin} thin / single-name / illiquid bucket(s) excluded from the "
+            f"ranked lists below (e.g. a basket where one stock is >50% of turnover, "
+            f"fewer than 5 liquid names, or <₹500 Cr total). They are single-stock "
+            f"momentum, not sector rotation — still listed, flagged, in the Sector "
+            f"Reference above."
+        )
+
     col_enter, col_avoid = st.columns(2)
 
     _HIGH_CONV = 70
@@ -2232,7 +2331,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         # when clear underweight candidates exist. These are NOT active selling —
         # they are the relative weakest in today's cross-section.
         shown = set(entering["sector"]) | set(caution["sector"]) | set(exiting["sector"])
-        laggards = rot[~rot["sector"].isin(shown)].nsmallest(5, "accum_score")
+        laggards = _tradable[~_tradable["sector"].isin(shown)].nsmallest(5, "accum_score")
 
         if laggards.empty and exiting.empty:
             st.info("No distribution signals and no clear laggards today.")
