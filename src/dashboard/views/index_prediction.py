@@ -1458,7 +1458,30 @@ def _render_market_context(pred: IndexPrediction) -> None:
 # ── Main render ───────────────────────────────────────────────────────────────
 
 def render(selected_date: date) -> None:
-    st.subheader("Index Prediction — Tomorrow's Directional Forecast")
+    st.subheader("Index Prediction — Institutional Market-Structure Read")
+
+    # ── Honest track record (radical transparency) ────────────────────────────
+    try:
+        from src.analytics.index_prediction import get_engine_accuracy
+        _acc = get_engine_accuracy()
+    except Exception:
+        _acc = {}
+    if _acc:
+        _sh = _acc["sign_hit"]; _ic = _acc["ic"]
+        _edge = ("a real edge" if _sh >= 56 else "near coin-flip" if _sh >= 47 else "below coin-flip")
+        _col = "#ff9100" if _sh < 56 else "#00c853"
+        st.markdown(
+            f"<div style='border-left:4px solid {_col};background:rgba(255,255,255,0.03);"
+            f"padding:8px 12px;margin:4px 0;border-radius:0 6px 6px 0;font-size:12.5px'>"
+            f"<b>📊 Live track record:</b> next-day directional hit-rate "
+            f"<b style='color:{_col}'>{_sh:.0f}%</b> (n={_acc['n_dir']}, since {_acc['since']}) · "
+            f"composite→return IC {_ic:+.3f} — <b>{_edge}</b>. "
+            f"Treat this page as a <b>market-structure map</b> (FII positioning, OI walls, PCR, "
+            f"vol regime, ranges), <b>not</b> a precise forecast. Next-day index direction is near-random; "
+            f"use the verdict as one input, sized accordingly.</div>",
+            unsafe_allow_html=True,
+        )
+
     st.caption(
         "26-signal quant engine: OI-Price Matrix · Carry · Max Pain · PCR · OI-Premium Matrix · "
         "Wyckoff Range · Price Mean-Reversion · Anchored VWAP · Institutional RSI · "

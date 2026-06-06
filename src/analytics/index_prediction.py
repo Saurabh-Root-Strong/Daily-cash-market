@@ -429,6 +429,41 @@ def get_index_predictions(
     ]
 
 
+def get_engine_accuracy(min_n: int = 20) -> dict:
+    """
+    HONEST self-validation — the engine's REALIZED next-day track record from
+    prediction_log (logged daily by cmd_daily, outcomes filled after the fact).
+
+    Returns {} when too few outcomes. Otherwise: n, directional sign hit-rate,
+    composite→return rank IC, and the date range. This is published on the page so
+    the verdict is never trusted more than its measured accuracy warrants.
+    """
+    try:
+        df = query_dataframe(
+            "SELECT direction_pred, composite_score, actual_return, was_correct, trade_date "
+            "FROM prediction_log WHERE outcome_filled AND actual_return IS NOT NULL", [])
+    except Exception:
+        return {}
+    if df is None or df.empty or len(df) < min_n:
+        return {}
+    df["ar"] = df["actual_return"].astype(float)
+    d = df[df["direction_pred"].isin(["UP", "DOWN"])].copy()
+    if d.empty:
+        return {}
+    pred_up = d["direction_pred"].eq("UP")
+    act_up  = d["ar"] > 0
+    sign_hit = float((pred_up == act_up).mean() * 100)
+    try:
+        ic = float(df["composite_score"].astype(float).rank().corr(df["ar"].rank()))
+    except Exception:
+        ic = float("nan")
+    return {
+        "n": int(len(df)), "n_dir": int(len(d)),
+        "sign_hit": round(sign_hit, 0), "ic": round(ic, 3),
+        "since": str(df["trade_date"].min())[:10], "until": str(df["trade_date"].max())[:10],
+    }
+
+
 def get_index_prediction_for(
     trade_date: date, fno_symbol: str, persist: bool = True,
     market_ctx: Optional[MarketContext] = None,
@@ -1063,7 +1098,7 @@ def _build_snapshot(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _sig_price_action(idx_hist: pd.DataFrame) -> Optional[IndexSignal]:
-    """3D return z-score. NSE backtest: z ≤ -1.8 → 67% next-day bounce."""
+    """3D return z-score. z ≤ -1.8 = a statistically stretched decline → mean-reversion bias (directional only, not a validated win-rate)."""
     if idx_hist.empty or len(idx_hist) < 8: return None
     df     = idx_hist.sort_values("trade_date").reset_index(drop=True)
     closes = df["close_val"].dropna()
@@ -1084,8 +1119,9 @@ def _sig_price_action(idx_hist: pd.DataFrame) -> Optional[IndexSignal]:
             headline=f"Oversold {cum_3d:.1f}% / 3D (z={z:.1f})",
             description=(
                 f"3-day decline {abs(cum_3d):.1f}% statistically extreme (z={z:.1f}). "
-                "NSE backtest: 67% next-day bounce probability after multi-day declines at this intensity. "
-                "Selling is stretched — mean reversion expected."
+                "Multi-day declines at this intensity tend to mean-revert (directional bias only — "
+                "not a validated win-rate; see the engine's live hit-rate at the top of the page). "
+                "Selling looks stretched."
             ), emoji="🔄",
         )
     if z >= 3.0:
@@ -1095,7 +1131,7 @@ def _sig_price_action(idx_hist: pd.DataFrame) -> Optional[IndexSignal]:
             headline=f"Extreme Run +{cum_3d:.1f}% / 3D (z=+{z:.1f})",
             description=(
                 f"3-day gain {cum_3d:.1f}% statistically extreme. "
-                "Indian market shows 72% momentum continuation — mild caution only."
+                "Strong runs tend to continue more often than they reverse — mild caution only."
             ), emoji="⚠️",
         )
     return None
@@ -1690,7 +1726,7 @@ def _sig_fii_institutional(ctx: MarketContext) -> Optional[IndexSignal]:
             "Institutional", -1, round(-3.0 * bear_mult * lm, 2),
             f"FII {fii:+,} | Client {cli:+,}{tag}",
             f"FII {abs(fii):,} net SHORT vs Client net LONG {cli:,}{dii_txt}. "
-            "Institutional-retail divergence resolves in FII's direction (>90% historical rate). "
+            "Institutional-retail divergence usually resolves in the institutions' direction. "
             f"Institutions positioned against retail longs.{neutral_note}", "🐻")
     if fii > FII_T and cli < -CLI_T:
         return IndexSignal("FII Long vs Retail Short — Smart Money BULLISH",
@@ -1879,8 +1915,8 @@ def _sig_short_squeeze_setup(
     """
     Livermore's Trap — the market forces the most pain.
     Setup: FII is very short + large OI + market closing UP + PCR extreme.
-    When shorts are trapped with no escape, forced covering creates explosive rallies.
-    Historical win rate: ~72% next-day positive when all 3 criteria met.
+    When shorts are trapped with no escape, forced covering tends to spark sharp
+    rallies (directional bias — not a validated win-rate).
     """
     if ctx.fao_date is None: return None
     fii_net = ctx.fii_fut_idx_net
@@ -1910,7 +1946,7 @@ def _sig_short_squeeze_setup(
         f"FII holding {abs(fii_net):,} net short contracts while market closed at "
         f"{(range_pos or 0)*100:.0f}% of range with PCR {pcr if pcr is not None else 0.0:.2f}. "
         "Livermore's Trap: when every short is already in, the next move is UP. "
-        f"Confirmations: {', '.join(criteria)}. Historical win rate: ~72% next-day positive.", "💥")
+        f"Confirmations: {', '.join(criteria)}. Forced covering tends to spark sharp rallies.", "💥")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -1950,7 +1986,7 @@ def _sig_vix_regime(ctx: MarketContext) -> Optional[IndexSignal]:
     return IndexSignal("VIX Fear Zone — Potential Capitulation", "Market Context", 1, s,
         f"India VIX {vix:.1f} — Peak Fear (Contrarian BUY)",
         f"VIX {vix:.1f} = extreme fear zone (>22). Peak fear marks bottoms — "
-        "when everyone has sold, no sellers remain. >22 VIX → 70% bounce probability in 5D.", "🔥")
+        "when everyone has sold, few sellers remain — peak fear often precedes a bounce.", "🔥")
 
 
 def _sig_sector_breadth(ctx: MarketContext) -> Optional[IndexSignal]:
@@ -3204,12 +3240,12 @@ def _compute_verdict(
     if oversold and vix_falling:
         return ("UP", "LOW", "#B9F6CA",
                 "Neutral F&O — Oversold + falling VIX; mean-reversion bounce likely",
-                "Oversold z-score + falling VIX (67% bounce probability)",
+                "Oversold z-score + falling VIX (mean-reversion bias)",
                 "Oversold can persist — use stops.")
     if oversold:
         return ("UP", "LOW", "#B9F6CA",
                 "Neutral F&O — oversold mean-reversion bounce likely",
-                "Oversold 3D z-score (67% bounce probability, NSE backtest)",
+                "Oversold 3D z-score (mean-reversion bias)",
                 "Oversold can persist — use stops.")
     if fii_covering:
         return ("UP", "LOW", "#B9F6CA",
