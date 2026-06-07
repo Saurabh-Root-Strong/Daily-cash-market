@@ -28,7 +28,17 @@ import pandas as pd
 
 from src.data.repository import query_dataframe
 
-__all__ = ["get_flow_intelligence"]
+__all__ = ["get_flow_intelligence", "get_flow_history_pattern"]
+
+
+def _regime_tag(fii5: float, dii5: float) -> Optional[str]:
+    if fii5 is None or (isinstance(fii5, float) and np.isnan(fii5)):
+        return None
+    if fii5 < -3000 and dii5 > 0:  return "ABSORBED SELLING"
+    if fii5 < -3000 and dii5 <= 0: return "BROAD RISK-OFF"
+    if fii5 > 3000 and dii5 > 0:   return "ALIGNED BUYING"
+    if fii5 > 3000 and dii5 < 0:   return "FII-LED BUYING"
+    return "BALANCED"
 
 VALIDATION = ("FII flow is contemporaneous (same-day IC +0.37, next-day ~0); the modest "
               "forward tilt is DII (+0.11 next-day). Regime = FII; forward lean = DII.")
@@ -175,3 +185,80 @@ def _narrative(fii_t, dii_t, fii_5d, dii_5d, streak, z, accel, absorption) -> st
     if absorption is not None:
         bits.append(f"Over 5 days DIIs have absorbed ~{absorption:.0f}% of the FII selling.")
     return " ".join(bits)
+
+
+def get_flow_history_pattern(as_of_date: date, horizon: int = 10) -> dict:
+    """
+    Historical-analog study: classify every past day's flow regime and measure the
+    forward `horizon`-day Nifty outcome, then surface what the CURRENT regime has
+    historically led to. Answers "is the selling 'actual' or absorbed?" — point-in-
+    time (forward windows must be fully realised, i.e. day <= as_of - horizon).
+
+    Returns the current regime's forward distribution, all-regime context, the
+    contemporaneous FII↔index correlation, and an overlay series (FII/DII cumulative
+    + Nifty) for charting. Honest: these are descriptive tendencies on a flow-skewed
+    ~1yr sample, NOT forecasts.
+    """
+    f = query_dataframe("""
+        SELECT trade_date, fii_net, dii_net FROM fii_dii_cash
+        WHERE fii_net IS NOT NULL AND trade_date <= ? ORDER BY trade_date
+    """, [as_of_date])
+    n = query_dataframe("""
+        SELECT trade_date, close_val FROM index_data
+        WHERE index_name = 'Nifty 50' AND trade_date <= ? ORDER BY trade_date
+    """, [as_of_date])
+    if f.empty or n.empty or len(f) < 40:
+        return {}
+    f["trade_date"] = pd.to_datetime(f["trade_date"])
+    n["trade_date"] = pd.to_datetime(n["trade_date"])
+    d = f.merge(n, on="trade_date", how="inner").sort_values("trade_date").reset_index(drop=True)
+    if len(d) < 40:
+        return {}
+    fii = d["fii_net"].astype(float); dii = d["dii_net"].astype(float)
+    d["fii5"] = fii.rolling(5).sum(); d["dii5"] = dii.rolling(5).sum()
+    d["regime"] = [_regime_tag(a, b) for a, b in zip(d["fii5"], d["dii5"])]
+    d["fwd"] = (d["close_val"].shift(-horizon) / d["close_val"] - 1) * 100
+    d["fii_cum"] = fii.cumsum(); d["dii_cum"] = dii.cumsum()
+
+    # Only days with a FULLY REALISED forward window (point-in-time).
+    study = d[d["fwd"].notna() & d["regime"].notna()]
+    cur_regime = d["regime"].iloc[-1]
+
+    def _dist(g):
+        return {"mean": round(float(g.mean()), 2), "median": round(float(g.median()), 2),
+                "pos_pct": round(float((g > 0).mean() * 100), 0), "n": int(len(g))}
+
+    by_regime = {r: _dist(g["fwd"]) for r, g in study.groupby("regime") if len(g) >= 8}
+    cur = by_regime.get(cur_regime)
+
+    # Contemporaneous correlation (the strong, real relationship).
+    corr = round(float(d["fii5"].corr(d["close_val"].pct_change(5) * 100)), 2)
+
+    # Plain interpretation of the current regime's historical forward tendency.
+    interp = ""
+    if cur:
+        if cur["mean"] > 0.4 and cur["pos_pct"] >= 55:
+            interp = (f"Historically this regime led to a HIGHER index 2 weeks later "
+                      f"(+{cur['mean']:.1f}% avg, up {cur['pos_pct']:.0f}% of the time).")
+        elif cur["mean"] < -0.4 and cur["pos_pct"] <= 45:
+            interp = (f"Historically this regime led to a LOWER index 2 weeks later "
+                      f"({cur['mean']:.1f}% avg, up only {cur['pos_pct']:.0f}% of the time) — "
+                      "the selling tended to be 'real'.")
+        else:
+            interp = (f"Historically this regime led to a roughly FLAT index 2 weeks later "
+                      f"({cur['mean']:+.1f}% avg, {cur['pos_pct']:.0f}% positive, n={cur['n']}). "
+                      + ("The absorbed selling did NOT translate into a crash — DII cushioning "
+                         "held the market." if cur_regime == "ABSORBED SELLING"
+                         else "Flows were not decisive for the 2-week path."))
+
+    series = d[["trade_date", "fii_cum", "dii_cum", "close_val"]].tail(260).copy()
+    series["trade_date"] = series["trade_date"].dt.strftime("%Y-%m-%d")
+
+    return {
+        "as_of": str(as_of_date), "horizon": horizon,
+        "current_regime": cur_regime, "current_dist": cur,
+        "by_regime": by_regime, "contemporaneous_corr": corr,
+        "interpretation": interp,
+        "series": series.to_dict("records"),
+        "n_days": int(len(study)),
+    }

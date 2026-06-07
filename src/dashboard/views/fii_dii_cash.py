@@ -126,6 +126,40 @@ def render(selected_date: date) -> None:
             )
             st.caption("⚖️ Evidence: " + intel["validation"])
 
+        # ── 📊 Historical pattern — what this regime led to + flow-vs-index ────
+        try:
+            from src.analytics.fii_dii_intelligence import get_flow_history_pattern
+            pat = get_flow_history_pattern(selected_date)
+        except Exception:
+            pat = {}
+        if pat and pat.get("current_dist"):
+            cd = pat["current_dist"]
+            st.markdown("##### 📊 Historical pattern — *when flows looked like now, what did the index do?*")
+            st.markdown(
+                f"<div style='font-size:12.5px'>Over the last <b>{pat['n_days']}</b> sessions, whenever the regime "
+                f"was <b>{pat['current_regime']}</b> (today's state), the Nifty <b>{pat['horizon']} trading days later</b> "
+                f"averaged <b>{cd['mean']:+.2f}%</b> (median {cd['median']:+.2f}%, up {cd['pos_pct']:.0f}% of the time, "
+                f"n={cd['n']}).</div>", unsafe_allow_html=True)
+            st.info("🔎 " + pat["interpretation"])
+            s = pd.DataFrame(pat["series"]); s["trade_date"] = pd.to_datetime(s["trade_date"])
+            ofig = go.Figure()
+            ofig.add_scatter(x=s["trade_date"], y=s["fii_cum"], name="FII cumulative",
+                             line=dict(color="#ff5252", width=2))
+            ofig.add_scatter(x=s["trade_date"], y=s["dii_cum"], name="DII cumulative",
+                             line=dict(color="#40c4ff", width=2))
+            ofig.add_scatter(x=s["trade_date"], y=s["close_val"], name="Nifty 50",
+                             yaxis="y2", line=dict(color="#ffd600", width=2.5))
+            ofig.update_layout(height=340, template="plotly_dark",
+                               margin=dict(l=10, r=10, t=30, b=10), legend=dict(orientation="h", y=1.15),
+                               yaxis=dict(title="Cumulative flow ₹ Cr"),
+                               yaxis2=dict(title="Nifty", overlaying="y", side="right", showgrid=False))
+            st.plotly_chart(ofig, use_container_width=True)
+            st.caption(
+                f"FII flow ↔ index (concurrent 5d) correlation **{pat['contemporaneous_corr']:+.2f}** — FII drives the "
+                "tape in real time. Watch how FII cumulative (red) falls all year while Nifty (gold) holds — DII "
+                "cumulative (blue) absorbing it. A descriptive ~1-year pattern on flow-skewed data, not a forecast."
+            )
+
         # ── Data table ────────────────────────────────────────────────────────
         with st.expander("📋 Daily data", expanded=False):
             show = d.sort_values("trade_date", ascending=False).copy()
