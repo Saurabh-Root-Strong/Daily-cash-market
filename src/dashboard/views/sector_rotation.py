@@ -1553,11 +1553,13 @@ def _render_signal_validation(
 
     signal_date   = bt["signal_date"].iloc[0]
     nifty_fwd_ret = bt["forward_nifty_ret"].iloc[0] if "forward_nifty_ret" in bt.columns else None
-    using_relative = nifty_fwd_ret is not None
+    using_relative = "forward_vs_peers" in bt.columns
 
     nifty_note = (
-        f"  Nifty50 returned **{nifty_fwd_ret:+.2f}%** over that period — "
-        f"'Correct' = sector beat Nifty50 (inflow) or underperformed Nifty50 (outflow)."
+        "  **'Correct' = sector beat its PEER sectors (inflow) or underperformed peers "
+        "(outflow)** — the cross-sectional benchmark the clock classifies against. "
+        + (f"(Nifty50 moved {nifty_fwd_ret:+.2f}% over the window — shown as a reference column only.)"
+           if nifty_fwd_ret is not None else "")
         if using_relative else ""
     )
     st.caption(
@@ -1585,7 +1587,7 @@ def _render_signal_validation(
             continue
 
         avg_ret        = grp["forward_ret_pct"].mean()
-        avg_vs_nifty   = grp["forward_vs_nifty"].mean() if "forward_vs_nifty" in grp.columns else None
+        avg_vs_peers   = grp["forward_vs_peers"].mean() if "forward_vs_peers" in grp.columns else None
         n_correct      = int(grp["signal_correct"].fillna(False).sum())
         n_total        = len(grp)
         hit_rate       = n_correct / n_total * 100
@@ -1594,13 +1596,13 @@ def _render_signal_validation(
         total_predicted += n_total
 
         expected_positive = phase in inflow_phases
-        # Color by market-relative avg if available, else absolute
-        ref_ret = avg_vs_nifty if avg_vs_nifty is not None else avg_ret
+        # Color by the PEER-relative avg (the benchmark "Correct?" uses), else absolute
+        ref_ret = avg_vs_peers if avg_vs_peers is not None else avg_ret
         ret_ok  = (ref_ret > 0) if expected_positive else (ref_ret < 0)
 
-        vs_str = f" (vs Nifty50: {avg_vs_nifty:+.1f}%)" if avg_vs_nifty is not None else ""
+        vs_str = f" (vs peers: {avg_vs_peers:+.1f}%)" if avg_vs_peers is not None else ""
         correct_label = (
-            "beat market" if expected_positive else "underperform market"
+            "beat peer sectors" if expected_positive else "underperform peers"
         ) if using_relative else (
             "> 0%" if expected_positive else "< 0%"
         )
@@ -1612,8 +1614,8 @@ def _render_signal_validation(
             delta_color="normal" if ret_ok else "inverse",
             help=(
                 f"{'Inflow' if expected_positive else 'Outflow'} signal.\n"
-                f"Correct = forward return {correct_label}.\n"
-                + (f"Nifty50 forward: {nifty_fwd_ret:+.2f}%" if nifty_fwd_ret else "")
+                f"Correct = forward return {correct_label} (cross-sectional benchmark).\n"
+                + (f"Nifty50 forward (reference): {nifty_fwd_ret:+.2f}%" if nifty_fwd_ret else "")
             ),
         )
 
@@ -1634,7 +1636,7 @@ def _render_signal_validation(
 
     # ── Sector detail table ───────────────────────────────────────────────────
     avail_cols = ["sector", "phase", "signal_confidence", "forward_ret_pct",
-                  "forward_vs_nifty", "signal_correct",
+                  "forward_vs_peers", "forward_vs_nifty", "signal_correct",
                   "cum_price_ret_pct", "slope_z", "price_deliv_corr", "deliv_chg_pct"]
     disp = bt[[c for c in avail_cols if c in bt.columns]].copy()
 
@@ -1643,9 +1645,10 @@ def _render_signal_validation(
     )
 
     correct_help = (
-        "✅ = sector beat Nifty50 (inflow) or underperformed Nifty50 (outflow)\n"
-        "❌ = signal was wrong vs market\n"
-        "— = Neutral (no directional prediction)"
+        "✅ = sector beat its PEER sectors (inflow) or underperformed peers (outflow)\n"
+        "❌ = signal was wrong vs peers\n"
+        "— = Neutral (no directional prediction)\n"
+        "(Scored vs the cross-sectional peer median — NOT vs Nifty50.)"
     ) if using_relative else (
         "✅ = signal direction matched actual return\n"
         "❌ = signal was wrong\n"
@@ -1668,11 +1671,17 @@ def _render_signal_validation(
             "forward_ret_pct":   _hnc(
                 "Forward Return (abs)", format="%+.2f%%",
                 help=f"Cumulative sector return from {signal_date.strftime('%d %b')} → {selected_date.strftime('%d %b')}"),
+            "forward_vs_peers":  _hnc(
+                "vs Peers", format="%+.2f%%",
+                help="Forward return MINUS the median sector's forward return. Positive = "
+                     "this sector beat the OTHER sectors. ⭐ THIS is what 'Correct?' is scored on "
+                     "(the rotation question is which sector beats which, not vs the index)."),
             "forward_vs_nifty":  _hnc(
                 "vs Nifty50",  format="%+.2f%%",
-                help=f"Forward return minus Nifty50 ({nifty_fwd_ret:+.2f}% forward)\n"
-                     "Positive = sector outperformed market. Used for accuracy scoring."
-                     if nifty_fwd_ret is not None else "Forward return vs Nifty50"),
+                help=f"Forward return minus Nifty50 ({nifty_fwd_ret:+.2f}% forward) — shown as a "
+                     "REFERENCE only. The clock is scored vs peers, not vs the index, so this can "
+                     "be negative while 'Correct?' is ✅ (the sector beat peers but not the index)."
+                     if nifty_fwd_ret is not None else "Forward return vs Nifty50 (reference only)"),
             "signal_correct":    _htc("Correct?", help=correct_help),
             "cum_price_ret_pct": _hnc(
                 "Price Ret on Signal Date", format="%+.2f%%",
