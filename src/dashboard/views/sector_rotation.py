@@ -1016,23 +1016,23 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
             # ── F&O positioning filter (multi expiry × multi signal, OR-combined) ──
             _fno_part = None
             if fno_filter:
-                _expiries, _signals = fno_filter   # _signals = [(instrument, token)]
+                _expiries, _signals = fno_filter   # _signals = [(instr, [tokens], short)]
                 _ecode = {"Near month": "near", "Next month": "next", "Far month": "far"}
                 _checks = []
                 for _exp in _expiries:
                     _e = _ecode.get(_exp, "near")
-                    for _instr, _tok in _signals:
+                    for _instr, _toks, _short in _signals:
                         _col = f"{_e}_{'fut' if _instr == 'Futures' else 'opt'}_label"
                         if _col in shown.columns:
-                            _checks.append((_col, _tok))
+                            _checks.append((_col, _toks))
                 if _checks:
                     import functools as _ft, operator as _op
-                    _masks = [shown[c].fillna("").apply(lambda s, t=t: t in str(s))
-                              for c, t in _checks]
+                    _masks = [shown[c].fillna("").apply(lambda s, ts=ts: any(t in str(s) for t in ts))
+                              for c, ts in _checks]
                     shown = shown[_ft.reduce(_op.or_, _masks)]
-                    _toks = ", ".join(sorted({t for _, t in _signals}))
+                    _tags = ", ".join(sorted({sh for _, _, sh in _signals}))
                     _exps = ", ".join(e.split()[0] for e in _expiries)
-                    _fno_part = f"F&O [{_exps}] ∈ {{{_toks}}}"
+                    _fno_part = f"F&O [{_exps}] ∈ {{{_tags}}}"
 
             n_hidden = len(stocks) - len(shown)
             if n_hidden or _fno_part:
@@ -2495,15 +2495,19 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
     # Each signal maps to (instrument, token-found-in-label). The signal options
     # shown depend on which instruments are picked. A stock passes if ANY selected
     # (expiry × signal) matches its label — all three are one-or-more multi-selects.
+    # Each signal → (instrument, [label tokens to match — any], short caption tag).
+    # Futures are granular (one code each). Options are DIRECTIONAL BUCKETS that also
+    # catch single-sided labels (C.Buying, C.Writing, C.LE…) — verified: full coverage,
+    # zero cross-bucket overlap, so no false matches.
     _SIG_MAP = {
-        "🟢 Long Buildup (LB)":     ("Futures", "LB"),
-        "🔴 Short Buildup (SB)":    ("Futures", "SB"),
-        "🔵 Short Covering (SC)":   ("Futures", "SC"),
-        "🟠 Long Unwinding (LU)":   ("Futures", "LU"),
-        "🔥 Bullish (C.Buy/P.Wrt)": ("Options", "Bull"),
-        "❄️ Bearish (C.Wrt/P.Buy)": ("Options", "Bear"),
-        "⚡ Vol Bet (both bought)": ("Options", "Vol"),
-        "📊 Range (both written)":  ("Options", "Range"),
+        "🟢 Long Buildup (LB)":   ("Futures", ["LB"], "LB"),
+        "🔴 Short Buildup (SB)":  ("Futures", ["SB"], "SB"),
+        "🔵 Short Covering (SC)": ("Futures", ["SC"], "SC"),
+        "🟠 Long Unwinding (LU)": ("Futures", ["LU"], "LU"),
+        "🔥 Bullish (C.Buy / P.Wrt / C.SC)": ("Options", ["Bull", "C.Buying", "C.SC", "P.SC"], "Opt↑"),
+        "❄️ Bearish (C.Wrt / P.Buy / C.LE)": ("Options", ["Bear", "C.Writing", "C.LE", "P.Buying"], "Opt↓"),
+        "📊 Range (both written)":           ("Options", ["Range"], "Opt-Range"),
+        "⚡ Vol Bet (both bought)":          ("Options", ["Vol"], "Opt-Vol"),
     }
     _gcol1, _gcol2, _gcol3 = st.columns([1, 1, 2])
     with _gcol1:
