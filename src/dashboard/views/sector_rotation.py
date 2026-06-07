@@ -17,7 +17,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc
+from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc, cfg as _hcfg
 
 from src.dashboard.cache.queries import (
     cached_rotation_clock_backtest,
@@ -1932,7 +1932,7 @@ Ideal entry: sector moving from Improving to Leading (rising delivery + price cr
                 "Lagging hit %": lg.get("hit_rate"), "Lagging edge %": lg.get("avg_excess"),
             })
     if comp:
-        st.dataframe(pd.DataFrame(comp), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(comp), hide_index=True, use_container_width=True, column_config=_hcfg(pd.DataFrame(comp)))
         st.caption(
             "⚖️ **Read across timeframes:** the **1-week** clock is essentially coin-flip; "
             "reliability rises with horizon — the **1-month** clock carries the edge "

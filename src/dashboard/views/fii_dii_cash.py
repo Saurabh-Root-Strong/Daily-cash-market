@@ -13,7 +13,7 @@ from datetime import date
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc
+from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc, cfg as _hcfg
 
 from src.data.repository import query_dataframe
 
@@ -266,10 +266,11 @@ def render(selected_date: date) -> None:
         with st.expander("📋 Daily data", expanded=False):
             show = d.sort_values("trade_date", ascending=False).copy()
             show["trade_date"] = show["trade_date"].dt.strftime("%d %b %Y")
+            _dcols = ["trade_date", "fii_buy", "fii_sell", "fii_net",
+                      "dii_buy", "dii_sell", "dii_net", "source"]
             st.dataframe(
-                show[["trade_date", "fii_buy", "fii_sell", "fii_net",
-                      "dii_buy", "dii_sell", "dii_net", "source"]],
-                use_container_width=True, hide_index=True,
+                show[_dcols], use_container_width=True, hide_index=True,
+                column_config=_hcfg(show[_dcols]),
             )
 
     # Data auto-updates daily from NSE via the nightly job (cmd_daily), so no

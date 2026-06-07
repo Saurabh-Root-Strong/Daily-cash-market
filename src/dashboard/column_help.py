@@ -105,6 +105,33 @@ GLOSSARY: dict[str, str] = {
     "Close (₹)": "Closing price (₹).",
     "Forward Return (abs)": "Absolute price return over the forward window after the signal (%).",
     "vs Nifty50": "Return relative to Nifty 50 over the same window (sector/stock minus index).",
+
+    # ── Misc / raw-table columns ──────────────────────────────────────────────
+    "Value (Cr)": "Traded value in ₹ Crore.",
+    "Volume": "Number of contracts/shares traded.",
+    "Expiry": "Contract expiry date.",
+    "Type": "Contract/expiry type (e.g. weekly vs monthly).",
+    "Month": "Expiry month bucket.",
+    "Days": "Days to expiry.",
+    "Count": "Number of observations (sample size).",
+    "Accuracy": "Hit rate — share of predictions that matched the realised outcome.",
+    "source": "Where this row's data came from (NSE live / Groww / CSV / insights.market).",
+    "fii_buy": "FII gross BUY value in the cash segment (₹ Cr).",
+    "fii_sell": "FII gross SELL value in the cash segment (₹ Cr).",
+    "fii_net": "FII net = buy − sell (₹ Cr). Negative = net selling.",
+    "dii_buy": "DII gross BUY value (₹ Cr).",
+    "dii_sell": "DII gross SELL value (₹ Cr).",
+    "dii_net": "DII net = buy − sell (₹ Cr). Positive = domestic support.",
+    "trade_date": "Trading session date.",
+    "Timeframe": "The rotation-clock lookback window (1W / 2W / 1M).",
+    "Windows": "Number of independent walk-forward windows tested (sample size).",
+    "Overall hit %": "Share of all calls that were directionally correct vs peers.",
+    "Inflow−Outflow %/win": "Forward return spread between inflow (Leading/Improving) and outflow (Weakening/Lagging) sectors per window.",
+    "Leading hit %": "Of Leading-phase calls, the % that outperformed peers forward.",
+    "Leading edge %": "Average forward return of Leading-phase sectors vs peers.",
+    "Improving edge %": "Average forward return of Improving-phase sectors vs peers.",
+    "Lagging hit %": "Of Lagging-phase calls, the % that underperformed peers (correct for an exit signal).",
+    "Lagging edge %": "Average forward return of Lagging-phase sectors vs peers (negative = correctly weak).",
 }
 
 
@@ -134,3 +161,24 @@ def cc(label=None, *, help=None, **kw):
 
 def pc(label=None, *, help=None, **kw):
     return st.column_config.ProgressColumn(label, help=_help(label, help), **kw)
+
+
+def cfg(df) -> dict:
+    """
+    Auto column_config for a whole DataFrame — every header gets a glossary tooltip
+    (numeric columns → NumberColumn, others → TextColumn). For raw-header tables that
+    don't have a hand-built column_config. Columns absent from the glossary simply get
+    no tooltip (no harm).
+    """
+    import pandas as _pd
+    out: dict = {}
+    for c in df.columns:
+        label = str(c)
+        h = _help(label, None)
+        try:
+            numeric = _pd.api.types.is_numeric_dtype(df[c])
+        except Exception:
+            numeric = False
+        out[label] = (st.column_config.NumberColumn(label, help=h) if numeric
+                      else st.column_config.TextColumn(label, help=h))
+    return out

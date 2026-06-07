@@ -16,7 +16,7 @@ from datetime import date
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc
+from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc, cfg as _hcfg
 
 from src.dashboard.cache.queries import (
     cached_fno_composite_signals,
@@ -724,7 +724,7 @@ def _render_stock_table(df: pd.DataFrame, prefix: str) -> None:
         "score_pcr": "📊", "score_roll": "📊 Roll", "score_mp": "🎯",
     }
     disp = disp.rename(columns={k: v for k, v in rename.items() if k in disp.columns})
-    st.dataframe(disp, use_container_width=True, hide_index=True)
+    st.dataframe(disp, use_container_width=True, hide_index=True, column_config=_hcfg(disp))
 
 
 # ── Scanner tab ───────────────────────────────────────────────────────────────
@@ -907,4 +907,4 @@ def _scanner_table(df: pd.DataFrame, show_roll: bool = True) -> None:
         "near_fut_oi": "Near OI", "next_fut_oi": "Next OI", "fut_oi": "Fut OI",
     }
     disp = disp.rename(columns={k: v for k, v in rename.items() if k in disp.columns})
-    st.dataframe(disp, use_container_width=True, hide_index=True)
+    st.dataframe(disp, use_container_width=True, hide_index=True, column_config=_hcfg(disp))

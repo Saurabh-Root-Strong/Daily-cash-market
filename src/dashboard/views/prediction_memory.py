@@ -15,7 +15,7 @@ from datetime import date
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc
+from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc, cfg as _hcfg
 
 from src.analytics.memory_engine import (
     get_accuracy_report,
@@ -280,7 +280,7 @@ def _render_direction_accuracy(report) -> None:
         paper_bgcolor="rgba(0,0,0,0)", plot_bgcolor="rgba(0,0,0,0)",
     )
     st.plotly_chart(fig, use_container_width=True, key="dir_accuracy")
-    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True, column_config=_hcfg(pd.DataFrame(rows)))
 
 
 def _render_confidence_accuracy(report) -> None:
@@ -320,7 +320,7 @@ def _render_regime_accuracy(report) -> None:
                 "Accuracy":   f"{info['accuracy']:.0%}",
             })
     if rows:
-        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+        st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True, column_config=_hcfg(pd.DataFrame(rows)))
         st.caption("Sideways regime = no momentum → random-walk accuracy expected.")
 
 

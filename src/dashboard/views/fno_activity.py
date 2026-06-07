@@ -15,7 +15,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc
+from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc, cfg as _hcfg
 from plotly.subplots import make_subplots
 
 from src.dashboard.cache.queries import (
@@ -194,7 +194,7 @@ def _render_expiry_calendar(trade_date: date) -> None:
         disp[c] = disp[c].apply(lambda v: f"{v:,.0f}" if pd.notna(v) else "—")
     disp["Value (Cr)"] = disp["Value (Cr)"].apply(lambda v: f"₹{v:,.0f}" if pd.notna(v) else "—")
     disp["PCR"] = disp["PCR"].apply(lambda v: f"{v:.2f}" if pd.notna(v) else "—")
-    st.dataframe(disp, use_container_width=True, hide_index=True)
+    st.dataframe(disp, use_container_width=True, hide_index=True, column_config=_hcfg(disp))
 
 
 def _expiry_calendar_chart(df: pd.DataFrame) -> go.Figure:
@@ -1258,7 +1258,7 @@ def _render_index_fao(trade_date: date) -> None:
             for c in ["Fut OI", "Call OI", "Put OI", "Total OI"]:
                 disp[c] = disp[c].apply(lambda v: f"{v:,.0f}" if pd.notna(v) else "—")
             disp["PCR"] = disp["PCR"].apply(lambda v: f"{v:.2f}" if pd.notna(v) else "—")
-            st.dataframe(disp, use_container_width=True, hide_index=True)
+            st.dataframe(disp, use_container_width=True, hide_index=True, column_config=_hcfg(disp))
 
     # OI buildup history (last 45 days) — shown for all modes
     st.markdown(f"##### {selected_idx} — OI Buildup History")
@@ -1484,7 +1484,7 @@ def _render_stock_table(df: pd.DataFrame, view_mode: str) -> None:
             disp[c] = disp[c].apply(lambda v: f"{v:,.0f}" if pd.notna(v) else "—")
         disp["Value (Cr)"] = disp["Value (Cr)"].apply(lambda v: f"₹{v:,.0f}" if pd.notna(v) else "—")
         disp["PCR"] = disp["PCR"].apply(lambda v: f"{v:.2f}" if pd.notna(v) else "—")
-    st.dataframe(disp, use_container_width=True, hide_index=True)
+    st.dataframe(disp, use_container_width=True, hide_index=True, column_config=_hcfg(disp))
 
 
 def _stock_oi_chart(df: pd.DataFrame, view_mode: str = "All") -> go.Figure:
