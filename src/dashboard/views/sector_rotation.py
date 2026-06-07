@@ -1013,16 +1013,26 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                     (shown["ltp"] <= max_price)
                 ]
 
-            # ── F&O positioning filter (futures buildup / options bias by expiry) ──
+            # ── F&O positioning filter (multi expiry × multi signal, OR-combined) ──
             _fno_part = None
             if fno_filter:
-                _instr, _exp, _tokens = fno_filter
-                _ecode = {"Near month": "near", "Next month": "next", "Far month": "far"}.get(_exp, "near")
-                _col = f"{_ecode}_{'fut' if _instr == 'Futures' else 'opt'}_label"
-                if _col in shown.columns and _tokens:
-                    shown = shown[shown[_col].fillna("").apply(
-                        lambda s: any(t in str(s) for t in _tokens))]
-                    _fno_part = f"{_instr} {_exp.split()[0]} ∈ {{{', '.join(_tokens)}}}"
+                _expiries, _signals = fno_filter   # _signals = [(instrument, token)]
+                _ecode = {"Near month": "near", "Next month": "next", "Far month": "far"}
+                _checks = []
+                for _exp in _expiries:
+                    _e = _ecode.get(_exp, "near")
+                    for _instr, _tok in _signals:
+                        _col = f"{_e}_{'fut' if _instr == 'Futures' else 'opt'}_label"
+                        if _col in shown.columns:
+                            _checks.append((_col, _tok))
+                if _checks:
+                    import functools as _ft, operator as _op
+                    _masks = [shown[c].fillna("").apply(lambda s, t=t: t in str(s))
+                              for c, t in _checks]
+                    shown = shown[_ft.reduce(_op.or_, _masks)]
+                    _toks = ", ".join(sorted({t for _, t in _signals}))
+                    _exps = ", ".join(e.split()[0] for e in _expiries)
+                    _fno_part = f"F&O [{_exps}] ∈ {{{_toks}}}"
 
             n_hidden = len(stocks) - len(shown)
             if n_hidden or _fno_part:
@@ -2481,40 +2491,44 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             ),
         ))
 
-    # ── F&O positioning filter — futures buildup / options bias by expiry ──────
+    # ── F&O positioning filter — multi-select instrument / expiry / signal ────
+    # Each signal maps to (instrument, token-found-in-label). The signal options
+    # shown depend on which instruments are picked. A stock passes if ANY selected
+    # (expiry × signal) matches its label — all three are one-or-more multi-selects.
+    _SIG_MAP = {
+        "🟢 Long Buildup (LB)":     ("Futures", "LB"),
+        "🔴 Short Buildup (SB)":    ("Futures", "SB"),
+        "🔵 Short Covering (SC)":   ("Futures", "SC"),
+        "🟠 Long Unwinding (LU)":   ("Futures", "LU"),
+        "🔥 Bullish (C.Buy/P.Wrt)": ("Options", "Bull"),
+        "❄️ Bearish (C.Wrt/P.Buy)": ("Options", "Bear"),
+        "⚡ Vol Bet (both bought)": ("Options", "Vol"),
+        "📊 Range (both written)":  ("Options", "Range"),
+    }
     _gcol1, _gcol2, _gcol3 = st.columns([1, 1, 2])
     with _gcol1:
-        fno_instrument = st.selectbox(
-            "F&O filter — instrument", ["(off)", "Futures", "Options"],
-            key="rot_fno_instr",
-            help="Filter the per-stock lists by what F&O traders are doing.\n"
-                 "Futures = price+OI buildup (LB/SB/SC/LU). Options = call/put OI-premium bias.\n"
-                 "'(off)' = no F&O filter.")
-    _off = fno_instrument == "(off)"
+        fno_instruments = st.multiselect(
+            "F&O filter — instrument", ["Futures", "Options"], key="rot_fno_instr",
+            help="Pick one or both. Futures = price+OI buildup (LB/SB/SC/LU). "
+                 "Options = call/put OI-premium bias. Empty = no F&O filter.")
+    _off = not fno_instruments
     with _gcol2:
-        fno_expiry = st.selectbox(
-            "Expiry", ["Near month", "Next month", "Far month"], key="rot_fno_exp",
-            disabled=_off,
-            help="Which expiry's positioning to filter on. Near = current month (most liquid); "
+        fno_expiries = st.multiselect(
+            "Expiry (one or more)", ["Near month", "Next month", "Far month"],
+            key="rot_fno_exp", disabled=_off,
+            help="Pick one or more expiries to filter on. Near = current month (most liquid); "
                  "Next/Far = forward positioning (read Next on expiry day when Near is rolling).")
     with _gcol3:
-        if fno_instrument == "Futures":
-            _opts = {"🟢 Long Buildup (LB)": "LB", "🔴 Short Buildup (SB)": "SB",
-                     "🔵 Short Covering (SC)": "SC", "🟠 Long Unwinding (LU)": "LU"}
-        elif fno_instrument == "Options":
-            _opts = {"🔥 Bullish (C.Buy/P.Wrt)": "Bull", "❄️ Bearish (C.Wrt/P.Buy)": "Bear",
-                     "⚡ Vol Bet (both bought)": "Vol", "📊 Range (both written)": "Range"}
-        else:
-            _opts = {}
+        _avail = [k for k, (instr, _) in _SIG_MAP.items() if instr in fno_instruments]
         _sel = st.multiselect(
-            "Show only stocks with F&O signal", list(_opts.keys()), key="rot_fno_sig",
+            "Show only stocks with F&O signal", _avail, key="rot_fno_sig",
             disabled=_off,
-            help="Show only stocks whose chosen-expiry F&O signal matches any selected. "
+            help="Pick one or more. A stock is shown if ANY selected expiry's signal matches. "
                  "LB = fresh longs (OI↑ price↑), SB = fresh shorts (OI↑ price↓), "
                  "SC = short covering (OI↓ price↑), LU = long unwinding (OI↓ price↓).")
-        fno_tokens = [_opts[s] for s in _sel]
-    fno_filter = ((fno_instrument, fno_expiry, fno_tokens)
-                  if (not _off and fno_tokens) else None)
+        fno_signals = [_SIG_MAP[s] for s in _sel if _SIG_MAP[s][0] in fno_instruments]
+    fno_filter = ((fno_expiries, fno_signals)
+                  if (fno_instruments and fno_expiries and fno_signals) else None)
 
     if _n_thin:
         st.caption(
