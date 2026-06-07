@@ -28,6 +28,10 @@ def _load(limit: int = 250) -> pd.DataFrame:
     return df
 
 
+def _fmtcr(v) -> str:
+    return f"₹{v:+,.0f} Cr" if v is not None else "—"
+
+
 def _kpi(col, label, value, *, good_positive=True, suffix=" Cr"):
     if value is None or pd.isna(value):
         col.metric(label, "—"); return
@@ -83,19 +87,44 @@ def render(selected_date: date) -> None:
         )
         st.plotly_chart(fig, use_container_width=True)
 
-        # ── Tug-of-war insight ────────────────────────────────────────────────
-        f5, d5 = d["fii_net"].tail(5).sum(), d["dii_net"].tail(5).sum()
-        if f5 < 0 and d5 > 0:
-            absorbed = min(abs(f5), d5) / abs(f5) * 100 if f5 != 0 else 0
-            st.info(f"🌊 **FII selling, DII absorbing** — over 5 days FIIs sold "
-                    f"₹{abs(f5):,.0f} Cr while DIIs bought ₹{d5:,.0f} Cr "
-                    f"({absorbed:.0f}% absorbed). Domestic support is cushioning foreign outflows.")
-        elif f5 > 0 and d5 > 0:
-            st.success(f"📈 **Both buying** — FII +₹{f5:,.0f} Cr and DII +₹{d5:,.0f} Cr over 5d. "
-                       "Broad institutional inflow — strong tailwind.")
-        elif f5 < 0 and d5 < 0:
-            st.error(f"📉 **Both selling** — FII ₹{f5:,.0f} Cr and DII ₹{d5:,.0f} Cr over 5d. "
-                     "No institutional support — risk-off.")
+        # ── 🧠 Flow Intelligence engine ───────────────────────────────────────
+        try:
+            from src.analytics.fii_dii_intelligence import get_flow_intelligence
+            intel = get_flow_intelligence(selected_date)
+        except Exception:
+            intel = {}
+        if intel:
+            _tagcol = {"ABSORBED SELLING": "#40c4ff", "BROAD RISK-OFF": "#ff5252",
+                       "ALIGNED BUYING": "#00c853", "FII-LED BUYING": "#69f0ae",
+                       "BALANCED": "#9e9e9e"}
+            tc = _tagcol.get(intel["regime_tag"], "#9e9e9e")
+            st.markdown("#### 🧠 Flow Intelligence — what institutions are doing & what it means")
+            r1, r2, r3 = st.columns(3)
+            r1.markdown(f"<div style='font-size:11px;color:#888'>FII REGIME (the pressure)</div>"
+                        f"<div style='font-size:15px;font-weight:600'>{intel['fii_regime']}</div>"
+                        f"<div style='font-size:10.5px;color:#888'>5d {_fmtcr(intel['fii_5d'])} · "
+                        f"streak {intel['fii_streak']:+d}d · today {intel['fii_z']:+.1f}σ</div>",
+                        unsafe_allow_html=True)
+            r2.markdown(f"<div style='font-size:11px;color:#888'>DII STANCE (the floor)</div>"
+                        f"<div style='font-size:15px;font-weight:600'>{intel['dii_stance']}</div>"
+                        f"<div style='font-size:10.5px;color:#888'>5d {_fmtcr(intel['dii_5d'])}"
+                        + (f" · absorbing {intel['absorption_pct']:.0f}%" if intel.get('absorption_pct') else "")
+                        + "</div>", unsafe_allow_html=True)
+            r3.markdown(f"<div style='font-size:11px;color:#888'>SETUP</div>"
+                        f"<div style='font-size:15px;font-weight:700;color:{tc}'>{intel['regime_tag']}</div>"
+                        f"<div style='font-size:10.5px;color:#888'>next-day lean: "
+                        f"<b>{intel['forward_lean']}</b></div>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div style='border-left:4px solid {tc};padding:7px 12px;margin:8px 0;"
+                f"background:rgba(255,255,255,0.03);border-radius:0 6px 6px 0'>"
+                f"<div style='font-size:13px'>{intel['narrative']}</div>"
+                f"<div style='font-size:12.5px;color:rgba(255,255,255,0.82);margin-top:5px'>"
+                f"📊 <b>What it means:</b> {intel['structural_read']}</div>"
+                f"<div style='font-size:12px;color:#7fdbff;margin-top:5px'>➡️ <b>Next-day lean: "
+                f"{intel['forward_lean']}</b> — {intel['forward_note']}</div></div>",
+                unsafe_allow_html=True,
+            )
+            st.caption("⚖️ Evidence: " + intel["validation"])
 
         # ── Data table ────────────────────────────────────────────────────────
         with st.expander("📋 Daily data", expanded=False):
