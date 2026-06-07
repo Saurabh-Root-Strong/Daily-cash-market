@@ -347,3 +347,78 @@ def get_two_week_outlook(as_of_date: date) -> dict:
         "regime_tag": tag, "weekly_bias": (nifty_wk["weekly_bias"] if nifty_wk else None),
         "hist_2wk": (hist.get("current_dist") if hist else None),
     }
+
+
+def get_flow_events(as_of_date: date, z_threshold: float = 2.0) -> dict:
+    """
+    Flow-event MEMORY — detects and remembers the SIGNIFICANT flow moments across
+    the full history (a sudden huge FII buy/sell, or a reversal), records what the
+    market did afterwards, and flags whether TODAY is such an event.
+
+    'Huge' = FII net at |z| >= threshold vs its trailing-60d norm (point-in-time).
+    EVIDENCE (small samples, so suggestive): a huge FII BUY day mildly precedes
+    weakness (mean-reversion — piling in marks tops); a huge SELL day → roughly flat
+    (capitulation exhausts). Forward stats use only REALISED windows. Descriptive,
+    not a forecast.
+    """
+    f = query_dataframe("""
+        SELECT trade_date, fii_net, dii_net FROM fii_dii_cash
+        WHERE fii_net IS NOT NULL AND trade_date <= ? ORDER BY trade_date
+    """, [as_of_date])
+    n = query_dataframe("""
+        SELECT trade_date, close_val FROM index_data
+        WHERE index_name = 'Nifty 50' AND trade_date <= ? ORDER BY trade_date
+    """, [as_of_date])
+    if f.empty or n.empty or len(f) < 65:
+        return {}
+    f["trade_date"] = pd.to_datetime(f["trade_date"]); n["trade_date"] = pd.to_datetime(n["trade_date"])
+    d = f.merge(n, on="trade_date", how="inner").sort_values("trade_date").reset_index(drop=True)
+    fii = d["fii_net"].astype(float)
+    mu = fii.rolling(60).mean().shift(1); sd = fii.rolling(60).std().shift(1)
+    d["z"] = (fii - mu) / sd
+    sign = np.sign(fii.values)
+    c5 = d["close_val"].shift(-5) / d["close_val"] - 1
+    c10 = d["close_val"].shift(-10) / d["close_val"] - 1
+
+    events = []
+    for i in range(len(d)):
+        z = d["z"].iloc[i]
+        if pd.isna(z):
+            continue
+        ev = None
+        if z >= z_threshold:   ev = "🟢 Huge FII Buy"
+        elif z <= -z_threshold: ev = "🔴 Huge FII Sell"
+        else:
+            # Reversal: flips sign today after a >=3-day same-sign streak.
+            if i >= 4 and sign[i] != 0 and sign[i] != sign[i-1] and \
+               sign[i-1] == sign[i-2] == sign[i-3]:
+                ev = ("🔄 FII flips to BUYING" if sign[i] > 0 else "🔄 FII flips to SELLING")
+        if ev:
+            events.append({
+                "date": d["trade_date"].iloc[i].strftime("%d %b %y"),
+                "_dt": d["trade_date"].iloc[i],
+                "type": ev, "fii_net": round(float(fii.iloc[i]), 0),
+                "dii_net": round(float(d["dii_net"].iloc[i]), 0), "z": round(float(z), 1),
+                "fwd5": round(float(c5.iloc[i] * 100), 2) if pd.notna(c5.iloc[i]) else None,
+                "fwd10": round(float(c10.iloc[i] * 100), 2) if pd.notna(c10.iloc[i]) else None,
+            })
+
+    latest_dt = d["trade_date"].iloc[-1]
+    today_event = next((e for e in events if e["_dt"] == latest_dt), None)
+
+    # Per-type forward stats (realised only) — what historically followed each type.
+    type_stats = {}
+    for t in set(e["type"] for e in events):
+        fwds = [e["fwd10"] for e in events if e["type"] == t and e["fwd10"] is not None]
+        if len(fwds) >= 4:
+            arr = np.array(fwds)
+            type_stats[t] = {"mean10": round(float(arr.mean()), 2),
+                             "pos_pct": round(float((arr > 0).mean() * 100), 0), "n": len(fwds)}
+
+    for e in events:
+        e.pop("_dt", None)
+    return {
+        "as_of": str(as_of_date), "z_threshold": z_threshold,
+        "today_event": today_event, "events": events[-15:][::-1],
+        "type_stats": type_stats, "total_events": len(events),
+    }

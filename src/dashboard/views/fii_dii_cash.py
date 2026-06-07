@@ -186,6 +186,36 @@ def render(selected_date: date) -> None:
                 "cumulative (blue) absorbing it. A descriptive ~1-year pattern on flow-skewed data, not a forecast."
             )
 
+        # ── 🧠 Flow Event Memory — significant moves & what followed ───────────
+        try:
+            from src.analytics.fii_dii_intelligence import get_flow_events
+            ev = get_flow_events(selected_date)
+        except Exception:
+            ev = {}
+        if ev:
+            st.markdown("##### 🧠 Flow Event Memory — significant moves & what followed")
+            te = ev.get("today_event")
+            if te:
+                ts = ev["type_stats"].get(te["type"])
+                msg = (f"🚨 **TODAY is a significant flow event: {te['type']}** — "
+                       f"FII ₹{te['fii_net']:+,.0f} Cr (z{te['z']:+.1f}).")
+                if ts:
+                    msg += (f" Historically the **{ts['n']}** times this happened, Nifty was "
+                            f"**{ts['mean10']:+.1f}%** two weeks later ({ts['pos_pct']:.0f}% up).")
+                st.warning(msg)
+            if ev["type_stats"]:
+                st.caption("What each event type has historically led to (2 weeks later, realised windows only):")
+                rows = [{"Event": k, "2-wk avg %": v["mean10"], "% up": v["pos_pct"], "times": v["n"]}
+                        for k, v in sorted(ev["type_stats"].items(), key=lambda x: -x[1]["n"])]
+                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+            with st.expander(f"📜 Event log — {ev['total_events']} significant flow events on record", expanded=False):
+                el = pd.DataFrame(ev["events"])
+                if not el.empty:
+                    st.dataframe(el[["date", "type", "fii_net", "dii_net", "z", "fwd5", "fwd10"]],
+                                 hide_index=True, use_container_width=True)
+            st.caption("⚖️ Small samples (~10/type) — a descriptive memory, not a forecast. Pattern: extreme FII "
+                       "BUYS mildly precede weakness (piling in marks tops); huge SELLS tend to exhaust (flat/bounce).")
+
         # ── Data table ────────────────────────────────────────────────────────
         with st.expander("📋 Daily data", expanded=False):
             show = d.sort_values("trade_date", ascending=False).copy()
