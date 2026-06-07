@@ -16,6 +16,7 @@ from datetime import date, timedelta
 import numpy as np
 import pandas as pd
 import streamlit as st
+from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc
 
 from src.dashboard import state as ss
 from src.dashboard.cache.queries import (
@@ -47,30 +48,30 @@ from src.dashboard.constants import (
 
 # ── Stock-level column config (period performance drilldown) ──────────────────
 _STOCK_COL_CONFIG = {
-    "symbol":           st.column_config.TextColumn("Symbol"),
-    "company_name":     st.column_config.TextColumn("Company"),
-    "category":         st.column_config.TextColumn("Category",
+    "symbol":           _htc("Symbol"),
+    "company_name":     _htc("Company"),
+    "category":         _htc("Category",
                             help="Specific product/business category within the sub-sector"),
-    "close_price":      st.column_config.NumberColumn("Close (₹)", format="₹%.2f"),
-    "1W_price_chg_pct": st.column_config.NumberColumn("1W Price%",  format="%.2f%%",
+    "close_price":      _hnc("Close (₹)", format="₹%.2f"),
+    "1W_price_chg_pct": _hnc("1W Price%",  format="%.2f%%",
                             help="Cumulative price change over last 1 week"),
-    "2W_price_chg_pct": st.column_config.NumberColumn("2W Price%",  format="%.2f%%",
+    "2W_price_chg_pct": _hnc("2W Price%",  format="%.2f%%",
                             help="Cumulative price change over last 2 weeks"),
-    "1M_price_chg_pct": st.column_config.NumberColumn("1M Price%",  format="%.2f%%",
+    "1M_price_chg_pct": _hnc("1M Price%",  format="%.2f%%",
                             help="Cumulative price change over last 1 month"),
-    "3M_price_chg_pct": st.column_config.NumberColumn("3M Price%",  format="%.2f%%",
+    "3M_price_chg_pct": _hnc("3M Price%",  format="%.2f%%",
                             help="Cumulative price change over last 3 months"),
-    "1W_deliv_cr":      st.column_config.NumberColumn("1W Deliv (Cr)", format="₹%.2f",
+    "1W_deliv_cr":      _hnc("1W Deliv (Cr)", format="₹%.2f",
                             help="Total delivered value (₹ Cr) over last 1 week — real money flow"),
-    "2W_deliv_cr":      st.column_config.NumberColumn("2W Deliv (Cr)", format="₹%.2f",
+    "2W_deliv_cr":      _hnc("2W Deliv (Cr)", format="₹%.2f",
                             help="Total delivered value (₹ Cr) over last 2 weeks"),
-    "1M_deliv_cr":      st.column_config.NumberColumn("1M Deliv (Cr)", format="₹%.2f",
+    "1M_deliv_cr":      _hnc("1M Deliv (Cr)", format="₹%.2f",
                             help="Total delivered value (₹ Cr) over last 1 month"),
-    "3M_deliv_cr":      st.column_config.NumberColumn("3M Deliv (Cr)", format="₹%.2f",
+    "3M_deliv_cr":      _hnc("3M Deliv (Cr)", format="₹%.2f",
                             help="Total delivered value (₹ Cr) over last 3 months"),
-    "deliv_per":        st.column_config.NumberColumn("Today Deliv%", format="%.1f%%",
+    "deliv_per":        _hnc("Today Deliv%", format="%.1f%%",
                             help="Today's delivery % — compare with period averages to spot change"),
-    "deliv_ratio":      st.column_config.NumberColumn("Deliv Ratio",  format="%.2f",
+    "deliv_ratio":      _hnc("Deliv Ratio",  format="%.2f",
                             help=">1.2 = accumulating above norm, <0.8 = distributing below norm"),
 }
 _STOCK_SHOW = [
@@ -82,28 +83,28 @@ _STOCK_SHOW = [
 
 # ── Search results column config (adds sector + industry to stock config) ─────
 _SEARCH_COL_CONFIG = {
-    "symbol":           st.column_config.TextColumn("Symbol"),
-    "company_name":     st.column_config.TextColumn("Company"),
-    "sector":           st.column_config.TextColumn("Sector"),
-    "industry":         st.column_config.TextColumn("Sub-Sector"),
-    "category":         st.column_config.TextColumn("Category"),
-    "close_price":      st.column_config.NumberColumn("Close (₹)", format="₹%.2f"),
-    "price_change_pct": st.column_config.NumberColumn("Today Chg%", format="%.2f%%",
+    "symbol":           _htc("Symbol"),
+    "company_name":     _htc("Company"),
+    "sector":           _htc("Sector"),
+    "industry":         _htc("Sub-Sector"),
+    "category":         _htc("Category"),
+    "close_price":      _hnc("Close (₹)", format="₹%.2f"),
+    "price_change_pct": _hnc("Today Chg%", format="%.2f%%",
                             help="Price change vs previous close"),
-    "1W_price_chg_pct": st.column_config.NumberColumn("1W Price%",  format="%.2f%%"),
-    "2W_price_chg_pct": st.column_config.NumberColumn("2W Price%",  format="%.2f%%"),
-    "1M_price_chg_pct": st.column_config.NumberColumn("1M Price%",  format="%.2f%%"),
-    "3M_price_chg_pct": st.column_config.NumberColumn("3M Price%",  format="%.2f%%"),
-    "deliv_per":        st.column_config.NumberColumn("Today Deliv%", format="%.1f%%"),
-    "1W_deliv_cr":      st.column_config.NumberColumn("1W Deliv (Cr)", format="₹%.2f",
+    "1W_price_chg_pct": _hnc("1W Price%",  format="%.2f%%"),
+    "2W_price_chg_pct": _hnc("2W Price%",  format="%.2f%%"),
+    "1M_price_chg_pct": _hnc("1M Price%",  format="%.2f%%"),
+    "3M_price_chg_pct": _hnc("3M Price%",  format="%.2f%%"),
+    "deliv_per":        _hnc("Today Deliv%", format="%.1f%%"),
+    "1W_deliv_cr":      _hnc("1W Deliv (Cr)", format="₹%.2f",
                             help="Delivered value (₹ Cr) over last 1 week"),
-    "1M_deliv_cr":      st.column_config.NumberColumn("1M Deliv (Cr)", format="₹%.2f",
+    "1M_deliv_cr":      _hnc("1M Deliv (Cr)", format="₹%.2f",
                             help="Delivered value (₹ Cr) over last 1 month"),
-    "3M_deliv_cr":      st.column_config.NumberColumn("3M Deliv (Cr)", format="₹%.2f",
+    "3M_deliv_cr":      _hnc("3M Deliv (Cr)", format="₹%.2f",
                             help="Delivered value (₹ Cr) over last 3 months"),
-    "deliv_ratio":      st.column_config.NumberColumn("Deliv Ratio", format="%.2f",
+    "deliv_ratio":      _hnc("Deliv Ratio", format="%.2f",
                             help=">1.2 = accumulating, <0.8 = distributing"),
-    "vol_ratio":        st.column_config.NumberColumn("Vol Ratio",   format="%.2f",
+    "vol_ratio":        _hnc("Vol Ratio",   format="%.2f",
                             help="Today's volume vs 20-day avg"),
 }
 _SEARCH_SHOW = [
@@ -856,26 +857,26 @@ def render(selected_date: date, min_turnover: float) -> None:
                 disp["outcome"] = disp["outcome"].apply(_fmt_outcome)
 
                 col_cfg = {
-                    "trade_date": st.column_config.TextColumn("Date", width="small"),
-                    "sector":     st.column_config.TextColumn("Sector"),
-                    "signal":     st.column_config.TextColumn("Signal"),
-                    "dv_ratio":   st.column_config.NumberColumn(
+                    "trade_date": _htc("Date", width="small"),
+                    "sector":     _htc("Sector"),
+                    "signal":     _htc("Signal"),
+                    "dv_ratio":   _hnc(
                         "DV Ratio", format="%.2fx",
                         help="Today's delivery vs own 100D daily avg. >1.5x = abnormal flow."
                     ),
-                    "z_score":    st.column_config.NumberColumn(
+                    "z_score":    _hnc(
                         "Z-Score", format="%.2f",
                         help="Standard deviations above/below 100D mean. >1.5 = statistically elevated."
                     ),
-                    "daily_price_chg_pct": st.column_config.NumberColumn(
+                    "daily_price_chg_pct": _hnc(
                         "Price Chg%", format="%.2f%%",
                         help="Sector turnover-weighted avg price change on signal date."
                     ),
-                    "fwd_5d_pct": st.column_config.NumberColumn(
+                    "fwd_5d_pct": _hnc(
                         "Actual 5D Return%", format="%.2f%%",
                         help="Cumulative sector return over next 5 trading days. NaN = still pending."
                     ),
-                    "outcome":    st.column_config.TextColumn(
+                    "outcome":    _htc(
                         "Outcome",
                         help="✅ Correct = signal direction matched 5D return | "
                              "❌ Wrong = opposite | ⏳ = return window not yet complete | "

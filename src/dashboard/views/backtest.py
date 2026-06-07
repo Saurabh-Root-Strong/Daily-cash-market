@@ -10,6 +10,7 @@ from datetime import date
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc
 
 from src.dashboard.constants import POSITIVE_COLOR, NEGATIVE_COLOR, PLOT_BG, PAPER_BG, GRID_COLOR
 
@@ -144,14 +145,14 @@ def _stock_table(picks: list[dict], side: str,
         hide_index=True,
         use_container_width=True,
         column_config={
-            "Symbol":  st.column_config.TextColumn("Symbol",  width="small"),
-            "Company": st.column_config.TextColumn("Company", width="medium"),
-            "Sector":  st.column_config.TextColumn("Sector",  width="medium"),
-            "Signal":  st.column_config.TextColumn("Signal",  width="small"),
-            "Deliv %": st.column_config.NumberColumn("Deliv %", format="%.1f%%"),
-            entry_col: st.column_config.NumberColumn(entry_col, format="₹%.2f"),
-            exit_col:  st.column_config.NumberColumn(exit_col,  format="₹%.2f"),
-            pnl_col:   st.column_config.NumberColumn(pnl_col,   format="%+.2f%%"),
+            "Symbol":  _htc("Symbol",  width="small"),
+            "Company": _htc("Company", width="medium"),
+            "Sector":  _htc("Sector",  width="medium"),
+            "Signal":  _htc("Signal",  width="small"),
+            "Deliv %": _hnc("Deliv %", format="%.1f%%"),
+            entry_col: _hnc(entry_col, format="₹%.2f"),
+            exit_col:  _hnc(exit_col,  format="₹%.2f"),
+            pnl_col:   _hnc(pnl_col,   format="%+.2f%%"),
         },
     )
 
@@ -393,15 +394,15 @@ def _execute(signal_date: date, check_date: date, min_turnover: float) -> None:
             hide_index=True,
             use_container_width=True,
             column_config={
-                "Action":   st.column_config.TextColumn("Action",  width="small"),
-                "Symbol":   st.column_config.TextColumn("Symbol",  width="small"),
-                "Company":  st.column_config.TextColumn("Company", width="medium"),
-                "Sector":   st.column_config.TextColumn("Sector",  width="medium"),
-                "Signal":   st.column_config.TextColumn("Signal",  width="small"),
-                "Deliv %":  st.column_config.NumberColumn("Deliv %",  format="%.1f%%"),
-                entry_col:  st.column_config.NumberColumn(entry_col,  format="₹%.2f"),
-                exit_col:   st.column_config.NumberColumn(exit_col,   format="₹%.2f"),
-                "Return %": st.column_config.NumberColumn("Return %", format="%+.2f%%"),
+                "Action":   _htc("Action",  width="small"),
+                "Symbol":   _htc("Symbol",  width="small"),
+                "Company":  _htc("Company", width="medium"),
+                "Sector":   _htc("Sector",  width="medium"),
+                "Signal":   _htc("Signal",  width="small"),
+                "Deliv %":  _hnc("Deliv %",  format="%.1f%%"),
+                entry_col:  _hnc(entry_col,  format="₹%.2f"),
+                exit_col:   _hnc(exit_col,   format="₹%.2f"),
+                "Return %": _hnc("Return %", format="%+.2f%%"),
             },
         )
 

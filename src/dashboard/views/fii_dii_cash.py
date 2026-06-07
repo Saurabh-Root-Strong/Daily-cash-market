@@ -13,6 +13,7 @@ from datetime import date
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc
 
 from src.data.repository import query_dataframe
 
@@ -210,18 +211,18 @@ def render(selected_date: date) -> None:
                 st.dataframe(
                     pd.DataFrame(rows), hide_index=True, use_container_width=True,
                     column_config={
-                        "Event": st.column_config.TextColumn(
+                        "Event": _htc(
                             "Event", help="The significant flow-event type — a sudden huge FII buy/sell, "
                             "or FIIs reversing direction. Why: these stand-out moments often mark turning points."),
-                        "2-wk avg %": st.column_config.NumberColumn(
+                        "2-wk avg %": _hnc(
                             "2-wk avg %", format="%+.2f%%",
                             help="Average Nifty 50 return over the next ~2 weeks (10 trading days) AFTER this event "
                             "happened, historically. Why: tells you which way the market TENDED to go next."),
-                        "% up": st.column_config.NumberColumn(
+                        "% up": _hnc(
                             "% up", format="%.0f%%",
                             help="Of all the times this event occurred, the share where Nifty was HIGHER 2 weeks "
                             "later. Why: >50% = bullish tendency, <50% = bearish tendency."),
-                        "times": st.column_config.NumberColumn(
+                        "times": _hnc(
                             "times", help="How many times this event has occurred in the history (sample size). "
                             "Why: small counts (~10) mean treat it as suggestive, not reliable."),
                     })
@@ -232,28 +233,28 @@ def render(selected_date: date) -> None:
                         el[["date", "type", "fii_net", "dii_net", "z", "fwd5", "fwd10"]],
                         hide_index=True, use_container_width=True,
                         column_config={
-                            "date": st.column_config.TextColumn(
+                            "date": _htc(
                                 "Date", help="The day this significant flow event occurred."),
-                            "type": st.column_config.TextColumn(
+                            "type": _htc(
                                 "Event", help="Huge FII Buy/Sell = FII net beyond ±2σ of its 60-day norm "
                                 "(a genuinely outsized day); reversal = FIIs flipping direction after a 3+ day streak."),
-                            "fii_net": st.column_config.NumberColumn(
+                            "fii_net": _hnc(
                                 "FII net ₹Cr", format="%+,.0f",
                                 help="Foreign-institution net CASH flow that day. Negative = net selling, positive = "
                                 "buying. Why: FIIs are the marginal price-setter — this is the main pressure."),
-                            "dii_net": st.column_config.NumberColumn(
+                            "dii_net": _hnc(
                                 "DII net ₹Cr", format="%+,.0f",
                                 help="Domestic-institution net cash flow (mutual funds/insurers). Why: DIIs are the "
                                 "'floor' that absorbs FII selling — when positive, they cushion the market."),
-                            "z": st.column_config.NumberColumn(
+                            "z": _hnc(
                                 "z-score", format="%+.1f",
                                 help="How EXTREME that day's FII flow was vs its own trailing 60-day average, in "
                                 "standard deviations. Why: |z| ≥ 2 flags a genuinely unusual day, not just a big number."),
-                            "fwd5": st.column_config.NumberColumn(
+                            "fwd5": _hnc(
                                 "Nifty +1wk %", format="%+.2f",
                                 help="Nifty 50 return over the 5 trading days (~1 week) AFTER the event. "
                                 "Blank = that window hasn't completed yet."),
-                            "fwd10": st.column_config.NumberColumn(
+                            "fwd10": _hnc(
                                 "Nifty +2wk %", format="%+.2f",
                                 help="Nifty 50 return over the 10 trading days (~2 weeks) AFTER the event. "
                                 "Blank = that window hasn't completed yet. Why: shows what the move 'led to'."),

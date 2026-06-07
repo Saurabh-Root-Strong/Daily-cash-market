@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc
 
 _INDEX_SYMBOLS = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "NIFTYNXT50"]
 
@@ -163,17 +164,17 @@ def _render_index_structure(trade_date: date) -> None:
         use_container_width=True,
         hide_index=True,
         column_config={
-            "DTE":      st.column_config.NumberColumn("DTE", format="%d"),
-            "Fut OI":   st.column_config.NumberColumn("Fut OI",  format="%d"),
-            "Chg OI":   st.column_config.NumberColumn("Chg OI",  format="%d"),
-            "Basis%":   st.column_config.NumberColumn("Basis%",  format="%.2f%%"),
-            "Call OI":  st.column_config.NumberColumn("Call OI", format="%d"),
-            "Put OI":   st.column_config.NumberColumn("Put OI",  format="%d"),
-            "PCR":      st.column_config.NumberColumn("PCR",     format="%.2f"),
-            "Max Pain": st.column_config.NumberColumn("Max Pain", format="₹%.0f"),
-            "MP Dist%": st.column_config.NumberColumn("MP Dist%", format="%.1f%%"),
-            "Top CE":   st.column_config.NumberColumn("Top CE Strike"),
-            "Top PE":   st.column_config.NumberColumn("Top PE Strike"),
+            "DTE":      _hnc("DTE", format="%d"),
+            "Fut OI":   _hnc("Fut OI",  format="%d"),
+            "Chg OI":   _hnc("Chg OI",  format="%d"),
+            "Basis%":   _hnc("Basis%",  format="%.2f%%"),
+            "Call OI":  _hnc("Call OI", format="%d"),
+            "Put OI":   _hnc("Put OI",  format="%d"),
+            "PCR":      _hnc("PCR",     format="%.2f"),
+            "Max Pain": _hnc("Max Pain", format="₹%.0f"),
+            "MP Dist%": _hnc("MP Dist%", format="%.1f%%"),
+            "Top CE":   _hnc("Top CE Strike"),
+            "Top PE":   _hnc("Top PE Strike"),
         },
     )
 
@@ -316,10 +317,10 @@ def _render_expiry_tab(df: pd.DataFrame, prefix: str) -> None:
                                       "roll_signal": "Roll Signal"})
 
     col_config: dict = {
-        "Spot": st.column_config.NumberColumn("Spot", format="₹%.2f"),
+        "Spot": _hnc("Spot", format="₹%.2f"),
     }
     for nice, fmt in fmt_map.items():
-        col_config[nice] = st.column_config.NumberColumn(nice, format=fmt,
+        col_config[nice] = _hnc(nice, format=fmt,
                                                           help=help_map.get(nice))
 
     st.dataframe(
@@ -489,16 +490,16 @@ def _render_chain_table(chain: pd.DataFrame) -> None:
         use_container_width=True,
         hide_index=True,
         column_config={
-            "strike_price":  st.column_config.NumberColumn("Strike",     format="%.0f"),
-            "ce_oi":         st.column_config.NumberColumn("CE OI",      format="%d"),
-            "ce_chg_oi":     st.column_config.NumberColumn("CE Chg OI",  format="%d"),
-            "ce_close":      st.column_config.NumberColumn("CE Price",   format="₹%.2f"),
-            "pe_oi":         st.column_config.NumberColumn("PE OI",      format="%d"),
-            "pe_chg_oi":     st.column_config.NumberColumn("PE Chg OI",  format="%d"),
-            "pe_close":      st.column_config.NumberColumn("PE Price",   format="₹%.2f"),
-            "total_oi":      st.column_config.NumberColumn("Total OI",   format="%d"),
-            "pcr_at_strike": st.column_config.NumberColumn("PCR",        format="%.2f"),
-            "is_max_pain":   st.column_config.CheckboxColumn("Max Pain?"),
+            "strike_price":  _hnc("Strike",     format="%.0f"),
+            "ce_oi":         _hnc("CE OI",      format="%d"),
+            "ce_chg_oi":     _hnc("CE Chg OI",  format="%d"),
+            "ce_close":      _hnc("CE Price",   format="₹%.2f"),
+            "pe_oi":         _hnc("PE OI",      format="%d"),
+            "pe_chg_oi":     _hnc("PE Chg OI",  format="%d"),
+            "pe_close":      _hnc("PE Price",   format="₹%.2f"),
+            "total_oi":      _hnc("Total OI",   format="%d"),
+            "pcr_at_strike": _hnc("PCR",        format="%.2f"),
+            "is_max_pain":   _hcc("Max Pain?"),
         },
     )
 

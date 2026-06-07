@@ -20,6 +20,7 @@ from datetime import date, timedelta
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc
 
 from src.dashboard.cache.queries import (
     cached_fao_cumulative,
@@ -828,12 +829,12 @@ def _daily_table(daily: pd.DataFrame) -> None:
                 row[f"{pt}_LS%"] = round(float(ls), 1) if ls is not None and not pd.isna(ls) else None
         pivot_rows.append(row)
     df = pd.DataFrame(pivot_rows).sort_values("Date", ascending=False)
-    col_cfg: dict = {"Date": st.column_config.DateColumn("Date", format="DD MMM YYYY")}
+    col_cfg: dict = {"Date": _hdc("Date", format="DD MMM YYYY")}
     for pt in _ORDER:
-        col_cfg[f"{pt}_Long"]  = st.column_config.NumberColumn(f"{pt} Long",  format="%,d")
-        col_cfg[f"{pt}_Short"] = st.column_config.NumberColumn(f"{pt} Short", format="%,d")
-        col_cfg[f"{pt}_Net"]   = st.column_config.NumberColumn(f"{pt} Net",   format="%+,d")
-        col_cfg[f"{pt}_LS%"]   = st.column_config.NumberColumn(f"{pt} L/S%",  format="%.1f%%")
+        col_cfg[f"{pt}_Long"]  = _hnc(f"{pt} Long",  format="%,d")
+        col_cfg[f"{pt}_Short"] = _hnc(f"{pt} Short", format="%,d")
+        col_cfg[f"{pt}_Net"]   = _hnc(f"{pt} Net",   format="%+,d")
+        col_cfg[f"{pt}_LS%"]   = _hnc(f"{pt} L/S%",  format="%.1f%%")
     st.dataframe(df, hide_index=True, use_container_width=True, column_config=col_cfg)
 
 
@@ -855,11 +856,11 @@ def _options_daily_table(daily: pd.DataFrame) -> None:
                 row[f"{pt}_Delta"] = int(r.get("opt_idx_net",      0) or 0)
         pivot_rows.append(row)
     df = pd.DataFrame(pivot_rows).sort_values("Date", ascending=False)
-    col_cfg: dict = {"Date": st.column_config.DateColumn("Date", format="DD MMM YYYY")}
+    col_cfg: dict = {"Date": _hdc("Date", format="DD MMM YYYY")}
     for pt in _ORDER:
-        col_cfg[f"{pt}_Call"]  = st.column_config.NumberColumn(f"{pt} Call Net",  format="%+,d")
-        col_cfg[f"{pt}_Put"]   = st.column_config.NumberColumn(f"{pt} Put Net",   format="%+,d")
-        col_cfg[f"{pt}_Delta"] = st.column_config.NumberColumn(f"{pt} Opt Delta", format="%+,d")
+        col_cfg[f"{pt}_Call"]  = _hnc(f"{pt} Call Net",  format="%+,d")
+        col_cfg[f"{pt}_Put"]   = _hnc(f"{pt} Put Net",   format="%+,d")
+        col_cfg[f"{pt}_Delta"] = _hnc(f"{pt} Opt Delta", format="%+,d")
     st.dataframe(df, hide_index=True, use_container_width=True, column_config=col_cfg)
 
 
@@ -881,10 +882,10 @@ def _cumulative_table(cum: pd.DataFrame) -> None:
                 row[f"{pt}_LS%"] = round(float(ls), 1) if ls is not None and not pd.isna(ls) else None
         pivot_rows.append(row)
     df = pd.DataFrame(pivot_rows).sort_values("Date", ascending=False)
-    col_cfg: dict = {"Date": st.column_config.DateColumn("Date", format="DD MMM YYYY")}
+    col_cfg: dict = {"Date": _hdc("Date", format="DD MMM YYYY")}
     for pt in _ORDER:
-        col_cfg[f"{pt}_CumNet"] = st.column_config.NumberColumn(f"{pt} Cum Net", format="%+,d")
-        col_cfg[f"{pt}_LS%"]    = st.column_config.NumberColumn(f"{pt} L/S%",    format="%.1f%%")
+        col_cfg[f"{pt}_CumNet"] = _hnc(f"{pt} Cum Net", format="%+,d")
+        col_cfg[f"{pt}_LS%"]    = _hnc(f"{pt} L/S%",    format="%.1f%%")
     st.dataframe(df, hide_index=True, use_container_width=True, column_config=col_cfg)
 
 
@@ -906,11 +907,11 @@ def _options_cumulative_table(cum: pd.DataFrame) -> None:
                 row[f"{pt}_CumDelta"] = int(r.get("cum_opt_idx_net",      0) or 0)
         pivot_rows.append(row)
     df = pd.DataFrame(pivot_rows).sort_values("Date", ascending=False)
-    col_cfg: dict = {"Date": st.column_config.DateColumn("Date", format="DD MMM YYYY")}
+    col_cfg: dict = {"Date": _hdc("Date", format="DD MMM YYYY")}
     for pt in _ORDER:
-        col_cfg[f"{pt}_CumCall"]  = st.column_config.NumberColumn(f"{pt} Cum Call",  format="%+,d")
-        col_cfg[f"{pt}_CumPut"]   = st.column_config.NumberColumn(f"{pt} Cum Put",   format="%+,d")
-        col_cfg[f"{pt}_CumDelta"] = st.column_config.NumberColumn(f"{pt} Cum Delta", format="%+,d")
+        col_cfg[f"{pt}_CumCall"]  = _hnc(f"{pt} Cum Call",  format="%+,d")
+        col_cfg[f"{pt}_CumPut"]   = _hnc(f"{pt} Cum Put",   format="%+,d")
+        col_cfg[f"{pt}_CumDelta"] = _hnc(f"{pt} Cum Delta", format="%+,d")
     st.dataframe(df, hide_index=True, use_container_width=True, column_config=col_cfg)
 
 
@@ -1215,16 +1216,16 @@ def _fii_stats_table(fii_stats: pd.DataFrame) -> None:
     display["net_value_cr"]  = display["buy_value_cr"] - display["sell_value_cr"]
     display["net_contracts"] = display["buy_contracts"] - display["sell_contracts"]
     col_cfg = {
-        "category":       st.column_config.TextColumn("Index / Category"),
-        "buy_contracts":  st.column_config.NumberColumn("Buy Contracts",  format="%,d"),
-        "sell_contracts": st.column_config.NumberColumn("Sell Contracts", format="%,d"),
-        "net_contracts":  st.column_config.NumberColumn("Net Contracts",  format="%+,d",
+        "category":       _htc("Index / Category"),
+        "buy_contracts":  _hnc("Buy Contracts",  format="%,d"),
+        "sell_contracts": _hnc("Sell Contracts", format="%,d"),
+        "net_contracts":  _hnc("Net Contracts",  format="%+,d",
             help="Buy − Sell contracts. +ve = FII net buyer."),
-        "buy_value_cr":   st.column_config.NumberColumn("Buy (Cr)",  format="%.2f"),
-        "sell_value_cr":  st.column_config.NumberColumn("Sell (Cr)", format="%.2f"),
-        "net_value_cr":   st.column_config.NumberColumn("Net Flow (Cr)", format="%+.2f",
+        "buy_value_cr":   _hnc("Buy (Cr)",  format="%.2f"),
+        "sell_value_cr":  _hnc("Sell (Cr)", format="%.2f"),
+        "net_value_cr":   _hnc("Net Flow (Cr)", format="%+.2f",
             help="Buy − Sell value in ₹ Crore. +ve = net buyer (money in). −ve = net seller (outflow)."),
-        "oi_contracts":   st.column_config.NumberColumn("OI Contracts", format="%,d"),
+        "oi_contracts":   _hnc("OI Contracts", format="%,d"),
         "trade_date": None, "oi_value_cr": None,
     }
     st.dataframe(
@@ -1943,27 +1944,27 @@ def _backtest_results_table(records) -> None:
         })
     df = pd.DataFrame(rows).sort_values("Signal Date", ascending=False)
     col_cfg = {
-        "Signal Date": st.column_config.DateColumn("Date", format="DD MMM YY",
+        "Signal Date": _hdc("Date", format="DD MMM YY",
             help="Date signal was generated (close of evening). Act on it the next morning."),
-        "Verdict":     st.column_config.TextColumn("Verdict",
+        "Verdict":     _htc("Verdict",
             help="UP = go long Nifty | DOWN = go short (rare, needs active fresh short-building) | SIDEWAYS = stay flat, no trade"),
-        "Conf.":       st.column_config.TextColumn("Conf.",
+        "Conf.":       _htc("Conf.",
             help="HIGH/MEDIUM/LOW confidence. Only trade HIGH confidence signals. HIGH = multiple indicators agree."),
-        "Score":       st.column_config.NumberColumn("Score", format="%+.0f",
+        "Score":       _hnc("Score", format="%+.0f",
             help="9-signal composite score (range −18 to +18). ≥+7=UP HIGH. ≥+3=UP MED. ≤−7+delta_5d<−10K+no squeeze=DOWN. Otherwise SIDEWAYS."),
-        "View":        st.column_config.TextColumn("View",
+        "View":        _htc("View",
             help="Human-readable score label: STRONG BULLISH(≥+9) / BULLISH(≥+5) / CAUTIOUSLY BULLISH(≥+2) / NEUTRAL / CAUTIOUSLY BEARISH / BEARISH / STRONG BEARISH"),
-        "Squeeze":     st.column_config.TextColumn("Squeeze",
+        "Squeeze":     _htc("Squeeze",
             help="⚡ = Squeeze Risk active. FII massive short + DII buying = structural floor. Any positive news → FII forced to cover = sudden rally. NEVER short when active."),
-        "Covering":    st.column_config.TextColumn("Covering",
+        "Covering":    _htc("Covering",
             help="🔄 = Short Covering active. FII actively reducing massive short = net institutional buying. Each covered contract = 1 BUY transaction. Best UP signal."),
-        "Actual %":    st.column_config.NumberColumn("Nifty%", format="%+.2f",
+        "Actual %":    _hnc("Nifty%", format="%+.2f",
             help="Actual Nifty 50 % change on the NEXT trading day. Green = market went up, red = down. This is what the signal was predicting."),
-        "Actual Dir":  st.column_config.TextColumn("Actual Dir",
+        "Actual Dir":  _htc("Actual Dir",
             help="Classified market direction: UP(>+threshold%), DOWN(<−threshold%), SIDEWAYS(within ±threshold%). Compared with Verdict for CORRECT/WRONG."),
-        "Outcome":     st.column_config.TextColumn("Outcome",
+        "Outcome":     _htc("Outcome",
             help="CORRECT = Verdict matched Actual Direction. WRONG = did not match. SIDEWAYS is correct only if market also stayed within ±threshold."),
-        "Sim P&L %":   st.column_config.NumberColumn("SimP&L", format="%+.2f",
+        "Sim P&L %":   _hnc("SimP&L", format="%+.2f",
             help="Per-signal P&L: +Nifty% if long (UP verdict), −Nifty% if short (DOWN verdict), 0% if flat (SIDEWAYS). Sum of all = cumulative P&L in summary card."),
     }
     st.dataframe(df, hide_index=True, use_container_width=True, column_config=col_cfg)
@@ -2547,13 +2548,13 @@ def render(selected_date: date) -> None:
                 hist_display["net_value_cr"]  = hist_display["buy_value_cr"] - hist_display["sell_value_cr"]
                 hist_display["net_contracts"] = hist_display["buy_contracts"] - hist_display["sell_contracts"]
                 col_cfg = {
-                    "trade_date":    st.column_config.DateColumn("Date", format="DD MMM YYYY"),
-                    "category":      st.column_config.TextColumn("Category"),
-                    "net_contracts": st.column_config.NumberColumn("Net Contracts", format="%+,d"),
-                    "net_value_cr":  st.column_config.NumberColumn("Net Flow (Cr)",  format="%+.2f"),
-                    "buy_value_cr":  st.column_config.NumberColumn("Buy (Cr)",        format="%.2f"),
-                    "sell_value_cr": st.column_config.NumberColumn("Sell (Cr)",       format="%.2f"),
-                    "oi_contracts":  st.column_config.NumberColumn("OI Contracts",    format="%,d"),
+                    "trade_date":    _hdc("Date", format="DD MMM YYYY"),
+                    "category":      _htc("Category"),
+                    "net_contracts": _hnc("Net Contracts", format="%+,d"),
+                    "net_value_cr":  _hnc("Net Flow (Cr)",  format="%+.2f"),
+                    "buy_value_cr":  _hnc("Buy (Cr)",        format="%.2f"),
+                    "sell_value_cr": _hnc("Sell (Cr)",       format="%.2f"),
+                    "oi_contracts":  _hnc("OI Contracts",    format="%,d"),
                     "buy_contracts": None, "sell_contracts": None,
                 }
                 st.dataframe(

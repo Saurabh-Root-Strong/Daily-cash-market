@@ -17,6 +17,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc
 
 from src.dashboard.cache.queries import (
     cached_rotation_clock_backtest,
@@ -1033,18 +1034,18 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                 hide_index=True,
                 use_container_width=True,
                 column_config={
-                    "symbol":        st.column_config.TextColumn("Symbol", width="small",
+                    "symbol":        _htc("Symbol", width="small",
                         help="NSE ticker symbol"),
-                    "company_name":  st.column_config.TextColumn("Company",
+                    "company_name":  _htc("Company",
                         help="Company full name from NSE sector master"),
-                    "industry":      st.column_config.TextColumn("Sub-Sector",
+                    "industry":      _htc("Sub-Sector",
                         help="Industry classification within the sector"),
-                    "ltp":           st.column_config.NumberColumn(
+                    "ltp":           _hnc(
                         "LTP (₹)", format="₹%.2f",
                         help="Last Traded Price — most recent close_price in the 7-day window.\n\n"
                              "Use the Min / Max Price filters above to narrow the list "
                              "by affordable price range or to exclude penny stocks."),
-                    "conviction":    st.column_config.TextColumn("Conviction",
+                    "conviction":    _htc("Conviction",
                         help="Own-history conviction — compares 7D Wtd Deliv % against each stock's own 100D baseline\n\n"
                              "🔥 Strong  = today's delivery ABOVE own 100D avg AND price falling  (institutions buying the dip)\n"
                              "✅ Buying  = today's delivery ABOVE own 100D avg AND price rising  (momentum confirmed)\n"
@@ -1060,7 +1061,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                     # Format: "🟢 LB +38%"  /  "🔴 SB -12%"  /  "⚪ +1%"  /  "⟳ rolling"
                     # On expiry day: Near shows "⟳ rolling" (rollover noise),
                     # Next shows the REAL fresh positioning — that's the signal to read.
-                    "near_fut_label": st.column_config.TextColumn(
+                    "near_fut_label": _htc(
                         "Fut Near",
                         help="FUTURES — Near-month (current expiry) OI signal:\n"
                              "🟢 LB = Long Buildup (OI↑ + price↑ — fresh longs)\n"
@@ -1070,7 +1071,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                              "⚪ = Neutral (small move)\n"
                              "⟳ rolling = expiry rollover in progress — OI unreliable, see Next month\n"
                              "Number = OI change % vs yesterday (SAME contract, not rank-matched)"),
-                    "next_fut_label": st.column_config.TextColumn(
+                    "next_fut_label": _htc(
                         "Fut Next",
                         help="FUTURES — Next-month OI signal (most informative near expiry):\n"
                              "When near-month shows '⟳ rolling', THIS column shows where\n"
@@ -1078,7 +1079,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                              "🟢 LB = fresh longs in next month → bullish carry-over\n"
                              "🔴 SB = fresh shorts in next month → bearish positioning\n"
                              "OI change matched by the SAME next-month expiry_date — no rollover artifacts"),
-                    "far_fut_label": st.column_config.TextColumn(
+                    "far_fut_label": _htc(
                         "Fut Far",
                         help="FUTURES — Far-month OI signal (3rd monthly expiry):\n"
                              "Speculative / longer-term positioning.\n"
@@ -1095,7 +1096,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                     #   OI↑ + premium↓ → WRITING (supply: writers push price down)
                     #   OI↓ + premium↑ → SHORT COVERING (writers buying back)
                     #   OI↓ + premium↓ → LONG EXITING (buyers selling out)
-                    "near_opt_label": st.column_config.TextColumn(
+                    "near_opt_label": _htc(
                         "Opt Near",
                         help="OPTIONS — Near-month OI+Premium matrix (buying vs writing):\n\n"
                              "🔥 Bull C.Buy+P.Wrt = Calls being BOUGHT + Puts being WRITTEN\n"
@@ -1110,7 +1111,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                              "  → Iron condor / theta play: low volatility expected\n\n"
                              "PCR shown as context — the OI-premium signal is the primary read.\n"
                              "Near expiry: positions rolling → read Opt Next instead"),
-                    "next_opt_label": st.column_config.TextColumn(
+                    "next_opt_label": _htc(
                         "Opt Next",
                         help="OPTIONS — Next-month OI+Premium matrix (most reliable near expiry):\n\n"
                              "Same signal logic as Opt Near but for the next monthly expiry.\n"
@@ -1121,7 +1122,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                              "Compare with Fut Next (futures OI direction) for confirmation:\n"
                              "Fut Next = 🟢 LB + Opt Next = 🔥 Bull → HIGH CONVICTION LONG\n"
                              "Fut Next = 🔴 SB + Opt Next = ❄️ Bear → HIGH CONVICTION SHORT"),
-                    "far_opt_label": st.column_config.TextColumn(
+                    "far_opt_label": _htc(
                         "Opt Far",
                         help="OPTIONS — Far-month (3rd expiry) PCR-based signal:\n"
                              "Far-month options have thin volume — OI-premium matrix is unreliable.\n"
@@ -1130,7 +1131,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                              "Heavy put buying in far month = institutions hedging for next 2–3 months\n"
                              "Heavy call buying in far month = speculative bullish positioning\n"
                              "— = no far-month options activity for this stock"),
-                    "deliv_vs_100d_pct": st.column_config.NumberColumn(
+                    "deliv_vs_100d_pct": _hnc(
                         "vs 100D", format="%+.1f%%",
                         help="(7D Wtd Delivery % ÷ 100D avg − 1) × 100\n\n"
                              "+15% = recent delivery is 15% ABOVE own 100D norm → strong conviction\n"
@@ -1138,34 +1139,34 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                              "0% = exactly at own historical average\n\n"
                              "Use this to instantly compare the two adjacent columns — "
                              "positive = above own norm (bullish quality), negative = below norm."),
-                    "avg_deliv_per_100d": st.column_config.NumberColumn(
+                    "avg_deliv_per_100d": _hnc(
                         "100D Avg Del%", format="%.1f%%",
                         help="Stock's own 100-trading-day average delivery %\n\n"
                              "This is the baseline for own-history conviction.\n"
                              "Compare against Wtd Deliv % (7D) to see if today is above or below normal for THIS stock.\n"
                              "A stock at 15% delivery is 'Strong' if its own 100D avg is 8%, even if peers are 40%."),
-                    "wtd_deliv_per": st.column_config.NumberColumn(
+                    "wtd_deliv_per": _hnc(
                         "Wtd Deliv %", format="%.1f%%",
                         help="Turnover-Weighted Delivery %  (last 7 trading days)\n\n"
                              "Formula: Σ(deliv_per × turnover_lacs) / Σ(turnover_lacs)\n\n"
                              "Why weighted: a ₹500 Cr stock at 60% delivery counts more\n"
                              "than a ₹5 Cr stock at 80% delivery.\n"
                              "High % = institutions are taking delivery (holding, not squaring off)"),
-                    "deliv_value_cr":st.column_config.NumberColumn(
+                    "deliv_value_cr":_hnc(
                         "Deliv Value (₹ Cr)", format="₹%.1f",
                         help="Delivery Value in ₹ Crores  (last 7 trading days)\n\n"
                              "Formula: Σ(deliv_per / 100 × turnover_lacs) / 100\n\n"
                              "= actual ₹ worth of shares taken home (not squared off intraday)\n"
                              "This is the absolute measure of institutional conviction —\n"
                              "retail traders square off intraday, institutions take delivery"),
-                    "turnover_cr":   st.column_config.NumberColumn(
+                    "turnover_cr":   _hnc(
                         "Turnover (₹ Cr)", format="₹%.1f",
                         help="Total Traded Value in ₹ Crores  (last 7 trading days)\n\n"
                              "Formula: Σ(turnover_lacs) / 100\n\n"
                              "= total buy + sell value traded\n"
                              "High turnover with low delivery % = speculative / intraday activity\n"
                              "High turnover with high delivery % = institutional accumulation"),
-                    "price_chg_pct": st.column_config.NumberColumn(
+                    "price_chg_pct": _hnc(
                         "Price Chg %", format="%+.2f%%",
                         help="Average Daily Price Change %  (last 7 trading days)\n\n"
                              "Formula: AVG((close_price − prev_close) / prev_close × 100)\n\n"
@@ -1509,28 +1510,28 @@ def _render_custom_range(all_dates: list, min_turnover: float) -> None:
                     hide_index=True,
                     use_container_width=True,
                     column_config={
-                        "symbol":       st.column_config.TextColumn("Symbol", width="small"),
-                        "company_name": st.column_config.TextColumn("Company"),
-                        "industry":     st.column_config.TextColumn("Sub-Sector"),
-                        "price_start":  st.column_config.NumberColumn(
+                        "symbol":       _htc("Symbol", width="small"),
+                        "company_name": _htc("Company"),
+                        "industry":     _htc("Sub-Sector"),
+                        "price_start":  _hnc(
                             f"Price on {from_snap.strftime('%d %b')}", format="₹%.2f",
                             help="Price at the start of the period (prev_close of first trading day)"),
-                        "price_end":    st.column_config.NumberColumn(
+                        "price_end":    _hnc(
                             f"Price on {to_snap.strftime('%d %b')}", format="₹%.2f",
                             help="Price at the end of the period (close of last trading day)"),
-                        "period_ret_pct": st.column_config.NumberColumn(
+                        "period_ret_pct": _hnc(
                             "Period Return %", format="%+.2f%%",
                             help=f"(Price End − Price Start) / Price Start × 100\n"
                                  f"Period: {from_snap.strftime('%d %b')} → {to_snap.strftime('%d %b %Y')}"),
-                        "wtd_deliv_per": st.column_config.NumberColumn(
+                        "wtd_deliv_per": _hnc(
                             "Avg Delivery %", format="%.1f%%",
                             help="Turnover-weighted average delivery % over the period"),
-                        "deliv_value_cr": st.column_config.NumberColumn(
+                        "deliv_value_cr": _hnc(
                             "Delivery Value (₹ Cr)", format="₹%.1f",
                             help="Total delivery value in ₹ Crores over the period"),
-                        "turnover_cr": st.column_config.NumberColumn(
+                        "turnover_cr": _hnc(
                             "Turnover (₹ Cr)", format="₹%.1f"),
-                        "trading_days": st.column_config.NumberColumn(
+                        "trading_days": _hnc(
                             "Trading Days", format="%d"),
                     },
                 )
@@ -1656,35 +1657,35 @@ def _render_signal_validation(
         hide_index=True,
         use_container_width=True,
         column_config={
-            "sector":            st.column_config.TextColumn("Sector"),
-            "phase":             st.column_config.TextColumn("Phase on Signal Date",
+            "sector":            _htc("Sector"),
+            "phase":             _htc("Phase on Signal Date",
                 help=f"Rotation phase as of {signal_date.strftime('%d %b %Y')}"),
-            "signal_confidence": st.column_config.NumberColumn(
+            "signal_confidence": _hnc(
                 "Confidence", format="%.2f",
                 help="Signal strength 0→1.\n"
                      "Based on slope_z magnitude, price-delivery anti-correlation strength.\n"
                      "High confidence (>0.7) = stronger evidence for the phase call."),
-            "forward_ret_pct":   st.column_config.NumberColumn(
+            "forward_ret_pct":   _hnc(
                 "Forward Return (abs)", format="%+.2f%%",
                 help=f"Cumulative sector return from {signal_date.strftime('%d %b')} → {selected_date.strftime('%d %b')}"),
-            "forward_vs_nifty":  st.column_config.NumberColumn(
+            "forward_vs_nifty":  _hnc(
                 "vs Nifty50",  format="%+.2f%%",
                 help=f"Forward return minus Nifty50 ({nifty_fwd_ret:+.2f}% forward)\n"
                      "Positive = sector outperformed market. Used for accuracy scoring."
                      if nifty_fwd_ret is not None else "Forward return vs Nifty50"),
-            "signal_correct":    st.column_config.TextColumn("Correct?", help=correct_help),
-            "cum_price_ret_pct": st.column_config.NumberColumn(
+            "signal_correct":    _htc("Correct?", help=correct_help),
+            "cum_price_ret_pct": _hnc(
                 "Price Ret on Signal Date", format="%+.2f%%",
                 help=f"Sector return as of {signal_date.strftime('%d %b')} — what triggered classification"),
-            "slope_z":           st.column_config.NumberColumn(
+            "slope_z":           _hnc(
                 "Delivery Slope Z", format="%+.2f",
                 help="Delivery momentum Z-score on the signal date"),
-            "price_deliv_corr":  st.column_config.NumberColumn(
+            "price_deliv_corr":  _hnc(
                 "Price-Del Corr", format="%.2f",
                 help="Correlation between daily price return and daily delivery %.\n"
                      "Negative = price rising as delivery falls (distribution confirmed).\n"
                      "Only Weakening signals with corr < -0.15 are shown as Weakening."),
-            "deliv_chg_pct":     st.column_config.NumberColumn(
+            "deliv_chg_pct":     _hnc(
                 "Del Chg% on Signal Date", format="%+.1f%%",
                 help="Delivery value change vs prior period on the signal date"),
         },
@@ -1964,35 +1965,35 @@ Ideal entry: sector moving from Improving to Leading (rising delivery + price cr
         hide_index=True,
         use_container_width=True,
         column_config={
-            "sector":            st.column_config.TextColumn("Sector"),
-            "phase":             st.column_config.TextColumn("Phase"),
-            "flow_signal":       st.column_config.TextColumn("Flow Signal"),
-            "cum_price_ret_pct": st.column_config.NumberColumn(
+            "sector":            _htc("Sector"),
+            "phase":             _htc("Phase"),
+            "flow_signal":       _htc("Flow Signal"),
+            "cum_price_ret_pct": _hnc(
                 "Price Return %", format="%+.2f%%",
                 help="Cumulative turnover-weighted price return over the selected period\n"
                      "= compound product of daily sector returns"),
-            "slope_z":           st.column_config.NumberColumn(
+            "slope_z":           _hnc(
                 "Slope Z-Score", format="%+.2f",
                 help="Cross-sectional z-score of delivery slope across all sectors\n"
                      "Tells you which sectors are gaining vs losing institutional interest relative to each other\n"
                      "> 0.25σ = rising momentum   < -0.25σ = falling momentum"),
-            "delivery_slope":    st.column_config.NumberColumn(
+            "delivery_slope":    _hnc(
                 "Delivery Slope", format="%+.4f",
                 help="Linear regression slope of daily weighted delivery %\n"
                      "Positive = institutions increasingly committed over the period\n"
                      "Units: delivery % points per trading day"),
-            "deliv_value_cr":    st.column_config.NumberColumn(
+            "deliv_value_cr":    _hnc(
                 "Deliv Value (₹ Cr)", format="₹%.1f",
                 help="Total delivery value over the period in ₹ Crores"),
-            "deliv_chg_pct":     st.column_config.NumberColumn(
+            "deliv_chg_pct":     _hnc(
                 "Deliv Chg vs Prior %", format="%+.1f%%",
                 help="% change in delivery value vs the prior equal-length period\n"
                      "Positive = more institutional money flowing in this period\n"
                      "Negative = less institutional money (outflow vs prior period)"),
-            "avg_deliv_pct":     st.column_config.NumberColumn(
+            "avg_deliv_pct":     _hnc(
                 "Avg Delivery %", format="%.1f%%",
                 help="Average turnover-weighted delivery % over the current period"),
-            "num_days":          st.column_config.NumberColumn("Trading Days", format="%d"),
+            "num_days":          _hnc("Trading Days", format="%d"),
         },
     )
 
@@ -2612,62 +2613,62 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         st.dataframe(
             display,
             column_config={
-                "sector":         st.column_config.TextColumn("Sector"),
-                "signal":         st.column_config.TextColumn("Signal"),
-                "accum_score":    st.column_config.ProgressColumn(
+                "sector":         _htc("Sector"),
+                "signal":         _htc("Signal"),
+                "accum_score":    _hpc(
                     "Score", max_value=100, format="%.0f",
                     help="Score = 30% RS vs Nifty + 25% 5D Avg DV + 15% DV Today + 15% Breadth + 15% Z-Score\n"
                          "Cross-sectional rank: ranks sectors relative to each other on today's data"),
-                "coverage":       st.column_config.TextColumn(
+                "coverage":       _htc(
                     "Coverage",
                     help="Swing (3–15 days): Z-Score ≥ 2σ + Breadth ≥ 50%\n"
                          "Positional (4–8 weeks): DV Ratio > 1.2 + positive slope + Breadth ≥ 40%\n"
                          "Mid Term (3–4 months): steep 100-day slope + DV Ratio > 1.3 + Breadth ≥ 50%"),
-                "horizon":        st.column_config.TextColumn("Horizon"),
-                "dv_ratio":       st.column_config.NumberColumn(
+                "horizon":        _htc("Horizon"),
+                "dv_ratio":       _hnc(
                     "DV Today", format="%.2f×",
                     help="Today's delivered value ÷ own 100D daily average\n"
                          "1.0× = exactly average  |  1.5× = 50% above norm\n"
                          "Single-day snapshot — can spike from one large block trade"),
-                "dv_ratio_5d":    st.column_config.NumberColumn(
+                "dv_ratio_5d":    _hnc(
                     "5D Avg DV", format="%.2f×",
                     help="5-day average DV ratio = (1W delivery ÷ 5) ÷ (100D delivery ÷ 100)\n"
                          "1.0× = exactly normal  |  1.3× = 30% above weekly average\n"
                          "Primary signal driver — smooths single-day noise over a week"),
-                "z_score":        st.column_config.NumberColumn(
+                "z_score":        _hnc(
                     "Z-Score (σ)", format="%+.2f",
                     help="(Today's DV − 100D mean) ÷ 100D std deviation\n"
                          "Z ≥ 2.0 = top 2.5% of days  |  Z ≥ 1.0 = top 16%  |  Z ≤ -0.5 = below normal\n"
                          "Statistically grounded — adapts to each sector's own delivery volatility"),
-                "breadth":        st.column_config.NumberColumn(
+                "breadth":        _hnc(
                     "Breadth", format="%.0f%%",
                     help="% of stocks in sector where today's delivery > own 100D avg daily DV\n"
                          "70%+ = broad institutional participation\n"
                          "30% or below = one large-cap driving the sector signal"),
-                "trend_slope":    st.column_config.NumberColumn(
+                "trend_slope":    _hnc(
                     "Trend Slope", format="%+.3f",
                     help="Linear regression slope of 100-day delivery % series\n"
                          "Normalised by mean — % change per trading day\n"
                          "Positive = delivery trend rising  |  Negative = delivery trend falling"),
-                "price_1w":       st.column_config.NumberColumn(
+                "price_1w":       _hnc(
                     "1W Price%", format="%+.2f%%",
                     help="Cumulative 1W price return: (today_close − 5D_ago_close) / 5D_ago_close × 100"),
-                "price_1m":       st.column_config.NumberColumn("1M Price%",  format="%+.2f%%"),
-                "price_3m":       st.column_config.NumberColumn("3M Price%",  format="%+.2f%%"),
-                "today_dv_cr":    st.column_config.NumberColumn(
+                "price_1m":       _hnc("1M Price%",  format="%+.2f%%"),
+                "price_3m":       _hnc("3M Price%",  format="%+.2f%%"),
+                "today_dv_cr":    _hnc(
                     "Today DV (₹ Cr)", format="₹%.1f",
                     help="Today's single-day delivered value in ₹ Crores\n"
                          "Absolute size of today's institutional activity"),
-                "deliv_val_1w_cr":st.column_config.NumberColumn(
+                "deliv_val_1w_cr":_hnc(
                     "1W Deliv Val (₹ Cr)", format="₹%.1f",
                     help="₹ value of shares delivered in last 1 week — total institutional conviction"),
-                "today_wtd_deliv_pct": st.column_config.NumberColumn(
+                "today_wtd_deliv_pct": _hnc(
                     "Today Del%", format="%.1f%%",
                     help="Today's turnover-weighted delivery %\n\n"
                          "Conviction quality check: if this is BELOW the 100D avg, a high Z-Score\n"
                          "is a Volume Spike (speculative), not institutional accumulation.\n"
                          "Formula: Σ(deliv_per × turnover_lacs) / Σ(turnover_lacs)"),
-                "avg_wtd_deliv_pct_100d": st.column_config.NumberColumn(
+                "avg_wtd_deliv_pct_100d": _hnc(
                     "100D Avg Del%", format="%.1f%%",
                     help="Sector's own 100-trading-day average turnover-weighted delivery %\n\n"
                          "Baseline for the conviction quality check.\n"
@@ -3037,12 +3038,12 @@ def _render_rs_charts(df: pd.DataFrame, period: str, period_label: str) -> None:
             use_container_width=True,
             hide_index=True,
             column_config={
-                "sector":      st.column_config.TextColumn("Sector"),
-                "signal":      st.column_config.TextColumn("Signal"),
-                "accum_score": st.column_config.NumberColumn("Score", format="%.1f"),
-                rs_col:        st.column_config.NumberColumn(f"RS {period_label} %", format="%+.2f%%"),
-                "z_score":     st.column_config.NumberColumn("Z-Score",  format="%+.2f"),
-                "dv_ratio":    st.column_config.NumberColumn("DV Ratio", format="%.2f×"),
+                "sector":      _htc("Sector"),
+                "signal":      _htc("Signal"),
+                "accum_score": _hnc("Score", format="%.1f"),
+                rs_col:        _hnc(f"RS {period_label} %", format="%+.2f%%"),
+                "z_score":     _hnc("Z-Score",  format="%+.2f"),
+                "dv_ratio":    _hnc("DV Ratio", format="%.2f×"),
             },
         )
 

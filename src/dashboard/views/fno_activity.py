@@ -15,6 +15,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc
 from plotly.subplots import make_subplots
 
 from src.dashboard.cache.queries import (
@@ -848,19 +849,19 @@ def _render_index_options_panel(
             hide_index=True,
             use_container_width=True,
             column_config={
-                "Strike":   st.column_config.NumberColumn("Strike", format="%,.0f"),
-                "CE OI":    st.column_config.NumberColumn("CE OI", format="%,d"),
-                "CE Chg OI":st.column_config.NumberColumn("CE Chg OI", format="%+,d"),
-                "CE Vol":   st.column_config.NumberColumn("CE Vol", format="%,d"),
-                "CE Price": st.column_config.NumberColumn("CE Price (₹)", format="₹%.2f"),
-                "PE OI":    st.column_config.NumberColumn("PE OI", format="%,d"),
-                "PE Chg OI":st.column_config.NumberColumn("PE Chg OI", format="%+,d"),
-                "PE Vol":   st.column_config.NumberColumn("PE Vol", format="%,d"),
-                "PE Price": st.column_config.NumberColumn("PE Price (₹)", format="₹%.2f"),
-                "Total OI": st.column_config.NumberColumn("Total OI", format="%,d"),
-                "PCR":      st.column_config.NumberColumn("PCR", format="%.2f"),
-                "ATM?":     st.column_config.CheckboxColumn("ATM?"),
-                "Max Pain?":st.column_config.CheckboxColumn("Max Pain?"),
+                "Strike":   _hnc("Strike", format="%,.0f"),
+                "CE OI":    _hnc("CE OI", format="%,d"),
+                "CE Chg OI":_hnc("CE Chg OI", format="%+,d"),
+                "CE Vol":   _hnc("CE Vol", format="%,d"),
+                "CE Price": _hnc("CE Price (₹)", format="₹%.2f"),
+                "PE OI":    _hnc("PE OI", format="%,d"),
+                "PE Chg OI":_hnc("PE Chg OI", format="%+,d"),
+                "PE Vol":   _hnc("PE Vol", format="%,d"),
+                "PE Price": _hnc("PE Price (₹)", format="₹%.2f"),
+                "Total OI": _hnc("Total OI", format="%,d"),
+                "PCR":      _hnc("PCR", format="%.2f"),
+                "ATM?":     _hcc("ATM?"),
+                "Max Pain?":_hcc("Max Pain?"),
             },
         )
 
@@ -1095,12 +1096,12 @@ def _render_index_futures_panel(trade_date: date, symbol: str, expiry_df: pd.Dat
         ]
         st.dataframe(disp, hide_index=True, use_container_width=True,
             column_config={
-                "Settle Price":   st.column_config.NumberColumn(format="%,.2f"),
-                "OI":             st.column_config.NumberColumn(format="%,d"),
-                "OI Chg":         st.column_config.NumberColumn(format="%+,d"),
-                "% of Total":     st.column_config.NumberColumn(format="%.1f%%"),
-                "Carry (pts)":    st.column_config.NumberColumn(format="%+.2f"),
-                "Carry (% ann)":  st.column_config.NumberColumn(format="%+.2f%%"),
+                "Settle Price":   _hnc(format="%,.2f"),
+                "OI":             _hnc(format="%,d"),
+                "OI Chg":         _hnc(format="%+,d"),
+                "% of Total":     _hnc(format="%.1f%%"),
+                "Carry (pts)":    _hnc(format="%+.2f"),
+                "Carry (% ann)":  _hnc(format="%+.2f%%"),
             })
 
     st.divider()

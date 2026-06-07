@@ -12,6 +12,7 @@ from __future__ import annotations
 from datetime import date
 
 import streamlit as st
+from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc
 
 __all__ = ["render"]
 
@@ -354,12 +355,12 @@ def _render_allocation(as_of_date: date, cached_fpi_category_breakdown) -> None:
         use_container_width=True,
         hide_index=True,
         column_config={
-            "Category":        st.column_config.TextColumn("Category"),
-            "Gross Buy (Cr)":  st.column_config.NumberColumn("Gross Buy (₹Cr)", format="%.0f"),
-            "Gross Sell (Cr)": st.column_config.NumberColumn("Gross Sell (₹Cr)", format="%.0f"),
-            "Net (Cr)":        st.column_config.NumberColumn("Net (₹Cr)", format="%+.0f",
+            "Category":        _htc("Category"),
+            "Gross Buy (Cr)":  _hnc("Gross Buy (₹Cr)", format="%.0f"),
+            "Gross Sell (Cr)": _hnc("Gross Sell (₹Cr)", format="%.0f"),
+            "Net (Cr)":        _hnc("Net (₹Cr)", format="%+.0f",
                 help="Positive = net inflow; Negative = net outflow."),
-            "Net Share %":     st.column_config.NumberColumn("Net Share %", format="%+.1f",
+            "Net Share %":     _hnc("Net Share %", format="%+.1f",
                 help="This category's share of total FPI net allocation. High equity % = risk-on."),
         },
     )
@@ -495,15 +496,15 @@ def _render_raw_data(as_of_date: date, cached_fpi_summary) -> None:
         use_container_width=True,
         hide_index=True,
         column_config={
-            "trade_date":        st.column_config.DateColumn("Date", format="DD MMM YY",
+            "trade_date":        _hdc("Date", format="DD MMM YY",
                 help="Trading date"),
-            "category":          st.column_config.TextColumn("Category",
+            "category":          _htc("Category",
                 help="Asset class: Equity (stocks), Debt (bonds), Debt-VRR (variable rate repo), Hybrid, Others"),
-            "gross_purchase_cr": st.column_config.NumberColumn("Gross Buy (₹Cr)", format="%.0f",
+            "gross_purchase_cr": _hnc("Gross Buy (₹Cr)", format="%.0f",
                 help="Total FPI purchases in ₹ Crores"),
-            "gross_sales_cr":    st.column_config.NumberColumn("Gross Sell (₹Cr)", format="%.0f",
+            "gross_sales_cr":    _hnc("Gross Sell (₹Cr)", format="%.0f",
                 help="Total FPI sales in ₹ Crores"),
-            "net_investment_cr": st.column_config.NumberColumn("Net (₹Cr)", format="%+.0f",
+            "net_investment_cr": _hnc("Net (₹Cr)", format="%+.0f",
                 help="Net investment = Gross Buy - Gross Sell. Positive = net inflow into India."),
         },
     )

@@ -16,6 +16,7 @@ from datetime import date
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc
 
 from src.dashboard.cache.queries import (
     cached_fno_composite_signals,
@@ -631,27 +632,27 @@ def _render_all_stocks(df: pd.DataFrame, prefix: str) -> None:
 
     st.dataframe(disp, use_container_width=True, hide_index=True, height=580,
                  column_config={
-                     "Roll Signal": st.column_config.TextColumn("Roll Signal",
+                     "Roll Signal": _htc("Roll Signal",
                          help="Near vs Next month OI comparison.\n\n"
                               "🔄 Rolling Fwd = Near OI↓ + Next OI↑ (rolling positions forward)\n"
                               "📈 Building = Near OI rising >50K (fresh positions)\n"
                               "📉 Unwinding = Both OI falling (exiting)\n"
                               "⚖️ Neutral = within normal range"),
-                     "Near OI": st.column_config.TextColumn("Near OI",
+                     "Near OI": _htc("Near OI",
                          help="Near month futures open interest — always shown for cross-expiry comparison"),
-                     "Next OI": st.column_config.TextColumn("Next OI",
+                     "Next OI": _htc("Next OI",
                          help="Next month futures open interest — compare with Near OI to read rollover activity"),
-                     "Far OI":  st.column_config.TextColumn("Far OI",
+                     "Far OI":  _htc("Far OI",
                          help="Far month futures open interest"),
-                     f"{exp_name} Basis%": st.column_config.TextColumn(f"{exp_name} Basis%",
+                     f"{exp_name} Basis%": _htc(f"{exp_name} Basis%",
                          help="(Futures settlement − Spot) ÷ Spot × 100\n\n"
                               "Positive = futures premium (bulls paying carry, bullish)\n"
                               "Negative = futures discount (hedging / roll pressure, bearish)"),
-                     f"{exp_name} PCR": st.column_config.TextColumn(f"{exp_name} PCR",
+                     f"{exp_name} PCR": _htc(f"{exp_name} PCR",
                          help="Put/Call OI ratio for this expiry.\n\n"
                               "PCR > 1.5 = panic puts → contrarian bullish\n"
                               "PCR < 0.7 = call heavy → contrarian bearish"),
-                     f"{exp_name} Max Pain": st.column_config.TextColumn(f"{exp_name} Max Pain",
+                     f"{exp_name} Max Pain": _htc(f"{exp_name} Max Pain",
                          help="Strike where option writers' total loss is minimised.\n"
                               "Price gravitates here heading into expiry."),
                  })

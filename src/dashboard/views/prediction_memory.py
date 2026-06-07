@@ -15,6 +15,7 @@ from datetime import date
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
+from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc, cc as _hcc, pc as _hpc
 
 from src.analytics.memory_engine import (
     get_accuracy_report,
@@ -394,7 +395,7 @@ def _render_similar_days(mem) -> None:
         hide_index=True,
         use_container_width=True,
         column_config={
-            "Similarity": st.column_config.ProgressColumn(
+            "Similarity": _hpc(
                 "Similarity", min_value=0, max_value=1, format="%.3f"
             ),
         },
@@ -522,18 +523,18 @@ def _render_prediction_log(symbol: str) -> None:
             hide_index=True,
             use_container_width=True,
             column_config={
-                "Date": st.column_config.TextColumn(
+                "Date": _htc(
                     "Date",
                     help="The trading day on which this prediction was made (at market close). "
                          "The prediction is for the NEXT trading session, not this date itself.",
                 ),
-                "Spot": st.column_config.TextColumn(
+                "Spot": _htc(
                     "Spot",
                     help="Index closing price on this trading day — the price the engine saw "
                          "when it made the prediction. The predicted range is centred around this.",
                     width="small",
                 ),
-                "Pred": st.column_config.TextColumn(
+                "Pred": _htc(
                     "Pred",
                     help="Predicted direction for the NEXT trading session.\n\n"
                          "UP = composite score ≥ +3 → bullish bias\n"
@@ -541,7 +542,7 @@ def _render_prediction_log(symbol: str) -> None:
                          "SIDEWAYS = score between −3 and +3 → no clear edge",
                     width="small",
                 ),
-                "Conf": st.column_config.TextColumn(
+                "Conf": _htc(
                     "Conf",
                     help="Confidence level of the prediction.\n\n"
                          "HIGH   = score ≥ ±12 (~6+ signals aligned)\n"
@@ -551,7 +552,7 @@ def _render_prediction_log(symbol: str) -> None:
                          "check the Accuracy by Confidence section above.",
                     width="small",
                 ),
-                "Score": st.column_config.TextColumn(
+                "Score": _htc(
                     "Score",
                     help="Composite directional score — sum of all signal scores.\n\n"
                          "Range: typically −20 to +20 (max possible ≈ ±35).\n"
@@ -560,7 +561,7 @@ def _render_prediction_log(symbol: str) -> None:
                          "collinear FAO data from dominating the composite.",
                     width="small",
                 ),
-                "Pred Range (next day)": st.column_config.TextColumn(
+                "Pred Range (next day)": _htc(
                     "Pred Range (next day)",
                     help="68% expected-move band for the NEXT trading session.\n\n"
                          "Calculated as: Spot ± 1σ daily move, where σ is a blend of:\n"
@@ -570,7 +571,7 @@ def _render_prediction_log(symbol: str) -> None:
                          "If the actual close falls outside, it is a statistically unusual move.",
                     width="medium",
                 ),
-                "Target": st.column_config.TextColumn(
+                "Target": _htc(
                     "Target",
                     help="Directional close target for the next session.\n\n"
                          "Formula: Spot + (conviction × expected_move)\n"
@@ -580,7 +581,7 @@ def _render_prediction_log(symbol: str) -> None:
                          "A SIDEWAYS prediction with score ~0 gives target ≈ Spot.",
                     width="small",
                 ),
-                "Actual": st.column_config.TextColumn(
+                "Actual": _htc(
                     "Actual",
                     help="What actually happened on the NEXT trading session.\n\n"
                          "UP      = next-day return > +0.15%\n"
@@ -590,7 +591,7 @@ def _render_prediction_log(symbol: str) -> None:
                          "so comparisons are apples-to-apples.",
                     width="small",
                 ),
-                "Return": st.column_config.TextColumn(
+                "Return": _htc(
                     "Return",
                     help="Actual % return of the index on the NEXT trading session "
                          "(close-to-close from this date to the following trading day).\n\n"
@@ -598,7 +599,7 @@ def _render_prediction_log(symbol: str) -> None:
                          "whether the prediction was profitable.",
                     width="small",
                 ),
-                "Correct": st.column_config.TextColumn(
+                "Correct": _htc(
                     "Correct",
                     help="✅ = predicted direction matched actual direction on the next day.\n"
                          "❌ = prediction was wrong.\n"
@@ -607,7 +608,7 @@ def _render_prediction_log(symbol: str) -> None:
                          "also moved < 0.15% the next day.",
                     width="small",
                 ),
-                "HMM": st.column_config.TextColumn(
+                "HMM": _htc(
                     "HMM",
                     help="Hidden Markov Model regime state detected on this day.\n\n"
                          "Bull     = HMM high-probability bull state (mean return > 0)\n"
@@ -618,7 +619,7 @@ def _render_prediction_log(symbol: str) -> None:
                          "in the 'Accuracy by HMM Regime' section above.",
                     width="small",
                 ),
-                "Hurst": st.column_config.TextColumn(
+                "Hurst": _htc(
                     "Hurst",
                     help="Hurst exponent (R/S + DFA average) on this day.\n\n"
                          "H > 0.58 → Trending market (momentum signals are reliable)\n"
@@ -628,7 +629,7 @@ def _render_prediction_log(symbol: str) -> None:
                          "Higher Hurst = market has autocorrelation = trends persist.",
                     width="small",
                 ),
-                "Status": st.column_config.TextColumn(
+                "Status": _htc(
                     "Status",
                     help="✅ Filled  = next-day actual return has been recorded and the "
                          "prediction has been evaluated.\n"
