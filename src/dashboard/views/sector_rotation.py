@@ -520,7 +520,8 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                  regime_label: str = "SIDEWAYS",
                  regime: "dict | None" = None,
                  defense_mode: bool = False,
-                 score_col: str = "accum_score") -> None:
+                 score_col: str = "accum_score",
+                 fno_filter: "tuple | None" = None) -> None:
     meta       = _SIGNAL_META.get(row["signal"], {})
     color      = meta.get("color", "#888")
     is_avoid   = row["signal"] in _AVOID_SIGNAL_SET
@@ -1012,8 +1013,19 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                     (shown["ltp"] <= max_price)
                 ]
 
+            # ── F&O positioning filter (futures buildup / options bias by expiry) ──
+            _fno_part = None
+            if fno_filter:
+                _instr, _exp, _tokens = fno_filter
+                _ecode = {"Near month": "near", "Next month": "next", "Far month": "far"}.get(_exp, "near")
+                _col = f"{_ecode}_{'fut' if _instr == 'Futures' else 'opt'}_label"
+                if _col in shown.columns and _tokens:
+                    shown = shown[shown[_col].fillna("").apply(
+                        lambda s: any(t in str(s) for t in _tokens))]
+                    _fno_part = f"{_instr} {_exp.split()[0]} ∈ {{{', '.join(_tokens)}}}"
+
             n_hidden = len(stocks) - len(shown)
-            if n_hidden:
+            if n_hidden or _fno_part:
                 filter_parts = [f"Wtd Deliv % > {deliv_threshold:.0f}%"]
                 if deliv_vs_100d_pct > 0:
                     filter_parts.append(f"7D ≥ {deliv_vs_100d_pct:.0f}%+ above own 100D avg")
@@ -1023,6 +1035,8 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                     filter_parts.append(f"Price ≥ ₹{min_price:,.0f}")
                 elif max_price > 0:
                     filter_parts.append(f"Price ≤ ₹{max_price:,.0f}")
+                if _fno_part:
+                    filter_parts.append(_fno_part)
                 st.caption(
                     f"Showing {len(shown)} of {len(stocks)} stocks — "
                     f"{' AND '.join(filter_parts)} "
@@ -2467,6 +2481,41 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             ),
         ))
 
+    # ── F&O positioning filter — futures buildup / options bias by expiry ──────
+    _gcol1, _gcol2, _gcol3 = st.columns([1, 1, 2])
+    with _gcol1:
+        fno_instrument = st.selectbox(
+            "F&O filter — instrument", ["(off)", "Futures", "Options"],
+            key="rot_fno_instr",
+            help="Filter the per-stock lists by what F&O traders are doing.\n"
+                 "Futures = price+OI buildup (LB/SB/SC/LU). Options = call/put OI-premium bias.\n"
+                 "'(off)' = no F&O filter.")
+    _off = fno_instrument == "(off)"
+    with _gcol2:
+        fno_expiry = st.selectbox(
+            "Expiry", ["Near month", "Next month", "Far month"], key="rot_fno_exp",
+            disabled=_off,
+            help="Which expiry's positioning to filter on. Near = current month (most liquid); "
+                 "Next/Far = forward positioning (read Next on expiry day when Near is rolling).")
+    with _gcol3:
+        if fno_instrument == "Futures":
+            _opts = {"🟢 Long Buildup (LB)": "LB", "🔴 Short Buildup (SB)": "SB",
+                     "🔵 Short Covering (SC)": "SC", "🟠 Long Unwinding (LU)": "LU"}
+        elif fno_instrument == "Options":
+            _opts = {"🔥 Bullish (C.Buy/P.Wrt)": "Bull", "❄️ Bearish (C.Wrt/P.Buy)": "Bear",
+                     "⚡ Vol Bet (both bought)": "Vol", "📊 Range (both written)": "Range"}
+        else:
+            _opts = {}
+        _sel = st.multiselect(
+            "Show only stocks with F&O signal", list(_opts.keys()), key="rot_fno_sig",
+            disabled=_off,
+            help="Show only stocks whose chosen-expiry F&O signal matches any selected. "
+                 "LB = fresh longs (OI↑ price↑), SB = fresh shorts (OI↑ price↓), "
+                 "SC = short covering (OI↓ price↑), LU = long unwinding (OI↓ price↓).")
+        fno_tokens = [_opts[s] for s in _sel]
+    fno_filter = ((fno_instrument, fno_expiry, fno_tokens)
+                  if (not _off and fno_tokens) else None)
+
     if _n_thin:
         st.caption(
             f"🔒 {_n_thin} thin / single-name / illiquid bucket(s) excluded from the "
@@ -2499,7 +2548,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
                              min_price=min_price, max_price=max_price,
                              regime_label=r_label, regime=regime, defense_mode=_defense_mode,
-                             score_col=_rank_col)
+                             score_col=_rank_col, fno_filter=fno_filter)
 
     with col_avoid:
         st.markdown(f"### {regime.get('avoid_label', '🔴 SECTORS TO AVOID / EXIT')}")
@@ -2519,7 +2568,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
                              min_price=min_price, max_price=max_price,
                              regime_label=r_label, regime=regime, defense_mode=_defense_mode,
-                             score_col=_rank_col)
+                             score_col=_rank_col, fno_filter=fno_filter)
 
         # Tier 2 — relative laggards: weakest sectors by score, excluding any
         # already shown in the invest / caution / distribution lists. The absolute
@@ -2543,7 +2592,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
                              min_price=min_price, max_price=max_price,
                              regime_label=r_label, regime=regime, defense_mode=_defense_mode,
-                             score_col=_rank_col)
+                             score_col=_rank_col, fno_filter=fno_filter)
 
     if not caution.empty:
         st.markdown("---")
@@ -2557,7 +2606,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
                          min_price=min_price, max_price=max_price,
                          regime_label=r_label, regime=regime, defense_mode=_defense_mode,
-                         score_col=_rank_col)
+                         score_col=_rank_col, fno_filter=fno_filter)
 
     st.markdown("---")
 
