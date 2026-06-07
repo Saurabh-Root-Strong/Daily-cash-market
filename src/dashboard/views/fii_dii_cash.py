@@ -49,6 +49,32 @@ def render(selected_date: date) -> None:
         "Source: NSE (live) + Groww/CSV (history)."
     )
 
+    # ── 📅 1–2 Week Outlook (consolidated, from >1yr of data) ─────────────────
+    try:
+        from src.analytics.fii_dii_intelligence import get_two_week_outlook
+        ow = get_two_week_outlook(selected_date)
+    except Exception:
+        ow = {}
+    if ow:
+        c = ow["bias_color"]
+        _sup = "".join(f"<li>{s}</li>" for s in ow["supports"][:3])
+        _rsk = "".join(f"<li>{s}</li>" for s in ow["risks"][:3]) or "<li>None pressing right now.</li>"
+        st.markdown(
+            f"<div style='border:1px solid {c}55;border-left:5px solid {c};border-radius:8px;"
+            f"padding:10px 16px;margin-bottom:6px;background:rgba(255,255,255,0.02)'>"
+            f"<div style='font-size:11px;color:#888;letter-spacing:.5px'>📅 1–2 WEEK OUTLOOK · "
+            f"synthesised from &gt;1yr of FII/DII + index data</div>"
+            f"<div style='font-size:19px;font-weight:800;color:{c};margin:2px 0'>{ow['bias']}</div>"
+            f"<div style='font-size:12.5px;color:rgba(255,255,255,0.85)'>{ow['base_case']}</div>"
+            f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:8px;font-size:11.5px'>"
+            f"<div><b style='color:#69f0ae'>Supports</b><ul style='margin:2px 0 0 16px;padding:0'>{_sup}</ul></div>"
+            f"<div><b style='color:#ff9100'>Risks</b><ul style='margin:2px 0 0 16px;padding:0'>{_rsk}</ul></div>"
+            f"</div>"
+            f"<div style='font-size:12px;color:#ffd600;margin-top:7px'>🎯 <b>Trip-wire:</b> {ow['tripwire']}</div>"
+            f"<div style='font-size:10.5px;color:#777;margin-top:4px'>Confidence: {ow['confidence']}</div>"
+            f"</div>", unsafe_allow_html=True,
+        )
+
     df = _load()
     if df.empty:
         st.info("No FII/DII cash data yet. Use the controls below to fetch from NSE "

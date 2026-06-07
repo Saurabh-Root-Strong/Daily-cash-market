@@ -262,3 +262,88 @@ def get_flow_history_pattern(as_of_date: date, horizon: int = 10) -> dict:
         "series": series.to_dict("records"),
         "n_days": int(len(study)),
     }
+
+
+def get_two_week_outlook(as_of_date: date) -> dict:
+    """
+    Consolidated 1–2 week outlook — synthesises the VALIDATED engines into one
+    honest read: flow regime (FII-DII) + what that regime led to historically +
+    the weekly mean-reversion tilt + the DII trip-wire. Returns a bias label,
+    supports, risks, the trip-wire, and an explicit (low) confidence.
+
+    NOT a forecast: every component is a weak/descriptive tendency. The value is a
+    coherent base case + the one condition that flips it (DII turning seller).
+    """
+    flow = get_flow_intelligence(as_of_date)
+    if not flow:
+        return {}
+    hist = get_flow_history_pattern(as_of_date)
+    try:
+        from src.analytics.weekly_outlook import get_weekly_outlook
+        nifty_wk = next((r for r in get_weekly_outlook(as_of_date)
+                         if r["label"] == "Nifty 50"), None)
+    except Exception:
+        nifty_wk = None
+
+    score = 0.0
+    supports: list[str] = []
+    risks: list[str] = []
+    tag = flow["regime_tag"]
+
+    if tag == "ABSORBED SELLING":
+        supports.append("DII absorbing FII selling — downside cushioned "
+                        "(this regime historically held ~flat over 2 weeks, no crash).")
+    elif tag == "BROAD RISK-OFF":
+        score -= 2; risks.append("BOTH FII and DII are net sellers — no domestic floor (true risk-off).")
+    elif tag == "ALIGNED BUYING":
+        score += 2; supports.append("FII and DII both buying — broad demand tailwind.")
+    elif tag == "FII-LED BUYING":
+        score += 1; supports.append("FII buying is absorbing DII supply — constructive.")
+
+    if nifty_wk:
+        if nifty_wk["weekly_bias"] == "UP":
+            score += 1
+            supports.append(f"Nifty is oversold (RSI {nifty_wk['rsi']:.0f}) — a mild mean-reversion bounce bias.")
+        elif nifty_wk["weekly_bias"] == "DOWN":
+            score -= 1
+            risks.append(f"Nifty is overbought (RSI {nifty_wk['rsi']:.0f}) — pullback risk into the week.")
+
+    if hist and hist.get("current_dist"):
+        m = hist["current_dist"]["mean"]
+        score += 0.5 if m > 0.3 else (-0.5 if m < -0.3 else 0.0)
+
+    if flow["dii_5d"] > 10000:
+        supports.append("Strong DII buying is providing a floor.")
+    if flow.get("fii_accel", 0) < -8000:
+        risks.append("FII selling is ACCELERATING vs the prior week.")
+
+    if score >= 2:      bias, col = "MILDLY BULLISH", "#00c853"
+    elif score >= 0.5:  bias, col = "RANGE — MILD UP TILT", "#69f0ae"
+    elif score <= -2:   bias, col = "RISK-OFF — LEAN DOWN", "#ff5252"
+    elif score <= -0.5: bias, col = "RANGE — MILD DOWN TILT", "#ff9100"
+    else:               bias, col = "RANGE-BOUND / FLAT", "#9e9e9e"
+
+    if tag == "ABSORBED SELLING":
+        tripwire = ("Watch DII flow. If DII flips to net SELLER, the regime becomes BROAD "
+                    "RISK-OFF (FII + DII both selling = no floor = the real-downside case).")
+    elif tag == "BROAD RISK-OFF":
+        tripwire = "Watch for DII to step back in as a buyer — that would re-establish the floor."
+    else:
+        tripwire = "Watch whether FII and DII stay aligned; divergence changes the setup."
+
+    hist_txt = ""
+    if hist and hist.get("current_dist"):
+        cd = hist["current_dist"]
+        hist_txt = (f"In this regime historically, Nifty was {cd['mean']:+.1f}% on average 2 weeks "
+                    f"later ({cd['pos_pct']:.0f}% positive, n={cd['n']}).")
+
+    base_case = (f"Most-supported path: **{bias.lower()}**. " + (" ".join(supports[:2]) or "") +
+                 (" " + hist_txt if hist_txt else ""))
+
+    return {
+        "as_of": str(as_of_date), "bias": bias, "bias_color": col, "score": round(score, 1),
+        "base_case": base_case, "supports": supports, "risks": risks, "tripwire": tripwire,
+        "confidence": "Low–Moderate (descriptive tendencies, not a forecast)",
+        "regime_tag": tag, "weekly_bias": (nifty_wk["weekly_bias"] if nifty_wk else None),
+        "hist_2wk": (hist.get("current_dist") if hist else None),
+    }
