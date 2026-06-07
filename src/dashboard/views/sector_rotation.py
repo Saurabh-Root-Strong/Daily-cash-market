@@ -2514,7 +2514,11 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         "📊 Range (both written)":           ("Options", ["Range"], "Opt-Range"),
         "⚡ Vol Bet (both bought)":          ("Options", ["Vol"], "Opt-Vol"),
     }
-    _gcol1, _gcol2 = st.columns(2)
+    # ── ONE signal box with EXPIRY-TAGGED options (no separate per-month boxes) ──
+    # Pick combos like "Near · Long Buildup" + "Next · Short Buildup" in a single
+    # dropdown. Same expiry = OR; different expiries = AND.
+    # fno_filter = {expiry: [(instrument, [tokens], short), ...]}.
+    _gcol1, _gcol2, _gcol3 = st.columns([1, 1, 2])
     with _gcol1:
         fno_instruments = st.multiselect(
             "F&O filter — instrument", ["Futures", "Options"], key="rot_fno_instr",
@@ -2523,29 +2527,25 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
     _off = not fno_instruments
     with _gcol2:
         fno_expiries = st.multiselect(
-            "Expiry (one or more) — a signal box appears for EACH",
-            ["Near month", "Next month", "Far month"], key="rot_fno_exp", disabled=_off,
-            help="Pick the expiries to condition on. Each gets its OWN signal box below, and "
-                 "the per-expiry conditions are AND-combined — e.g. Near=Long Buildup AND "
-                 "Next=Short Buildup. Read 'Next' on expiry day (Near is rolling).")
-    # ── Per-expiry signal selectors (the key change) ─────────────────────────
-    # A separate signal multiselect per chosen expiry → you can require a SPECIFIC
-    # signal in each (Near=SB, Next=LB, Far=SC). Within an expiry = OR; across
-    # expiries = AND. fno_filter = {expiry: [(instrument, [tokens], short), ...]}.
-    fno_filter = {}
-    _ekey = {"Near month": "near", "Next month": "next", "Far month": "far"}
-    if fno_instruments and fno_expiries:
+            "Expiry (one or more)", ["Near month", "Next month", "Far month"],
+            key="rot_fno_exp", disabled=_off,
+            help="Which expiries to offer in the signal box. Read 'Next' on expiry day "
+                 "(Near is mid-rollover).")
+    _ESHORT = {"Near month": "Near", "Next month": "Next", "Far month": "Far"}
+    with _gcol3:
         _avail = [k for k, v in _SIG_MAP.items() if v[0] in fno_instruments]
-        _scols = st.columns(len(fno_expiries))
-        for _i, _exp in enumerate(fno_expiries):
-            with _scols[_i]:
-                _sel = st.multiselect(
-                    f"{_exp} — signal(s)", _avail, key=f"rot_fno_sig_{_ekey[_exp]}",
-                    help=f"Required positioning in the {_exp.lower()}. ANY selected matches "
-                         "(OR within this expiry); AND-combined with the other expiries.")
-                _sigs = [_SIG_MAP[s] for s in _sel if _SIG_MAP[s][0] in fno_instruments]
-                if _sigs:
-                    fno_filter[_exp] = _sigs
+        # expiry-tagged options, e.g. "Near · 🟢 Long Buildup (LB)"
+        _combo = {f"{_ESHORT[e]} · {s}": (e, s) for e in fno_expiries for s in _avail}
+        _sel = st.multiselect(
+            "F&O signal — by expiry", list(_combo.keys()), key="rot_fno_combo", disabled=_off,
+            help="Pick expiry-tagged signals, e.g. 'Near · Long Buildup' + 'Next · Short Buildup'. "
+                 "Same expiry = OR (any matches); different expiries = AND (all must hold).")
+        fno_filter = {}
+        for _opt in _sel:
+            _e, _s = _combo[_opt]
+            _instr, _toks, _short = _SIG_MAP[_s]
+            if _instr in fno_instruments:
+                fno_filter.setdefault(_e, []).append((_instr, _toks, _short))
     fno_filter = fno_filter or None
 
     if _n_thin:
