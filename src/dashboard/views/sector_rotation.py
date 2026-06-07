@@ -2523,7 +2523,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             help="Pick one or more expiries to filter on. Near = current month (most liquid); "
                  "Next/Far = forward positioning (read Next on expiry day when Near is rolling).")
     with _gcol3:
-        _avail = [k for k, (instr, _) in _SIG_MAP.items() if instr in fno_instruments]
+        _avail = [k for k, v in _SIG_MAP.items() if v[0] in fno_instruments]
         _sel = st.multiselect(
             "Show only stocks with F&O signal", _avail, key="rot_fno_sig",
             disabled=_off,
