@@ -207,12 +207,57 @@ def render(selected_date: date) -> None:
                 st.caption("What each event type has historically led to (2 weeks later, realised windows only):")
                 rows = [{"Event": k, "2-wk avg %": v["mean10"], "% up": v["pos_pct"], "times": v["n"]}
                         for k, v in sorted(ev["type_stats"].items(), key=lambda x: -x[1]["n"])]
-                st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True)
+                st.dataframe(
+                    pd.DataFrame(rows), hide_index=True, use_container_width=True,
+                    column_config={
+                        "Event": st.column_config.TextColumn(
+                            "Event", help="The significant flow-event type — a sudden huge FII buy/sell, "
+                            "or FIIs reversing direction. Why: these stand-out moments often mark turning points."),
+                        "2-wk avg %": st.column_config.NumberColumn(
+                            "2-wk avg %", format="%+.2f%%",
+                            help="Average Nifty 50 return over the next ~2 weeks (10 trading days) AFTER this event "
+                            "happened, historically. Why: tells you which way the market TENDED to go next."),
+                        "% up": st.column_config.NumberColumn(
+                            "% up", format="%.0f%%",
+                            help="Of all the times this event occurred, the share where Nifty was HIGHER 2 weeks "
+                            "later. Why: >50% = bullish tendency, <50% = bearish tendency."),
+                        "times": st.column_config.NumberColumn(
+                            "times", help="How many times this event has occurred in the history (sample size). "
+                            "Why: small counts (~10) mean treat it as suggestive, not reliable."),
+                    })
             with st.expander(f"📜 Event log — {ev['total_events']} significant flow events on record", expanded=False):
                 el = pd.DataFrame(ev["events"])
                 if not el.empty:
-                    st.dataframe(el[["date", "type", "fii_net", "dii_net", "z", "fwd5", "fwd10"]],
-                                 hide_index=True, use_container_width=True)
+                    st.dataframe(
+                        el[["date", "type", "fii_net", "dii_net", "z", "fwd5", "fwd10"]],
+                        hide_index=True, use_container_width=True,
+                        column_config={
+                            "date": st.column_config.TextColumn(
+                                "Date", help="The day this significant flow event occurred."),
+                            "type": st.column_config.TextColumn(
+                                "Event", help="Huge FII Buy/Sell = FII net beyond ±2σ of its 60-day norm "
+                                "(a genuinely outsized day); reversal = FIIs flipping direction after a 3+ day streak."),
+                            "fii_net": st.column_config.NumberColumn(
+                                "FII net ₹Cr", format="%+,.0f",
+                                help="Foreign-institution net CASH flow that day. Negative = net selling, positive = "
+                                "buying. Why: FIIs are the marginal price-setter — this is the main pressure."),
+                            "dii_net": st.column_config.NumberColumn(
+                                "DII net ₹Cr", format="%+,.0f",
+                                help="Domestic-institution net cash flow (mutual funds/insurers). Why: DIIs are the "
+                                "'floor' that absorbs FII selling — when positive, they cushion the market."),
+                            "z": st.column_config.NumberColumn(
+                                "z-score", format="%+.1f",
+                                help="How EXTREME that day's FII flow was vs its own trailing 60-day average, in "
+                                "standard deviations. Why: |z| ≥ 2 flags a genuinely unusual day, not just a big number."),
+                            "fwd5": st.column_config.NumberColumn(
+                                "Nifty +1wk %", format="%+.2f",
+                                help="Nifty 50 return over the 5 trading days (~1 week) AFTER the event. "
+                                "Blank = that window hasn't completed yet."),
+                            "fwd10": st.column_config.NumberColumn(
+                                "Nifty +2wk %", format="%+.2f",
+                                help="Nifty 50 return over the 10 trading days (~2 weeks) AFTER the event. "
+                                "Blank = that window hasn't completed yet. Why: shows what the move 'led to'."),
+                        })
             st.caption("⚖️ Small samples (~10/type) — a descriptive memory, not a forecast. Pattern: extreme FII "
                        "BUYS mildly precede weakness (piling in marks tops); huge SELLS tend to exhaust (flat/bounce).")
 
