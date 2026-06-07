@@ -1013,29 +1013,31 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                     (shown["ltp"] <= max_price)
                 ]
 
-            # ── F&O positioning filter (multi expiry × multi signal, OR-combined) ──
+            # ── F&O positioning filter — PER-EXPIRY (AND across expiries, OR within) ──
+            # fno_filter = {expiry: [(instrument, [tokens], short), ...]}. A stock must
+            # satisfy EACH specified expiry's condition; within an expiry ANY selected
+            # signal matches. e.g. {Near:[LB], Next:[SB]} → Near=LB AND Next=SB.
             _fno_part = None
-            if fno_filter:
-                _expiries, _signals = fno_filter   # _signals = [(instr, [tokens], short)]
+            if fno_filter and not shown.empty:
+                import functools as _ft, operator as _op
                 _ecode = {"Near month": "near", "Next month": "next", "Far month": "far"}
-                _checks = []
-                for _exp in _expiries:
+                _exp_masks, _tags = [], []
+                for _exp, _sigs in fno_filter.items():
                     _e = _ecode.get(_exp, "near")
-                    for _instr, _toks, _short in _signals:
+                    _sig_masks = []
+                    for _instr, _toks, _short in _sigs:
                         _col = f"{_e}_{'fut' if _instr == 'Futures' else 'opt'}_label"
                         if _col in shown.columns:
-                            _checks.append((_col, _toks))
-                if _checks and not shown.empty:
-                    import functools as _ft, operator as _op
-                    # .astype(bool) guards the empty-frame case: apply() on an empty
-                    # (arrow) string column returns an empty STR-dtype Series, and
-                    # OR-ing str Series raises — force boolean.
-                    _masks = [shown[c].fillna("").apply(lambda s, ts=ts: any(t in str(s) for t in ts)).astype(bool)
-                              for c, ts in _checks]
-                    shown = shown[_ft.reduce(_op.or_, _masks)]
-                    _tags = ", ".join(sorted({sh for _, _, sh in _signals}))
-                    _exps = ", ".join(e.split()[0] for e in _expiries)
-                    _fno_part = f"F&O [{_exps}] ∈ {{{_tags}}}"
+                            # .astype(bool): apply() on an empty arrow-str column yields
+                            # an empty STR Series; OR/AND on str raises — force boolean.
+                            _sig_masks.append(shown[_col].fillna("").apply(
+                                lambda s, ts=_toks: any(t in str(s) for t in ts)).astype(bool))
+                    if _sig_masks:
+                        _exp_masks.append(_ft.reduce(_op.or_, _sig_masks))   # OR within expiry
+                        _tags.append(f"{_exp.split()[0]}={'/'.join(sorted({sh for _, _, sh in _sigs}))}")
+                if _exp_masks:
+                    shown = shown[_ft.reduce(_op.and_, _exp_masks)]          # AND across expiries
+                    _fno_part = "F&O " + " & ".join(_tags)
 
             n_hidden = len(stocks) - len(shown)
             if n_hidden or _fno_part:
@@ -2512,7 +2514,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         "📊 Range (both written)":           ("Options", ["Range"], "Opt-Range"),
         "⚡ Vol Bet (both bought)":          ("Options", ["Vol"], "Opt-Vol"),
     }
-    _gcol1, _gcol2, _gcol3 = st.columns([1, 1, 2])
+    _gcol1, _gcol2 = st.columns(2)
     with _gcol1:
         fno_instruments = st.multiselect(
             "F&O filter — instrument", ["Futures", "Options"], key="rot_fno_instr",
@@ -2521,21 +2523,30 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
     _off = not fno_instruments
     with _gcol2:
         fno_expiries = st.multiselect(
-            "Expiry (one or more)", ["Near month", "Next month", "Far month"],
-            key="rot_fno_exp", disabled=_off,
-            help="Pick one or more expiries to filter on. Near = current month (most liquid); "
-                 "Next/Far = forward positioning (read Next on expiry day when Near is rolling).")
-    with _gcol3:
+            "Expiry (one or more) — a signal box appears for EACH",
+            ["Near month", "Next month", "Far month"], key="rot_fno_exp", disabled=_off,
+            help="Pick the expiries to condition on. Each gets its OWN signal box below, and "
+                 "the per-expiry conditions are AND-combined — e.g. Near=Long Buildup AND "
+                 "Next=Short Buildup. Read 'Next' on expiry day (Near is rolling).")
+    # ── Per-expiry signal selectors (the key change) ─────────────────────────
+    # A separate signal multiselect per chosen expiry → you can require a SPECIFIC
+    # signal in each (Near=SB, Next=LB, Far=SC). Within an expiry = OR; across
+    # expiries = AND. fno_filter = {expiry: [(instrument, [tokens], short), ...]}.
+    fno_filter = {}
+    _ekey = {"Near month": "near", "Next month": "next", "Far month": "far"}
+    if fno_instruments and fno_expiries:
         _avail = [k for k, v in _SIG_MAP.items() if v[0] in fno_instruments]
-        _sel = st.multiselect(
-            "Show only stocks with F&O signal", _avail, key="rot_fno_sig",
-            disabled=_off,
-            help="Pick one or more. A stock is shown if ANY selected expiry's signal matches. "
-                 "LB = fresh longs (OI↑ price↑), SB = fresh shorts (OI↑ price↓), "
-                 "SC = short covering (OI↓ price↑), LU = long unwinding (OI↓ price↓).")
-        fno_signals = [_SIG_MAP[s] for s in _sel if _SIG_MAP[s][0] in fno_instruments]
-    fno_filter = ((fno_expiries, fno_signals)
-                  if (fno_instruments and fno_expiries and fno_signals) else None)
+        _scols = st.columns(len(fno_expiries))
+        for _i, _exp in enumerate(fno_expiries):
+            with _scols[_i]:
+                _sel = st.multiselect(
+                    f"{_exp} — signal(s)", _avail, key=f"rot_fno_sig_{_ekey[_exp]}",
+                    help=f"Required positioning in the {_exp.lower()}. ANY selected matches "
+                         "(OR within this expiry); AND-combined with the other expiries.")
+                _sigs = [_SIG_MAP[s] for s in _sel if _SIG_MAP[s][0] in fno_instruments]
+                if _sigs:
+                    fno_filter[_exp] = _sigs
+    fno_filter = fno_filter or None
 
     if _n_thin:
         st.caption(
