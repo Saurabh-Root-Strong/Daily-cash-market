@@ -86,8 +86,13 @@ def _fetch_and_fill() -> tuple[bool, int]:
 def render(selected_date: date) -> None:
     st.subheader("🧠 Prediction Memory Engine")
     st.caption(
-        "Adaptive pattern memory: every prediction is stored with a 12-dim market fingerprint. "
-        "Similar past days calibrate confidence and surface the predicted range for each session."
+        "Case-based **analog recall**: every prediction is stored with a 12-dim market "
+        "fingerprint, and the most similar past days are surfaced as **context** ("
+        "\"in conditions like today, what happened next?\"). "
+        "**Honest status:** this is a look-up of historical analogs, *not* a validated "
+        "accuracy booster — on the data so far it does **not** measurably improve next-day "
+        "hit-rate (the target is near-random and the history is small, ~40 days/index). "
+        "Read the similar-days panel as context, not a forecast."
     )
 
     # ── Auto-heal: fill stale pending outcomes if index_data already has the data ──

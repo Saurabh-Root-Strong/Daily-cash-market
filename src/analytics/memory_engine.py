@@ -1,5 +1,6 @@
 """
-Prediction Memory Engine — adaptive, self-improving prediction calibration.
+Prediction Memory Engine — analog recall (case-based context), NOT a validated
+accuracy-improver.
 
 PURPOSE: Every day the system predicts tomorrow's direction. The memory engine
 stores that prediction with a 12-dimensional market fingerprint. The next day
@@ -7,7 +8,20 @@ it fills in what actually happened. When making today's prediction, it searches
 all past days whose fingerprint closely matched and asks: "In similar conditions,
 what did the market actually do the next day?"
 
-HOW IT IMPROVES PREDICTIONS:
+HONEST STATUS (audited against the live track record):
+  This adds ONE analog-vote signal (Signal 24); it does NOT re-weight the other
+  signals or "learn" which ones work. On the data so far it does NOT measurably
+  improve next-day accuracy — the memory signal's standalone next-day IC is ~−0.2
+  (it implicitly assumes CONTINUATION, but next-day index moves mildly MEAN-REVERT,
+  so the analog vote leans the wrong way), and the engine overall is ~coin-flip.
+  Root causes: (1) tiny history (~40 filled days/index — far too few for reliable
+  analogs), (2) next-day index direction is near-efficient (low ceiling for ANY
+  method). It will only become useful with years of data AND a target that has
+  exploitable structure. Treat it as case-based CONTEXT, not a forecast booster.
+  (Where this idea DOES work with validated edge: the sector-rotation memory, whose
+  down-capture/accumulation signals are genuinely persistent.)
+
+WHAT IT DOES (analog recall):
   Today's 12-dim fingerprint = [PCR, FII_5D_flow, FII_options_delta, carry,
                                   VIX, VIX_trend, breadth, max_pain_dist,
                                   FII_net_position, hurst, entropy, oi_score]
