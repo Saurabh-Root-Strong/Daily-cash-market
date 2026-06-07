@@ -1025,9 +1025,12 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                         _col = f"{_e}_{'fut' if _instr == 'Futures' else 'opt'}_label"
                         if _col in shown.columns:
                             _checks.append((_col, _toks))
-                if _checks:
+                if _checks and not shown.empty:
                     import functools as _ft, operator as _op
-                    _masks = [shown[c].fillna("").apply(lambda s, ts=ts: any(t in str(s) for t in ts))
+                    # .astype(bool) guards the empty-frame case: apply() on an empty
+                    # (arrow) string column returns an empty STR-dtype Series, and
+                    # OR-ing str Series raises — force boolean.
+                    _masks = [shown[c].fillna("").apply(lambda s, ts=ts: any(t in str(s) for t in ts)).astype(bool)
                               for c, ts in _checks]
                     shown = shown[_ft.reduce(_op.or_, _masks)]
                     _tags = ", ".join(sorted({sh for _, _, sh in _signals}))
