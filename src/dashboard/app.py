@@ -219,7 +219,7 @@ def main() -> None:
     from src.core.config import get_config
     from src.dashboard.cache.queries import cached_available_dates
 
-    all_dates = cached_available_dates(limit=500)   # full history for backtest
+    all_dates = cached_available_dates(limit=500)   # full history (date selector + sector rotation)
 
     if not all_dates:
         st.error("No data found. Run `setup.bat` or `python -m src.cli backfill 60` to load data.")
@@ -265,10 +265,9 @@ def main() -> None:
                 "📊 Options Analysis",
                 "📈 Index Tracker",
                 "🔮 Index Prediction",
-                "🔬 Backtest",
                 "🌍 FPI Capital Flow",
                 "💰 FII-DII Cash Data",
-                "🧠 Prediction Memory",
+                "🧠 Index Prediction Memory",
             ],
             index=0,
         )
@@ -343,16 +342,13 @@ def main() -> None:
     elif page == "🔮 Index Prediction":
         from src.dashboard.views import index_prediction
         index_prediction.render(selected_date)
-    elif page == "🔬 Backtest":
-        from src.dashboard.views import backtest
-        backtest.render(all_dates)   # full history for signal/check date pickers
     elif page == "🌍 FPI Capital Flow":
         from src.dashboard.views import fpi_flows
         fpi_flows.render(selected_date)
     elif page == "💰 FII-DII Cash Data":
         from src.dashboard.views import fii_dii_cash
         fii_dii_cash.render(selected_date)
-    elif page == "🧠 Prediction Memory":
+    elif page == "🧠 Index Prediction Memory":
         from src.dashboard.views import prediction_memory
         prediction_memory.render(selected_date)
 

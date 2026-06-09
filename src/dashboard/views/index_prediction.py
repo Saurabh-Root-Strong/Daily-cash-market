@@ -789,6 +789,72 @@ def _weekly_range_box(pred: "IndexPrediction") -> str:
     )
 
 
+def _confidence_phrase(pred: IndexPrediction) -> str:
+    """
+    Qualify the confidence label so it says confidence IN WHAT.
+
+    The word "confidence" means different things per verdict:
+      - UP / DOWN  → confidence in the DIRECTION.
+      - SIDEWAYS   → confidence in the market staying RANGE-BOUND (e.g. an expiry
+                     gamma pin), NOT a directional call. Showing a bare
+                     "MEDIUM CONFIDENCE" next to a STRONG BEAR meter reads as a
+                     contradiction; this disambiguates it.
+    """
+    conf = pred.confidence
+    if pred.direction == "SIDEWAYS":
+        return f"{conf} CONFIDENCE (range-bound, not directional)"
+    return f"{conf} CONFIDENCE (directional)"
+
+
+# Meter zones that are decisively directional (mild zones excluded to avoid noise).
+_METER_BEAR = {"STRONG BEAR", "BEAR"}
+_METER_BULL = {"STRONG BULL", "BULL"}
+
+
+def _verdict_meter_note(pred: IndexPrediction) -> str:
+    """
+    Reconcile the headline verdict with the raw 0–100 Bull/Bear meter when they
+    disagree — otherwise the user sees e.g. "SIDEWAYS" beside "STRONG BEAR 0/100"
+    with nothing linking them.
+
+    Two disagreement cases:
+      1. SIDEWAYS verdict + directional meter  → the score is the BREAK direction
+         if the range fails (commonly an expiry-day gamma pin suppressing it).
+      2. Directional verdict OPPOSITE the meter → an override (mean-reversion /
+         squeeze) is countering the raw trend signals → lower conviction.
+    Returns "" when verdict and meter agree (or meter is only mildly directional).
+    """
+    meter, label, color = _bull_meter(pred.composite_score)
+    meter_dir = -1 if label in _METER_BEAR else 1 if label in _METER_BULL else 0
+    if meter_dir == 0:
+        return ""   # meter near neutral — nothing to reconcile
+
+    verdict_dir = {"UP": 1, "DOWN": -1, "SIDEWAYS": 0}.get(pred.direction, 0)
+    if meter_dir == verdict_dir:
+        return ""   # aligned — no note needed
+
+    lean  = "downside" if meter_dir < 0 else "upside"
+    arrow = "▼" if meter_dir < 0 else "▲"
+
+    if verdict_dir == 0:
+        is_expiry = (pred.days_to_expiry is not None and pred.days_to_expiry <= 1)
+        reason = ("the expiry-day gamma pin" if is_expiry
+                  else "a neutral-zone / mean-reversion override")
+        msg = (f"{arrow} Raw 23-signal read is <b>{label} ({meter}/100)</b>, but it's suppressed by "
+               f"{reason}. Treat it as the likely <b>break direction</b> ({lean}) if the range "
+               f"fails — not today's base case.")
+    else:
+        msg = (f"{arrow} The <b>{pred.direction}</b> verdict <b>overrides</b> the raw 23-signal "
+               f"score (<b>{label} {meter}/100</b>) — a mean-reversion / squeeze setup is countering "
+               f"the trend signals. Lower conviction; use tight stops.")
+
+    return (
+        f"<div style='background:rgba(255,170,0,0.08);border-left:3px solid {color};"
+        f"border-radius:0 6px 6px 0;padding:6px 10px;margin-bottom:10px;"
+        f"color:#cfcfcf;font-size:0.8em;line-height:1.45'>{msg}</div>"
+    )
+
+
 def _render_verdict(pred: IndexPrediction) -> None:
     dir_color  = pred.direction_color
     conf_color = _CONF_COLOR.get(pred.confidence, "#78909C")
@@ -804,7 +870,7 @@ def _render_verdict(pred: IndexPrediction) -> None:
                     background:{dir_color};color:#000;font-weight:700;
                     font-size:1.1em;padding:6px 16px;border-radius:8px
                 ">{dir_emoji} {pred.direction}</div>
-                <div style="color:{conf_color};font-weight:600">{pred.confidence} CONFIDENCE</div>
+                <div style="color:{conf_color};font-weight:600">{_confidence_phrase(pred)}</div>
                 <div style="margin-left:auto;font-size:0.82em;text-align:right">
                     {_meter_html(pred.composite_score, show_raw=True)}
                     <div style="color:#666;font-size:0.85em;margin-top:2px">
@@ -813,6 +879,7 @@ def _render_verdict(pred: IndexPrediction) -> None:
                 </div>
             </div>
             <div style="color:#ddd;font-size:0.9em;margin-bottom:10px">{pred.headline}</div>
+            {_verdict_meter_note(pred)}
             {_expected_move_box(pred)}
             {_weekly_range_box(pred)}
             {_breakout_extension_box(pred)}

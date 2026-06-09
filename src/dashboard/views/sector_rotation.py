@@ -521,7 +521,8 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                  regime: "dict | None" = None,
                  defense_mode: bool = False,
                  score_col: str = "accum_score",
-                 fno_filter: "tuple | None" = None) -> None:
+                 fno_filter: "tuple | None" = None,
+                 fno_match_all: bool = True) -> None:
     meta       = _SIGNAL_META.get(row["signal"], {})
     color      = meta.get("color", "#888")
     is_avoid   = row["signal"] in _AVOID_SIGNAL_SET
@@ -1013,10 +1014,12 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                     (shown["ltp"] <= max_price)
                 ]
 
-            # ── F&O positioning filter — PER-EXPIRY (AND across expiries, OR within) ──
-            # fno_filter = {expiry: [(instrument, [tokens], short), ...]}. A stock must
-            # satisfy EACH specified expiry's condition; within an expiry ANY selected
-            # signal matches. e.g. {Near:[LB], Next:[SB]} → Near=LB AND Next=SB.
+            # ── F&O positioning filter — PER-EXPIRY (OR within; Any/All across) ──
+            # fno_filter = {expiry: [(instrument, [tokens], short), ...]}. Within an
+            # expiry ANY selected signal matches (OR). Across expiries the combine is
+            # controlled by fno_match_all: True = AND (must hold in every expiry),
+            # False = OR (hold in at least one). e.g. {Near:[LB], Next:[SB]} →
+            # match_all=True: Near=LB AND Next=SB; match_all=False: Near=LB OR Next=SB.
             _fno_part = None
             if fno_filter and not shown.empty:
                 import functools as _ft, operator as _op
@@ -1036,8 +1039,10 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                         _exp_masks.append(_ft.reduce(_op.or_, _sig_masks))   # OR within expiry
                         _tags.append(f"{_exp.split()[0]}={'/'.join(sorted({sh for _, _, sh in _sigs}))}")
                 if _exp_masks:
-                    shown = shown[_ft.reduce(_op.and_, _exp_masks)]          # AND across expiries
-                    _fno_part = "F&O " + " & ".join(_tags)
+                    _join = _op.and_ if fno_match_all else _op.or_
+                    shown = shown[_ft.reduce(_join, _exp_masks)]             # Any/All across expiries
+                    _sep = " & " if fno_match_all else " | "
+                    _fno_part = "F&O " + _sep.join(_tags)
 
             n_hidden = len(stocks) - len(shown)
             if n_hidden or _fno_part:
@@ -2498,8 +2503,9 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
 
     # ── F&O positioning filter — multi-select instrument / expiry / signal ────
     # Each signal maps to (instrument, token-found-in-label). The signal options
-    # shown depend on which instruments are picked. A stock passes if ANY selected
-    # (expiry × signal) matches its label — all three are one-or-more multi-selects.
+    # shown depend on which instruments are picked. The chosen signals AUTO-APPLY
+    # to every selected expiry; within an expiry signals are OR'd, and the Any/All
+    # toggle controls how expiries combine.
     # Each signal → (instrument, [label tokens to match — any], short caption tag).
     # Futures are granular (one code each). Options are DIRECTIONAL BUCKETS that also
     # catch single-sided labels (C.Buying, C.Writing, C.LE…) — verified: full coverage,
@@ -2514,10 +2520,10 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         "📊 Range (both written)":           ("Options", ["Range"], "Opt-Range"),
         "⚡ Vol Bet (both bought)":          ("Options", ["Vol"], "Opt-Vol"),
     }
-    # ── ONE signal box with EXPIRY-TAGGED options (no separate per-month boxes) ──
-    # Pick combos like "Near · Long Buildup" + "Next · Short Buildup" in a single
-    # dropdown. Same expiry = OR; different expiries = AND.
-    # fno_filter = {expiry: [(instrument, [tokens], short), ...]}.
+    # ── Auto-apply model: signals apply to EVERY selected expiry ──────────────
+    # Expiry box drives the filter; the plain (non-tagged) signal box says WHAT to
+    # look for. fno_filter = {expiry: [(instrument, [tokens], short), ...]} built by
+    # crossing every selected expiry with every selected signal.
     _gcol1, _gcol2, _gcol3 = st.columns([1, 1, 2])
     with _gcol1:
         fno_instruments = st.multiselect(
@@ -2529,23 +2535,34 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         fno_expiries = st.multiselect(
             "Expiry (one or more)", ["Near month", "Next month", "Far month"],
             key="rot_fno_exp", disabled=_off,
-            help="Which expiries to offer in the signal box. Read 'Next' on expiry day "
-                 "(Near is mid-rollover).")
-    _ESHORT = {"Near month": "Near", "Next month": "Next", "Far month": "Far"}
+            help="Which expiries the signals must hold in. The Any/All toggle controls "
+                 "how multiple expiries combine. Read 'Next' on expiry day (Near is mid-rollover).")
     with _gcol3:
+        # Plain signal list (no expiry tag) — the chosen signals auto-apply to EVERY
+        # expiry picked in the Expiry box. Options are filtered to the chosen instruments.
         _avail = [k for k, v in _SIG_MAP.items() if v[0] in fno_instruments]
-        # expiry-tagged options, e.g. "Near · 🟢 Long Buildup (LB)"
-        _combo = {f"{_ESHORT[e]} · {s}": (e, s) for e in fno_expiries for s in _avail}
         _sel = st.multiselect(
-            "F&O signal — by expiry", list(_combo.keys()), key="rot_fno_combo", disabled=_off,
-            help="Pick expiry-tagged signals, e.g. 'Near · Long Buildup' + 'Next · Short Buildup'. "
-                 "Same expiry = OR (any matches); different expiries = AND (all must hold).")
+            "F&O signal", _avail, key="rot_fno_sig", disabled=_off,
+            help="Pick one or more signals (e.g. Long Buildup + Short Covering). They apply "
+                 "to every expiry selected on the left. Within an expiry, signals are OR'd.")
         fno_filter = {}
-        for _opt in _sel:
-            _e, _s = _combo[_opt]
-            _instr, _toks, _short = _SIG_MAP[_s]
-            if _instr in fno_instruments:
-                fno_filter.setdefault(_e, []).append((_instr, _toks, _short))
+        for _e in fno_expiries:
+            for _s in _sel:
+                _instr, _toks, _short = _SIG_MAP[_s]
+                if _instr in fno_instruments:
+                    fno_filter.setdefault(_e, []).append((_instr, _toks, _short))
+        # ── Cross-expiry combine mode ──────────────────────────────────────────
+        # Enabled once 2+ expiries carry signals. With one expiry the choice is a
+        # no-op (defaults to All so behaviour is unchanged).
+        _multi_exp = len(fno_filter) >= 2
+        _mode = st.radio(
+            "Across expiries", ["Any expiry (OR)", "All expiries (AND)"],
+            index=1, horizontal=True, key="rot_fno_mode",
+            disabled=_off or not _multi_exp,
+            help="ANY = a stock passes if it shows the signal in AT LEAST ONE selected "
+                 "expiry (e.g. LB/SC in Near OR Next). ALL = it must show the signal in "
+                 "EVERY selected expiry simultaneously (stricter — confirmation across months).")
+        fno_match_all = _mode.startswith("All")
     fno_filter = fno_filter or None
 
     if _n_thin:
@@ -2580,7 +2597,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
                              min_price=min_price, max_price=max_price,
                              regime_label=r_label, regime=regime, defense_mode=_defense_mode,
-                             score_col=_rank_col, fno_filter=fno_filter)
+                             score_col=_rank_col, fno_filter=fno_filter,
+                             fno_match_all=fno_match_all)
 
     with col_avoid:
         st.markdown(f"### {regime.get('avoid_label', '🔴 SECTORS TO AVOID / EXIT')}")
@@ -2600,7 +2618,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
                              min_price=min_price, max_price=max_price,
                              regime_label=r_label, regime=regime, defense_mode=_defense_mode,
-                             score_col=_rank_col, fno_filter=fno_filter)
+                             score_col=_rank_col, fno_filter=fno_filter,
+                             fno_match_all=fno_match_all)
 
         # Tier 2 — relative laggards: weakest sectors by score, excluding any
         # already shown in the invest / caution / distribution lists. The absolute
@@ -2624,7 +2643,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
                              min_price=min_price, max_price=max_price,
                              regime_label=r_label, regime=regime, defense_mode=_defense_mode,
-                             score_col=_rank_col, fno_filter=fno_filter)
+                             score_col=_rank_col, fno_filter=fno_filter,
+                             fno_match_all=fno_match_all)
 
     if not caution.empty:
         st.markdown("---")
@@ -2638,7 +2658,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             _sector_card(row, selected_date, min_turnover, deliv_threshold, deliv_vs_100d_pct,
                          min_price=min_price, max_price=max_price,
                          regime_label=r_label, regime=regime, defense_mode=_defense_mode,
-                         score_col=_rank_col, fno_filter=fno_filter)
+                         score_col=_rank_col, fno_filter=fno_filter,
+                         fno_match_all=fno_match_all)
 
     st.markdown("---")
 

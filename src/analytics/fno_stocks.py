@@ -401,9 +401,12 @@ def get_fno_positioning_by_symbol(as_of_date: date) -> pd.DataFrame:
                    SUM(CASE WHEN exp_rank = 1 THEN oi ELSE 0 END)   AS near_oi,
                    SUM(CASE WHEN exp_rank = 2 THEN oi ELSE 0 END)   AS next_oi,
                    SUM(CASE WHEN exp_rank = 3 THEN oi ELSE 0 END)   AS far_oi,
-                   -- near-month price (one expiry, but guard against dups)
+                   -- near/next-month price (one expiry each, but guard against dups).
+                   -- settle_price = prev-day close for futures, so (close-settle) = today's move.
                    MAX(CASE WHEN exp_rank = 1 THEN close_price  END) AS near_close,
-                   MAX(CASE WHEN exp_rank = 1 THEN settle_price END) AS near_settle
+                   MAX(CASE WHEN exp_rank = 1 THEN settle_price END) AS near_settle,
+                   MAX(CASE WHEN exp_rank = 2 THEN close_price  END) AS next_close,
+                   MAX(CASE WHEN exp_rank = 2 THEN settle_price END) AS next_settle
             FROM fut GROUP BY symbol
         ),
         near_contract AS (   -- the specific expiry_date that is "near" TODAY
@@ -436,7 +439,7 @@ def get_fno_positioning_by_symbol(as_of_date: date) -> pd.DataFrame:
         SELECT a.symbol,
                a.near_oi AS fut_oi, a.fut_oi_total, a.fut_oi_value_cr,
                a.near_oi, a.next_oi, a.far_oi,
-               a.near_close, a.near_settle,
+               a.near_close, a.near_settle, a.next_close, a.next_settle,
                p.prev_near_oi,   -- NULL when the near contract didn't trade prev day (post-expiry)
                COALESCE(o.call_oi, 0) AS call_oi,
                COALESCE(o.put_oi, 0)  AS put_oi
@@ -451,6 +454,13 @@ def get_fno_positioning_by_symbol(as_of_date: date) -> pd.DataFrame:
     df["fut_price_chg_pct"] = (
         (df["near_close"] - df["near_settle"])
         / df["near_settle"].replace(0, float("nan")) * 100
+    ).round(2)
+    # Next-month price change — computed from TODAY's next-month close/settle (settle =
+    # prev-day close for futures). Previously the breakdown derived this from prev-day
+    # rows in supp_fut, which yielded YESTERDAY's move (corr ~0 with today, 43% sign-flips).
+    df["next_price_chg_pct"] = (
+        (df["next_close"] - df["next_settle"])
+        / df["next_settle"].replace(0, float("nan")) * 100
     ).round(2)
     # OI change vs SAME contract prev day. NaN when prev OI is missing (the near
     # contract is brand-new, i.e. we are right after a monthly expiry) — in that
@@ -481,7 +491,9 @@ def get_fno_positioning_by_symbol(as_of_date: date) -> pd.DataFrame:
     df["post_expiry"]     = in_post_expiry
     df["days_since_roll"] = days_since_roll if days_since_roll is not None else -1
 
-    return df.drop(columns=["near_close", "near_settle", "prev_near_oi"]).reset_index(drop=True)
+    return df.drop(
+        columns=["near_close", "near_settle", "next_close", "next_settle", "prev_near_oi"]
+    ).reset_index(drop=True)
 
 
 def get_sector_fno_aggregate(as_of_date: date) -> pd.DataFrame:
@@ -721,9 +733,7 @@ def get_fno_expiry_breakdown_by_symbol(as_of_date: date) -> pd.DataFrame:
         )
         SELECT f.symbol,
                SUM(CASE WHEN x.exp_rank = 2 THEN f.open_interest END) AS next_prev_oi,
-               SUM(CASE WHEN x.exp_rank = 3 THEN f.open_interest END) AS far_prev_oi,
-               MAX(CASE WHEN x.exp_rank = 2 THEN f.close_price  END) AS next_close,
-               MAX(CASE WHEN x.exp_rank = 2 THEN f.settle_price END) AS next_settle
+               SUM(CASE WHEN x.exp_rank = 3 THEN f.open_interest END) AS far_prev_oi
         FROM fno_bhavcopy f
         JOIN expiries x ON f.symbol = x.symbol AND f.expiry_date = x.expiry_date
         CROSS JOIN prev_date pd
@@ -734,7 +744,7 @@ def get_fno_expiry_breakdown_by_symbol(as_of_date: date) -> pd.DataFrame:
     if not supp_fut.empty:
         base = base.merge(supp_fut, on="symbol", how="left")
     else:
-        for c in ["next_prev_oi", "far_prev_oi", "next_close", "next_settle"]:
+        for c in ["next_prev_oi", "far_prev_oi"]:
             base[c] = float("nan")
 
     # ── Step 3: Supplementary — options OI + premium change per expiry ────────
@@ -752,20 +762,36 @@ def get_fno_expiry_breakdown_by_symbol(as_of_date: date) -> pd.DataFrame:
             SELECT MAX(trade_date) AS prev_dt
             FROM fno_bhavcopy WHERE trade_date < ? AND instrument = 'FUTSTK'
         ),
+        opt_prev_strike AS (   -- prev-day option close per strike (true premium-change base)
+            SELECT o.symbol, o.expiry_date, o.option_type, o.strike_price,
+                   o.close_price AS prev_close
+            FROM fno_bhavcopy o
+            CROSS JOIN prev_date pd
+            WHERE o.trade_date = pd.prev_dt AND o.instrument = 'OPTSTK'
+        ),
         opt_today AS (
+            -- Premium change = TODAY's close − the SAME strike's PREVIOUS-day close,
+            -- contracts-weighted per leg. settle_price is unreliable for options
+            -- (NSE settles many strikes theoretically), so we join per strike instead.
+            -- LEFT JOIN on the 4-key (symbol, expiry, type, strike) is 1:1 — no fan-out.
+            -- Only strikes that traded both days (prev_close > 0) contribute; brand-new
+            -- strikes have no measurable day-over-day change and are excluded.
             SELECT o.symbol, x.exp_rank,
                    SUM(CASE WHEN o.option_type='CE' THEN o.open_interest ELSE 0 END) AS call_oi,
                    SUM(CASE WHEN o.option_type='PE' THEN o.open_interest ELSE 0 END) AS put_oi,
-                   SUM(CASE WHEN o.option_type='CE'
-                            THEN (o.close_price - o.settle_price) * o.contracts ELSE 0 END)
-                   / NULLIF(SUM(CASE WHEN o.option_type='CE' THEN o.contracts ELSE 0 END), 0)
-                       AS call_prem_chg,
-                   SUM(CASE WHEN o.option_type='PE'
-                            THEN (o.close_price - o.settle_price) * o.contracts ELSE 0 END)
-                   / NULLIF(SUM(CASE WHEN o.option_type='PE' THEN o.contracts ELSE 0 END), 0)
-                       AS put_prem_chg
+                   SUM(CASE WHEN o.option_type='CE' AND pp.prev_close > 0
+                            THEN (o.close_price - pp.prev_close) * o.contracts ELSE 0 END)
+                   / NULLIF(SUM(CASE WHEN o.option_type='CE' AND pp.prev_close > 0
+                            THEN o.contracts ELSE 0 END), 0) AS call_prem_chg,
+                   SUM(CASE WHEN o.option_type='PE' AND pp.prev_close > 0
+                            THEN (o.close_price - pp.prev_close) * o.contracts ELSE 0 END)
+                   / NULLIF(SUM(CASE WHEN o.option_type='PE' AND pp.prev_close > 0
+                            THEN o.contracts ELSE 0 END), 0) AS put_prem_chg
             FROM fno_bhavcopy o
             JOIN expiries x ON o.symbol = x.symbol AND o.expiry_date = x.expiry_date
+            LEFT JOIN opt_prev_strike pp
+                   ON o.symbol = pp.symbol AND o.expiry_date = pp.expiry_date
+                  AND o.option_type = pp.option_type AND o.strike_price = pp.strike_price
             WHERE o.trade_date = ? AND o.instrument = 'OPTSTK'
             GROUP BY o.symbol, x.exp_rank
         ),
@@ -823,10 +849,8 @@ def get_fno_expiry_breakdown_by_symbol(as_of_date: date) -> pd.DataFrame:
         (df["next_oi"] - df["next_prev_oi"])
         / df["next_prev_oi"].replace(0, float("nan")) * 100
     ).round(1)
-    df["next_price_chg_pct"] = (
-        (df["next_close"] - df["next_settle"])
-        / df["next_settle"].replace(0, float("nan")) * 100
-    ).round(2)
+    # next_price_chg_pct now comes from the base query (today's next-month close/settle),
+    # not from supp_fut's prev-day rows — see get_fno_positioning_by_symbol.
     df["next_fut_label"] = df.apply(
         lambda r: _compact_fut_label(
             _fut_signal(r.get("next_price_chg_pct"), r.get("next_oi_chg_pct")),

@@ -7,7 +7,7 @@ textColor       = "#ffffff"
 font            = "sans serif"
 
 [server]
-headless        = true
+headless        = false
 enableCORS      = false
 port            = 8501
 maxUploadSize   = 50
