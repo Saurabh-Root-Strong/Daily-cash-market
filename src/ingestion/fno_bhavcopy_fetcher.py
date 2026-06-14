@@ -114,14 +114,22 @@ class FNOBhavCopyFetcher(BaseFetcher):
     def _fno_url_candidates(self, trade_date: date) -> list:
         """
         Ordered fallback chain for FNO Bhavcopy.
-        API no-date is primary (confirmed working); direct archive URLs as fallbacks.
-        Direct archive URLs only work for the last ~7 days.
+
+        UDiFF CSV (BhavCopy_NSE_FO_..._F_0000.csv.zip) is the CURRENT NSE format
+        and is date-addressable, so it's primary and works for back-fills too. The
+        no-date /api/reports endpoint only ever returns the LATEST file (today). The
+        legacy FNO_BC{ddmmyyyy}.DAT / fo{ddmmyyyy}bhav.csv.zip formats were retired
+        by NSE in 2024 and now 404 — kept only as last-ditch fallbacks for very old
+        archived dates.
         """
         dm   = trade_date.strftime("%d%m%Y")
-        dmon = trade_date.strftime("%d-%b-%Y").upper()   # 26-MAY-2026
+        ymd  = trade_date.strftime("%Y%m%d")
+        udiff = f"BhavCopy_NSE_FO_0_0_0_{ymd}_F_0000.csv.zip"
         return [
-            _build_archive_url_no_date(_FNO_BHAVCOPY_NAME),        # primary: API latest
-            f"https://nsearchives.nseindia.com/content/fo/FNO_BC{dm}.DAT",
+            f"https://nsearchives.nseindia.com/content/fo/{udiff}",   # primary: UDiFF (current)
+            f"https://archives.nseindia.com/content/fo/{udiff}",
+            _build_archive_url_no_date(_FNO_BHAVCOPY_NAME),           # API latest (today only)
+            f"https://nsearchives.nseindia.com/content/fo/FNO_BC{dm}.DAT",   # legacy fallbacks
             f"https://archives.nseindia.com/content/fo/FNO_BC{dm}.DAT",
             f"https://nsearchives.nseindia.com/content/fo/fo{dm}bhav.csv.zip",
             f"https://archives.nseindia.com/content/fo/fo{dm}bhav.csv.zip",
@@ -133,11 +141,13 @@ class FNOBhavCopyFetcher(BaseFetcher):
 
         from datetime import date as _date
         candidates = self._fno_url_candidates(trade_date)
-        # The no-date API (index 0) always returns today's file regardless of the
-        # requested date.  For historical dates skip it so the direct archive URLs
-        # (which work for the last ~7 days) get tried instead.
+        # The no-date /api/reports endpoint always returns the LATEST file
+        # regardless of the requested date, so it's only valid for today. Drop it
+        # for historical dates (back-fills) — the date-addressable UDiFF URLs handle
+        # those.
         if trade_date != _date.today():
-            candidates = candidates[1:]
+            nodate = _build_archive_url_no_date(_FNO_BHAVCOPY_NAME)
+            candidates = [u for u in candidates if u != nodate]
 
         for url in candidates:
             try:
@@ -158,7 +168,12 @@ class FNOBhavCopyFetcher(BaseFetcher):
                 continue
 
             try:
-                df = _parse_fno_dat(text, trade_date)
+                # UDiFF files are header-bearing CSVs (start with "TradDt,..."); the
+                # legacy DAT files are headerless. Route by format.
+                if _is_udiff(text):
+                    df = _parse_fno_udiff(text, trade_date)
+                else:
+                    df = _parse_fno_dat(text, trade_date)
                 log.debug("FNO bhavcopy for %s fetched via %s", trade_date, url[-60:])
                 return df
             except ParseError as exc:
@@ -186,6 +201,78 @@ def _decode_response(data: bytes) -> str:
             raise ParseError(f"Cannot extract zip: {exc}") from exc
 
     return data.decode("utf-8", errors="replace")
+
+
+# ── UDiFF format (current NSE F&O bhavcopy, headed CSV) ──────────────────────
+# FinInstrmTp codes → our instrument labels.
+_UDIFF_INSTR_MAP = {
+    "IDF": "FUTIDX",   # index futures
+    "STF": "FUTSTK",   # stock futures
+    "IDO": "OPTIDX",   # index options
+    "STO": "OPTSTK",   # stock options
+}
+
+
+def _is_udiff(text: str) -> bool:
+    """UDiFF files are header-bearing CSVs whose first line names the columns."""
+    head = text[:120].lstrip().upper()
+    return head.startswith("TRADDT") or "TCKRSYMB" in head
+
+
+def _parse_fno_udiff(text: str, trade_date: date) -> pd.DataFrame:
+    """
+    Parse the current NSE UDiFF F&O bhavcopy (headed CSV) into the normalised
+    schema. The actual trade date is read from the TradDt column (YYYY-MM-DD)
+    rather than the requested date.
+    """
+    if not text or not text.strip():
+        raise ParseError("Empty FNO bhavcopy response")
+
+    try:
+        raw = pd.read_csv(io.StringIO(text), dtype=str, low_memory=False)
+    except Exception as exc:
+        raise ParseError(f"Cannot parse FNO UDiFF: {exc}") from exc
+
+    raw.columns = [str(c).strip() for c in raw.columns]
+    required = {"TradDt", "FinInstrmTp", "TckrSymb", "XpryDt"}
+    missing = required - set(raw.columns)
+    if missing:
+        raise ParseError(f"FNO UDiFF missing columns: {missing}")
+
+    df = pd.DataFrame(index=raw.index)
+    df["instrument"]   = raw["FinInstrmTp"].str.strip().map(_UDIFF_INSTR_MAP)
+    df["symbol"]       = raw["TckrSymb"].str.strip()
+    df["expiry_date"]  = pd.to_datetime(raw["XpryDt"], format="%Y-%m-%d", errors="coerce").dt.date
+    df["option_type"]  = (
+        raw["OptnTp"].str.strip().str.upper()
+        .replace({"": "XX", "NAN": "XX"}).fillna("XX")
+    )
+
+    for dst, src in (
+        ("strike_price", "StrkPric"), ("open_price", "OpnPric"),
+        ("high_price", "HghPric"), ("low_price", "LwPric"),
+        ("close_price", "ClsPric"), ("settle_price", "SttlmPric"),
+    ):
+        df[dst] = pd.to_numeric(raw[src], errors="coerce")
+
+    df["contracts"]     = pd.to_numeric(raw["TtlTradgVol"], errors="coerce").fillna(0).astype("int64")
+    df["open_interest"] = pd.to_numeric(raw["OpnIntrst"], errors="coerce").fillna(0).astype("int64")
+    df["chg_in_oi"]     = pd.to_numeric(raw["ChngInOpnIntrst"], errors="coerce").fillna(0).astype("int64")
+    df["value_lacs"]    = pd.to_numeric(raw["TtlTrfVal"], errors="coerce").fillna(0) / 100_000
+
+    # Trade date from the file (mode of TradDt) — robust to any stray rows.
+    file_dates = pd.to_datetime(raw["TradDt"], format="%Y-%m-%d", errors="coerce").dt.date
+    mc = file_dates.dropna().mode()
+    df["trade_date"] = mc.iloc[0] if not mc.empty else trade_date
+
+    # Keep only recognised instruments + valid expiry.
+    df = df[df["instrument"].isin(_VALID_INSTRUMENTS)].copy()
+    df = df.dropna(subset=["expiry_date"]).copy()
+    if df.empty:
+        raise ParseError(f"No valid instrument rows in FNO UDiFF for {trade_date}")
+
+    df["strike_price"] = df["strike_price"].fillna(0.0)
+    return df[[c for c in _SCHEMA_COLS if c in df.columns]].reset_index(drop=True)
 
 
 _COL_TRADE_DATE = 21   # DD/Mon/YYYY — the actual trade date embedded in the file
