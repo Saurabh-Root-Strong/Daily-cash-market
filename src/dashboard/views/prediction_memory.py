@@ -412,27 +412,48 @@ def _render_prediction_log(symbol: str) -> None:
             return
 
         # ── Stale-pending banner ──────────────────────────────────────────────
-        # If any pending row belongs to a day before today, today's EOD data
-        # is needed to resolve it. Show a one-click fetch button.
+        # A pending prediction is only *resolvable* once the NEXT trading session
+        # actually has data in index_data. Comparing the prediction date to
+        # date.today() alone falsely flags a Friday prediction every weekend (the
+        # next session is Monday, which hasn't traded yet) → a misleading
+        # "Fetch & Fill" prompt and a red "could not fill" error. So gate on real
+        # data: only prompt to fetch when a LATER trading session already exists
+        # (the fill was genuinely missed); otherwise the row is simply waiting.
         if not unfilled.empty:
             today = date.today()
+
+            def _pdate(d):
+                return d.date() if hasattr(d, "date") else d
+
+            from src.data.repository import query_dataframe
+            _li = query_dataframe("SELECT max(trade_date) AS d FROM index_data")
+            latest_idx = _li["d"].iloc[0] if _li is not None and not _li.empty else None
+            latest_idx = _pdate(latest_idx) if latest_idx is not None else None
+
+            # Resolvable now: a later trading session has data but this row is
+            # still unfilled → the fetch/fill was missed.
             stale_rows = unfilled[unfilled["trade_date"].apply(
-                lambda d: (d.date() if hasattr(d, "date") else d) < today
+                lambda d: latest_idx is not None and _pdate(d) < latest_idx
             )]
+            # Legitimately waiting: the prediction's next session hasn't traded
+            # (or its EOD data isn't in yet) — nothing to fetch.
+            waiting_rows = unfilled[unfilled["trade_date"].apply(
+                lambda d: latest_idx is None or _pdate(d) >= latest_idx
+            )]
+
             if not stale_rows.empty:
                 stale_dates = ", ".join(
-                    (r.date() if hasattr(r, "date") else r).strftime("%d %b")
-                    for r in stale_rows["trade_date"]
+                    _pdate(r).strftime("%d %b") for r in stale_rows["trade_date"]
                 )
                 col_msg, col_btn = st.columns([4, 1])
                 with col_msg:
                     st.warning(
-                        f"**{stale_dates}** outcome is pending — today's EOD data hasn't been fetched yet. "
-                        "Click **Fetch & Fill** to download today's market data and resolve it."
+                        f"**{stale_dates}** outcome is pending — the next session's EOD data "
+                        "hasn't been fetched yet. Click **Fetch & Fill** to download it and resolve it."
                     )
                 with col_btn:
                     if st.button("⬇ Fetch & Fill", key="mem_fetch_fill"):
-                        with st.spinner("Fetching today's EOD data from NSE…"):
+                        with st.spinner("Fetching latest EOD data from NSE…"):
                             _ok, _n = _fetch_and_fill()
                         if _n:
                             st.success(f"Filled {_n} prediction outcome(s). Reloading…")
@@ -444,9 +465,17 @@ def _render_prediction_log(symbol: str) -> None:
                             st.rerun()
                         else:
                             st.error(
-                                "Could not fill outcomes — today's data may not be published "
-                                "on NSE yet (usually available after 6 PM). Try again later."
+                                "Could not fill outcomes — the next session's data may not be "
+                                "published on NSE yet (usually available after 6 PM). Try again later."
                             )
+            elif not waiting_rows.empty:
+                waiting_dates = ", ".join(
+                    _pdate(r).strftime("%d %b") for r in waiting_rows["trade_date"]
+                )
+                st.caption(
+                    f"⏳ **{waiting_dates}** prediction is waiting for the next trading session to "
+                    "complete — its outcome fills automatically once that session's EOD data is fetched."
+                )
 
         all_rows = []
 
