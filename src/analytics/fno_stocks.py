@@ -658,38 +658,55 @@ def _opt_oi_prem_signal(
     return f"{t}.Neutral"
 
 
+# Option-footprint sentiment (price-supportive = bullish). Puts INVERT vs calls:
+# writing or closing puts is bullish; buying or uncovering puts is bearish.
+#   Calls: Buying ↑bull · Writing ↓bear · SC (writers buy back) ↑bull · LE (buyers exit) ↓bear
+#   Puts:  Writing ↑bull · Buying ↓bear · LE (buyers exit) ↑bull · SC (writers buy back) ↓bear
+_OPT_BULLISH = {"C.Buying", "C.SC", "P.Writing", "P.LE"}
+_OPT_BEARISH = {"C.Writing", "C.LE", "P.Buying", "P.SC"}
+
+
+def _opt_sentiment(sig: str) -> int:
+    """+1 bullish / −1 bearish / 0 neutral for a single call- or put-leg signal."""
+    if sig in _OPT_BULLISH:
+        return 1
+    if sig in _OPT_BEARISH:
+        return -1
+    return 0
+
+
 def _combined_opt_label(call_sig: str, put_sig: str, pcr: float | None) -> str:
     """
     Combine call + put OI-premium signals into a single actionable read.
     PCR is appended as supporting context (not the decision driver).
+
+    Bullishness is scored via _opt_sentiment so put legs are read correctly
+    (put writing/closing = bullish; put buying/uncovering = bearish) — naive
+    substring matching ("Buying"/"SC") is call-side only and mis-colours puts.
     """
     if call_sig == "—" and put_sig == "—":
         return "—"
 
-    c_buy = call_sig == "C.Buying"
-    c_wrt = call_sig == "C.Writing"
-    c_sc  = call_sig == "C.SC"
-    p_buy = put_sig  == "P.Buying"
-    p_wrt = put_sig  == "P.Writing"
-    p_sc  = put_sig  == "P.SC"
-
     pcr_s = f" PCR:{pcr:.1f}" if pcr is not None and not pd.isna(pcr) else ""
 
-    # Net long bias: calls being bought OR puts being sold (written)
-    if (c_buy or c_sc) and (p_wrt or p_sc):
+    # Volatility structure — same ACTION on both legs, direction-neutral. Check first.
+    if call_sig == "C.Buying" and put_sig == "P.Buying":
+        return f"⚡ Vol Bet C+P.Buy{pcr_s}"      # both bought → long volatility
+    if call_sig == "C.Writing" and put_sig == "P.Writing":
+        return f"📊 Range C+P.Wrt{pcr_s}"        # both written → short volatility / range
+
+    cb, pb = _opt_sentiment(call_sig), _opt_sentiment(put_sig)
+    # Net directional bias: both legs agree.
+    if cb > 0 and pb > 0:
         return f"🔥 Bull C.Buy+P.Wrt{pcr_s}"
-    # Net short bias: calls being written AND puts being bought
-    if (c_wrt or c_sc) and (p_buy or p_sc):
+    if cb < 0 and pb < 0:
         return f"❄️ Bear C.Wrt+P.Buy{pcr_s}"
-    # Both sides being bought → volatility bet (straddle/strangle)
-    if c_buy and p_buy:
-        return f"⚡ Vol Bet C+P.Buy{pcr_s}"
-    # Both sides being written → range / theta play (iron condor)
-    if c_wrt and p_wrt:
-        return f"📊 Range C+P.Wrt{pcr_s}"
-    # Single-sided signals
+
+    # Single-sided / mixed → lead with the informative leg, colour by TRUE sentiment.
     dominant = call_sig if call_sig not in ("—", "C.Neutral") else put_sig
-    return f"{'🟢' if 'Buying' in dominant or 'SC' in dominant else '🔴'} {dominant}{pcr_s}"
+    sent = _opt_sentiment(dominant)
+    dot = "🟢" if sent > 0 else "🔴" if sent < 0 else "⚪"
+    return f"{dot} {dominant}{pcr_s}"
 
 
 def get_fno_expiry_breakdown_by_symbol(as_of_date: date) -> pd.DataFrame:
