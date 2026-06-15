@@ -251,7 +251,14 @@ def _parse_fno_udiff(text: str, trade_date: date) -> pd.DataFrame:
     for dst, src in (
         ("strike_price", "StrkPric"), ("open_price", "OpnPric"),
         ("high_price", "HghPric"), ("low_price", "LwPric"),
-        ("close_price", "ClsPric"), ("settle_price", "SttlmPric"),
+        ("close_price", "ClsPric"),
+        # IMPORTANT: the whole codebase treats settle_price as the PREVIOUS day's
+        # close (the legacy DAT col 9 was prev-close, and price-change/OI-premium
+        # math relies on `close − settle` = today's move). In UDiFF, SttlmPric is
+        # the SAME-day settlement (≈ today's close) and PrvsClsgPric is the prior
+        # close — so settle_price MUST map to PrvsClsgPric, else every contract's
+        # price change reads 0% and gets mis-classified as Neutral.
+        ("settle_price", "PrvsClsgPric"),
     ):
         df[dst] = pd.to_numeric(raw[src], errors="coerce")
 
