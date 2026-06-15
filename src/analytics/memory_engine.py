@@ -89,8 +89,11 @@ _FEAT_RANGES: dict[str, tuple[float, float]] = {
     "feat_fii_net":      (-1.0,  1.0),   # FII net futures position / 400K → ±1
     "feat_fii_5d_cumul": (-1.0,  1.0),   # FII 5D cumulative futures flow / 5000 Cr → ±1
                                           # sustained buying/selling vs one-day position
-    "feat_fii_delta":    (-1.0,  1.0),   # FII options: (call_net − put_net) / 100K → ±1
-                                          # positive = FII buying calls (bullish options bet)
+    "feat_fii_delta":    (-1.0,  1.0),   # FII options: (call_net − put_net) / 800K → ±1
+                                          # positive = FII buying calls (bullish options bet).
+                                          # 800K divisor: the FII options book is structurally
+                                          # put-heavy (~−290K median, −843K..+245K range over
+                                          # 290d), so /100K saturated 90% of days at the −1 clip.
     # ── Risk / volatility ─────────────────────────────────────────────────────
     "feat_vix":          (8.0,   40.0),  # India VIX absolute level
     "feat_vix_5d_chg":   (-30.0, 30.0), # VIX 5D % change (rising fear vs falling fear)
@@ -231,7 +234,7 @@ def extract_features(pred) -> dict:
     # FII options delta (call_net - put_net, normalised)
     fii_call_n = float((getattr(ctx, "fii_opt_call_net", None) or 0) if ctx else 0)
     fii_put_n  = float((getattr(ctx, "fii_opt_put_net",  None) or 0) if ctx else 0)
-    fii_delta  = max(-1.0, min(1.0, (fii_call_n - fii_put_n) / 100_000))
+    fii_delta  = max(-1.0, min(1.0, (fii_call_n - fii_put_n) / 800_000))
 
     # ── Risk / volatility ─────────────────────────────────────────────────────
     vix        = float((getattr(ctx, "vix_close",     None) or 15.0) if ctx else 15.0)
