@@ -1,10 +1,16 @@
-requests>=2.31
-pandas>=2.0
-duckdb>=0.10
-streamlit>=1.30
-plotly>=5.18
+# Major versions capped deliberately: pandas 3.x and numpy 2.x are breaking
+# releases this codebase was not written against. With bare `>=`, Streamlit
+# Community Cloud re-resolves to the latest on every env rebuild and pulled
+# pandas 3 / numpy 2, which crashes the app at import ("Oh no. Error running
+# app."). Keep the proven pandas-2 / numpy-1 line. duckdb pinned >=1.0 so the
+# cloud can read snapshots written by the local duckdb 1.5.x.
+requests>=2.31,<3
+pandas>=2.1,<3
+numpy>=1.24,<2
+duckdb>=1.0
+streamlit>=1.30,<2
+plotly>=5.18,<6
 pyyaml>=6.0
 python-dateutil>=2.8.2
-numpy>=1.24
 openpyxl>=3.1
 xlrd>=2.0

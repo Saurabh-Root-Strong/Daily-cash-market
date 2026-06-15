@@ -1,0 +1,33 @@
+# Never bake heavy/ephemeral/secret artifacts into the image.
+# The DuckDB (data/) is a runtime volume or pulled via CLOUD_MODE — at ~2.7 GB it
+# must NOT be copied into the image.
+data/
+*.duckdb
+*.duckdb.wal
+*.db
+*.parquet
+
+# Local environment / caches
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# VCS / IDE / OS
+.git/
+.gitignore
+.idea/
+.vscode/
+.DS_Store
+
+# Logs and Windows launchers (host-only)
+logs/
+*.log
+*.bat
+
+# Secrets must never enter the image
+.streamlit/secrets.toml
+.env
