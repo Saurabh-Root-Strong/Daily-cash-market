@@ -129,8 +129,14 @@ assert set(_FEAT_RANGES) == set(_FEAT_WEIGHTS), "Range and weight keys must matc
 _TOP_K            = 20    # top-N similar days to retrieve
 _MIN_HISTORY      = 15    # minimum filled predictions to activate memory signal
 _MIN_SIMILARITY   = 0.15  # discard very dissimilar days (similarity < 0.15)
-_DIRECTION_THRESH = 0.15  # % return threshold: UP > +0.15%, DOWN < -0.15%
-                           # tighter than 0.20% — aligns with composite ≥ ±3 prediction threshold
+_DIRECTION_THRESH = 0.15  # FALLBACK % return threshold when the expected-move band is
+                           # unavailable. The primary outcome classification is now
+                           # band-consistent (see _classify_actual / _SIDEWAYS_BAND_FRAC).
+_SIDEWAYS_BAND_FRAC = 0.40 # = index_prediction._C_SIDE. The engine calls SIDEWAYS when the
+                           # projected move sits inside 0.40σ; to score that apples-to-apples
+                           # the ACTUAL move must be classified against the SAME 0.40σ band,
+                           # not a fixed ±0.15% (which marked a +0.34% day "UP" against a
+                           # SIDEWAYS call even though it was well inside the engine's band).
 
 
 # ── Data classes ──────────────────────────────────────────────────────────────
@@ -186,6 +192,16 @@ class AccuracyReport:
     accuracy_90d:      Optional[float] = None
     avg_return_correct:   float = 0.0
     avg_return_incorrect: float = 0.0
+    # ── Honest split metrics (the engine has no directional edge; the range is the
+    #    product). Reported alongside the blended verdict-match so the headline is
+    #    not dominated by the structurally-hard SIDEWAYS bucket. ──
+    directional_n:        int = 0              # count of UP/DOWN calls
+    directional_accuracy: Optional[float] = None  # strict: move cleared band in called dir
+    directional_sign_hit: Optional[float] = None  # loose: sign(next_ret) == call
+    sideways_n:           int = 0
+    sideways_in_band:     Optional[float] = None   # SIDEWAYS calls that stayed in-band
+    range_n:              int = 0
+    range_coverage:       Optional[float] = None   # next close inside predicted 1σ band
     note:              str = ""
 
 
@@ -318,6 +334,23 @@ def _classify_return(ret: float) -> str:
     return "SIDEWAYS"
 
 
+def _classify_actual(ret: float, em_pts: float | None, spot: float | None) -> str:
+    """Band-consistent outcome verdict: classify the realised next-day move against
+    the SAME 0.40σ noise band the engine used to make the call, so a directional
+    prediction is scored correct only if the move actually cleared that band, and a
+    SIDEWAYS call is correct iff the move stayed inside it. Falls back to the fixed
+    ±_DIRECTION_THRESH when the stored expected move is missing."""
+    if em_pts and spot and em_pts > 0 and spot > 0:
+        band_pct = _SIDEWAYS_BAND_FRAC * em_pts / spot * 100.0
+    else:
+        band_pct = _DIRECTION_THRESH
+    if ret > band_pct:
+        return "UP"
+    if ret < -band_pct:
+        return "DOWN"
+    return "SIDEWAYS"
+
+
 # ── Core API ──────────────────────────────────────────────────────────────────
 
 def store_prediction(pred, trade_date: date) -> None:
@@ -405,7 +438,8 @@ def update_outcomes(as_of_date: date) -> int:
             continue
 
         actual_ret  = float(df["pct_chg"].iloc[0])
-        dir_actual  = _classify_return(actual_ret)
+        dir_actual  = _classify_actual(
+            actual_ret, row.get("expected_move_pts"), row.get("spot_close"))
         dir_pred    = str(row["direction_pred"])
         correct     = (dir_pred == dir_actual)
 
@@ -623,6 +657,27 @@ def get_accuracy_report(fno_symbol: str, days: int = 90) -> AccuracyReport:
         report.total_predictions = len(window)
         report.correct           = int(window["was_correct"].sum())
         report.overall_accuracy  = round(report.correct / report.total_predictions, 4)
+
+        # ── Honest split: directional skill vs range coverage ─────────────────
+        dir_win = window[window["direction_pred"].isin(["UP", "DOWN"])]
+        report.directional_n = len(dir_win)
+        if report.directional_n > 0:
+            report.directional_accuracy = round(dir_win["was_correct"].mean(), 4)
+            ret = dir_win["actual_return"].astype(float)
+            sign_hit = np.where(dir_win["direction_pred"] == "UP", ret > 0, ret < 0)
+            report.directional_sign_hit = round(float(np.mean(sign_hit)), 4)
+        sw_win = window[window["direction_pred"] == "SIDEWAYS"]
+        report.sideways_n = len(sw_win)
+        if report.sideways_n > 0:
+            report.sideways_in_band = round(sw_win["was_correct"].mean(), 4)
+        # Range coverage: did the next close land inside the predicted 1σ band?
+        rc = window.dropna(subset=["range_low", "range_high", "spot_close", "actual_return"])
+        rc = rc[(rc["range_low"] > 0) & (rc["range_high"] > 0)]
+        report.range_n = len(rc)
+        if report.range_n > 0:
+            nc = rc["spot_close"].astype(float) * (1 + rc["actual_return"].astype(float) / 100.0)
+            covered = (nc >= rc["range_low"].astype(float)) & (nc <= rc["range_high"].astype(float))
+            report.range_coverage = round(float(covered.mean()), 4)
 
         for d in ["UP", "DOWN", "SIDEWAYS"]:
             sub = window[window["direction_pred"] == d]

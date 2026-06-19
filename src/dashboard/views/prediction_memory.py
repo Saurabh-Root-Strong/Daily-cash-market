@@ -91,9 +91,10 @@ def render(selected_date: date) -> None:
         "fingerprint, and the most similar past days are surfaced as **context** ("
         "\"in conditions like today, what happened next?\"). "
         "**Honest status:** this is a look-up of historical analogs, *not* a validated "
-        "accuracy booster — on the data so far it does **not** measurably improve next-day "
-        "hit-rate (the target is near-random and the history is small, ~40 days/index). "
-        "Read the similar-days panel as context, not a forecast."
+        "accuracy booster — across the full walk-forward backtest (~360 days/index, pruned "
+        "index-F&O engine) the next-day direction is a coin-flip (~46% hit) and memory does "
+        "**not** measurably improve it. The trustworthy output is the predicted RANGE "
+        "(~70% close-containment). Read the similar-days panel as context, not a forecast."
     )
 
     # ── Auto-heal: fill stale pending outcomes if index_data already has the data ──
@@ -124,9 +125,9 @@ def render(selected_date: date) -> None:
     with col_days:
         window = st.selectbox(
             "Accuracy Window",
-            [30, 60, 90],
+            [30, 60, 90, 180, 365, 3650],
             index=1,
-            format_func=lambda d: f"Last {d} days",
+            format_func=lambda d: ("All history" if d >= 3650 else f"Last {d} days"),
             key="mem_window",
         )
 
@@ -186,7 +187,11 @@ def render(selected_date: date) -> None:
     # ── 6. Prediction History with Predicted Range ────────────────────────────
     st.markdown("#### 📋 Prediction History")
     st.caption(
-        f"Each row = prediction made at end of that trading day for the **next** session. "
+        f"Each row = the prediction for the **next** session as the **current** index-F&O "
+        f"engine computes it from that day's end-of-day data. **This history is a "
+        f"walk-forward replay of today's logic** (point-in-time, no look-ahead — the memory "
+        f"lookup is date-gated), not a log of the original live calls, so the whole table is "
+        f"consistent with the engine you see now. "
         f"**Range Low / Range High** = 68% expected-move band (1σ). "
         f"**Target** = directional close target (conviction-scaled). "
         f"Showing **{_SYM_LABELS.get(sym, sym)}** — switch index above to compare."
@@ -211,18 +216,42 @@ def _render_empty_state() -> None:
 
 
 def _render_accuracy_kpis(report) -> None:
+    # ── Honest framing: this engine has NO measured directional edge. Lead with the
+    #    two metrics that matter — RANGE coverage (the calibrated product) and the
+    #    DIRECTIONAL hit-rate (≈coin-flip) — and de-emphasise the blended verdict-match,
+    #    which is dominated by the structurally-hard SIDEWAYS bucket (scored vs a tight
+    #    0.40σ band, so it floors near ~31% even with perfect calibration).
     c1, c2, c3, c4, c5, c6 = st.columns(6)
 
-    acc_color = "#4CAF50" if report.overall_accuracy >= 0.55 else (
-        "#FFD600" if report.overall_accuracy >= 0.45 else "#EF5350"
-    )
-    c1.metric("Overall Accuracy",  f"{report.overall_accuracy:.0%}",
-              help="Correct direction predictions / total predictions in the window.")
-    c2.metric("Total Predictions", f"{report.total_predictions}")
-    c3.metric("Correct",           f"{report.correct}")
-    c4.metric("30D Accuracy",
-              f"{report.accuracy_30d:.0%}" if report.accuracy_30d else "—",
-              help="Rolling 30-day hit rate.")
+    rc = report.range_coverage
+    rc_color = "#4CAF50" if (rc is not None and 0.62 <= rc <= 0.74) else (
+        "#FFD600" if rc is not None else "#78909C")
+    c1.metric("Range Coverage",
+              f"{rc:.0%}" if rc is not None else "—",
+              help="THE trustworthy output. Share of days the actual next close landed "
+                   "inside the predicted 1σ band. Target ~68%. Green = calibrated.")
+
+    sh = report.directional_sign_hit
+    sh_color = "#EF5350" if (sh is not None and sh < 0.50) else "#FFD600"
+    c2.metric("Directional Hit",
+              f"{sh:.0%}" if sh is not None else "—",
+              delta=(f"{(sh-0.5)*100:+.1f} pp vs coin-flip" if sh is not None else None),
+              delta_color="normal",
+              help=f"Sign-hit on UP/DOWN calls only (n={report.directional_n}). 50% = random. "
+                   "The arrow has no measured edge — this sits at ~coin-flip by design.")
+
+    c3.metric("Verdict Match",
+              f"{report.overall_accuracy:.0%}",
+              help="BLENDED across UP/DOWN/SIDEWAYS (a call is 'matched' only if the move "
+                   "resolved on the correct side of the 0.40σ band). Structurally low because "
+                   "~70% of calls are SIDEWAYS, which is correct only when the move stays "
+                   "inside the tight band (~31% even if perfectly calibrated). Not a failure — "
+                   "read Range Coverage + Directional Hit instead.")
+
+    c4.metric("Sideways In-Band",
+              f"{report.sideways_in_band:.0%}" if report.sideways_in_band is not None else "—",
+              help=f"Of SIDEWAYS calls (n={report.sideways_n}), share where the next move "
+                   "stayed inside the 0.40σ band.")
     c5.metric("Avg Return (Correct)",
               f"{report.avg_return_correct:+.2f}%",
               help="Average next-day index return on correctly predicted days.")
@@ -230,18 +259,20 @@ def _render_accuracy_kpis(report) -> None:
               f"{report.avg_return_incorrect:+.2f}%",
               help="Average next-day index return on incorrectly predicted days.")
 
-    pct = report.overall_accuracy
-    col = "#4CAF50" if pct >= 0.55 else ("#FFD600" if pct >= 0.45 else "#EF5350")
-    st.markdown(
-        f"<div style='margin:8px 0 4px;font-size:0.75em;color:#888'>Accuracy gauge (50% = random)</div>"
-        f"<div style='height:10px;background:#2a2a2a;border-radius:5px;overflow:hidden'>"
-        f"<div style='height:100%;width:{pct*100:.1f}%;background:{col};'></div>"
-        f"</div>"
-        f"<div style='display:flex;justify-content:space-between;font-size:0.7em;color:#555;margin-top:2px'>"
-        f"<span>0%</span><span style='color:#FFD600'>50% (random)</span><span>100%</span>"
-        f"</div>",
-        unsafe_allow_html=True,
-    )
+    # Gauge is anchored on RANGE COVERAGE vs the honest ~68% target (the real
+    # calibration question), NOT the blended verdict-match.
+    if rc is not None:
+        st.markdown(
+            f"<div style='margin:8px 0 4px;font-size:0.75em;color:#888'>"
+            f"Range-coverage gauge (68% = calibrated 1σ band · n={report.range_n})</div>"
+            f"<div style='position:relative;height:10px;background:#2a2a2a;border-radius:5px;overflow:hidden'>"
+            f"<div style='height:100%;width:{rc*100:.1f}%;background:{rc_color};'></div>"
+            f"</div>"
+            f"<div style='display:flex;justify-content:space-between;font-size:0.7em;color:#555;margin-top:2px'>"
+            f"<span>0%</span><span style='color:#4CAF50'>68% (target)</span><span>100%</span>"
+            f"</div>",
+            unsafe_allow_html=True,
+        )
 
 
 def _render_direction_accuracy(report) -> None:
@@ -565,29 +596,35 @@ def _render_prediction_log(symbol: str) -> None:
                 ),
                 "Pred": _htc(
                     "Pred",
-                    help="Predicted direction for the NEXT trading session.\n\n"
-                         "UP = composite score ≥ +3 → bullish bias\n"
-                         "DOWN = composite score ≤ −3 → bearish bias\n"
-                         "SIDEWAYS = score between −3 and +3 → no clear edge",
+                    help="Predicted direction for the NEXT trading session "
+                         "(pruned index-F&O engine, 2026-06-19).\n\n"
+                         "Single conviction axis: conviction = composite / 20.\n"
+                         "UP/DOWN  = |composite| ≥ 8 (conviction ≥ 0.40σ) → a directional bet\n"
+                         "SIDEWAYS = |composite| < 8 → projected move sits inside the noise\n"
+                         "           band, so there is NO directional edge (trade the range,\n"
+                         "           not the arrow). Most days are SIDEWAYS by design.",
                     width="small",
                 ),
                 "Conf": _htc(
                     "Conf",
-                    help="Confidence level of the prediction.\n\n"
-                         "HIGH   = score ≥ ±12 (~6+ signals aligned)\n"
-                         "MEDIUM = score ≥ ±7\n"
-                         "LOW    = score ≥ ±3\n\n"
-                         "HIGH confidence should have the highest hit rate; "
-                         "check the Accuracy by Confidence section above.",
+                    help="Confidence of a directional (UP/DOWN) call.\n\n"
+                         "HIGH   = |composite| ≥ 12\n"
+                         "MEDIUM = |composite| ≥ 8\n"
+                         "LOW    = tiebreaker/near-band calls\n\n"
+                         "HIGH is further capped to MEDIUM in chaotic-entropy regimes and "
+                         "when the measured directional hit-rate is sub-50% — so in practice "
+                         "almost no live call prints HIGH (the arrow has no measured edge).",
                     width="small",
                 ),
                 "Score": _htc(
                     "Score",
-                    help="Composite directional score — sum of all signal scores.\n\n"
-                         "Range: typically −20 to +20 (max possible ≈ ±35).\n"
-                         "Positive = bullish weight, negative = bearish weight.\n"
-                         "Institutional signals are capped at ±3 to prevent "
-                         "collinear FAO data from dominating the composite.",
+                    help="Composite directional score — family-capped sum (NOT a raw sum).\n\n"
+                         "Each signal FAMILY's net score is clamped to a per-family cap scaled "
+                         "by its measured next-day IC, then summed → range ≈ ±23.\n"
+                         "Caps: Price Action 7 · Options OI 5 · Statistical Regime 4 · "
+                         "Futures OI 4 · Institutional 3. Sector / Carry / Market Context / "
+                         "Memory are EXCLUDED from the vote (≤0 IC — context only).\n"
+                         "Positive = bullish weight, negative = bearish.",
                     width="small",
                 ),
                 "Pred Range (next day)": _htc(
@@ -612,12 +649,14 @@ def _render_prediction_log(symbol: str) -> None:
                 ),
                 "Actual": _htc(
                     "Actual",
-                    help="What actually happened on the NEXT trading session.\n\n"
-                         "UP      = next-day return > +0.15%\n"
-                         "DOWN    = next-day return < −0.15%\n"
-                         "SIDEWAYS = return between −0.15% and +0.15%\n\n"
-                         "The same threshold is used for both prediction and outcome "
-                         "so comparisons are apples-to-apples.",
+                    help="What actually happened on the NEXT trading session, classified "
+                         "against the SAME 0.40σ band the engine used to make the call "
+                         "(apples-to-apples with the SIDEWAYS definition):\n\n"
+                         "UP       = next-day return > +0.40σ band\n"
+                         "DOWN     = next-day return < −0.40σ band\n"
+                         "SIDEWAYS = move stayed inside the band\n\n"
+                         "Band width = 0.40 × expected-move, so it scales with each day's "
+                         "volatility (a fixed ±0.15% would mislabel a normal-vol day).",
                     width="small",
                 ),
                 "Return": _htc(
@@ -630,11 +669,13 @@ def _render_prediction_log(symbol: str) -> None:
                 ),
                 "Correct": _htc(
                     "Correct",
-                    help="✅ = predicted direction matched actual direction on the next day.\n"
+                    help="✅ = predicted verdict matched the actual band-relative verdict.\n"
                          "❌ = prediction was wrong.\n"
                          "⏳ = outcome not yet filled (today's pending prediction).\n\n"
-                         "Note: SIDEWAYS predictions are correct only if the market "
-                         "also moved < 0.15% the next day.",
+                         "UP/DOWN is correct only if the move CLEARED the 0.40σ band in the "
+                         "called direction; SIDEWAYS is correct iff the move stayed inside it. "
+                         "Backtested directional hit-rate ≈ 46% (coin-flip) — the trustworthy "
+                         "output is the RANGE (~70% coverage), not the arrow.",
                     width="small",
                 ),
                 "HMM": _htc(
