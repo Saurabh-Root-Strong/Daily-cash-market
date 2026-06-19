@@ -123,15 +123,50 @@ _SYMBOL_TO_FII_OPT: dict[str, str] = {
 }
 
 _CYCLICAL_SECTORS = [
-    "Nifty Bank", "Nifty Auto", "Nifty Realty", "Nifty Metal",
+    "Nifty Auto", "Nifty Realty", "Nifty Metal",
     "Nifty Infrastructure", "Nifty PSU Bank", "Nifty Private Bank",
 ]
 _DEFENSIVE_SECTORS = [
-    "Nifty FMCG", "Nifty Pharma", "Nifty Healthcare",
+    "Nifty FMCG", "Nifty Pharma",
     "Nifty IT", "Nifty Consumer Durables",
 ]
 
+# Canonical NSE sectoral indices for the breadth signal (Zweig) — one entry per
+# distinct economic sector. index_data also carries 100+ broad-market clones
+# (Nifty 100/500, Total Market), factor/strategy indices (Alpha, Quality, Low-Vol),
+# corporate-group baskets and even a G-sec bond index; counting those as "sectors"
+# double-counts the same large caps and dilutes breadth toward the index itself.
+_SECTOR_BREADTH_INDICES = [
+    "Nifty Auto", "Nifty Private Bank", "Nifty PSU Bank", "Nifty FMCG",
+    "Nifty IT", "Nifty Media", "Nifty Metal", "Nifty Pharma", "Nifty Realty",
+    "Nifty Consumer Durables", "Nifty Oil & Gas", "Nifty Energy",
+    "Nifty Infrastructure", "Nifty Chemicals", "Nifty Capital Markets",
+]
+
 _INDIA_REPO = 6.5   # annualised % — RBI repo for fair-value carry
+
+# Minimum share of total FII index-futures OI an index must hold before the AGGREGATE
+# FII positioning signals (which are pooled across all index futures) may be attributed
+# to it. On current data: NIFTY ~76%, BankNifty ~17% (pass); Midcap ~6%, FinNifty ~0.1%
+# (suppressed — those indices use their per-index FII flow signals instead).
+_FII_FUT_OI_SHARE_MIN = 0.10
+
+# Options-chain liquidity gate. PCR / max-pain / OI-premium only reflect real positioning
+# when the near-expiry chain is liquid AND reasonably distributed. Below the OI floor or
+# above the single-strike concentration ceiling the chain is too thin/lumpy to read
+# (FinNifty: ~90k OI with ~half the call OI in one far-OTM strike → PCR 0.30 and walls are
+# noise). On current data this isolates FinNifty while sparing Midcap (~722k), BankNifty
+# (~1.6M) and NIFTY (~70M).
+_OPT_OI_MIN   = 250_000   # near-expiry total option OI (contracts)
+_OPT_CONC_MAX = 0.40      # max fraction of total OI allowed in a single strike
+
+# Index-futures carry is pinned near cost-of-carry (~repo 6.5% − div yield, ≈5% ann) by
+# cash-futures arbitrage. A reading far outside this band is a thin/stale settlement-price
+# artifact (e.g. Midcap 38% ann off a thin monthly contract), not tradeable carry — the
+# directional carry signal is suppressed outside the band. Legitimate stress backwardation
+# (down to ~−12%) is preserved.
+_CARRY_MIN_ANN = -12.0
+_CARRY_MAX_ANN = 18.0
 
 # ── Index constituent symbol tuples ──────────────────────────────────────────
 # Used for Signals 17c/d/e: breadth + delivery quality, stock futures OI-Price
@@ -267,6 +302,11 @@ class MarketContext:
     fii_opt_call_net: int = 0       # FII: call_long − call_short
     fii_opt_put_net: int = 0        # FII: put_long  − put_short
     fii_opt_delta: int = 0          # call_net − put_net
+    # Per-participant options delta (call_net − put_net) for the role-aware options read:
+    # Client = retail (contrarian), Pro = informed desks, DII = minor.
+    client_opt_delta: int = 0
+    pro_opt_delta: int = 0
+    dii_opt_delta: int = 0
 
     # ── FAO day-over-day position change (adds conviction to direction) ────────
     fii_prev_fao_date: Optional[date] = None
@@ -407,6 +447,28 @@ class IndexPrediction:
     wk_max_pain: Optional[float] = None             # gravity / pin into expiry
     wk_basis: str = ""                              # one-line explanation
 
+    # ── Monthly (to monthly-expiry) range — NIFTY only, built from MONTHLY-expiry OI ──
+    # Distinct from wk_* (the weekly): a wider, slower scenario band to the monthly
+    # expiry, off the monthly chain's ATM straddle + monthly OI walls + monthly max pain.
+    # Empty for Bank/Fin/Midcap (monthly-only → their wk_* range already IS the monthly).
+    mn_expiry: Optional[date] = None                # the monthly expiry this range runs to
+    mn_dte_cal: Optional[int] = None                # calendar days to the monthly expiry
+    mn_kind: str = ""                               # "monthly"
+    mn_move_pts: Optional[float] = None             # expected move to monthly expiry (points)
+    mn_range_low: Optional[float] = None            # spot − monthly move
+    mn_range_high: Optional[float] = None           # spot + monthly move
+    mn_straddle_pts: Optional[float] = None         # monthly ATM straddle premium
+    mn_put_floor: Optional[float] = None            # monthly put-wall support
+    mn_call_cap: Optional[float] = None             # monthly call-wall resistance
+    mn_max_pain: Optional[float] = None             # monthly max pain (pin into monthly expiry)
+    mn_basis: str = ""                              # one-line explanation
+
+    # ── Price-structure S/R (swing-pivot zones from daily OHLC — Signal 6b) ──
+    sr_support: Optional[float] = None              # nearest multi-touch support below spot
+    sr_resistance: Optional[float] = None           # nearest multi-touch resistance above spot
+    sr_support_touches: int = 0                     # pivot touches at that support
+    sr_resistance_touches: int = 0                  # pivot touches at that resistance
+
 
 # ── Public entry point ────────────────────────────────────────────────────────
 
@@ -429,19 +491,28 @@ def get_index_predictions(
     ]
 
 
-def get_engine_accuracy(min_n: int = 20) -> dict:
+def get_engine_accuracy(min_n: int = 20, fno_symbol: Optional[str] = None) -> dict:
     """
     HONEST self-validation — the engine's REALIZED next-day track record from
     prediction_log (logged daily by cmd_daily, outcomes filled after the fact).
+
+    fno_symbol=None pools all indices; pass a symbol (e.g. "NIFTY") for the
+    PER-INDEX track record — pooling hides the worst case (NIFTY's hit-rate is far
+    below the blended average), so the per-index number is what the verdict card
+    must show next to its own call.
 
     Returns {} when too few outcomes. Otherwise: n, directional sign hit-rate,
     composite→return rank IC, and the date range. This is published on the page so
     the verdict is never trusted more than its measured accuracy warrants.
     """
     try:
-        df = query_dataframe(
-            "SELECT direction_pred, composite_score, actual_return, was_correct, trade_date "
-            "FROM prediction_log WHERE outcome_filled AND actual_return IS NOT NULL", [])
+        sql = ("SELECT direction_pred, composite_score, actual_return, was_correct, trade_date "
+               "FROM prediction_log WHERE outcome_filled AND actual_return IS NOT NULL")
+        params: list = []
+        if fno_symbol:
+            sql += " AND fno_symbol = ?"
+            params.append(fno_symbol)
+        df = query_dataframe(sql, params)
     except Exception:
         return {}
     if df is None or df.empty or len(df) < min_n:
@@ -458,6 +529,7 @@ def get_engine_accuracy(min_n: int = 20) -> dict:
     except Exception:
         ic = float("nan")
     return {
+        "symbol": fno_symbol or "ALL",
         "n": int(len(df)), "n_dir": int(len(d)),
         "sign_hit": round(sign_hit, 0), "ic": round(ic, 3),
         "since": str(df["trade_date"].min())[:10], "until": str(df["trade_date"].max())[:10],
@@ -623,26 +695,12 @@ def _load_nifty_pe(trade_date: date) -> Optional[float]:
 
 
 def _load_sector_indices(trade_date: date) -> pd.DataFrame:
-    return query_dataframe("""
+    _ph = ", ".join("?" * len(_SECTOR_BREADTH_INDICES))
+    return query_dataframe(f"""
         SELECT index_name, close_val, pct_chg FROM index_data
         WHERE trade_date = ?
-          AND index_name NOT IN (
-            'India VIX','Nifty 50','Nifty Bank',
-            'Nifty Financial Services','Nifty Midcap Select'
-          )
-    """, [trade_date])
-
-
-def _is_monthly_expiry_day(d: date) -> bool:
-    """True when d is the last Tuesday of its calendar month.
-
-    After the Sep 2025 NSE change, ALL F&O (index and stock) expires on the
-    last Tuesday of each month. On this day the stock futures OI collapses
-    uniformly for every constituent stock, making Signal 17d unreliable:
-    every stock shows oi_dn = True (settlement, not direction), producing a
-    false basket-bearish or basket-bullish reading depending on price direction.
-    """
-    return d.weekday() == 1 and (d + timedelta(days=7)).month != d.month
+          AND index_name IN ({_ph})
+    """, [trade_date, *_SECTOR_BREADTH_INDICES])
 
 
 def _compute_constituent_stats(symbols: tuple, trade_date: date) -> _ConstituentStats:
@@ -716,10 +774,14 @@ def _compute_constituent_stats(symbols: tuple, trade_date: date) -> _Constituent
         _ftd = _fdates[0] if _fdates else None
         _fpd = _fdates[1] if len(_fdates) >= 2 else None
 
-        if _ftd and _fpd and not _is_monthly_expiry_day(_ftd):
-            # Skip on monthly stock-futures expiry day (last Tuesday of month).
-            # On that day every constituent stock's OI collapses from settlement,
-            # creating a false basket-bearish or -bullish read regardless of direction.
+        # Settlement-day detection is DATA-DRIVEN (any contract expiring today),
+        # not calendar-based: a "last Tuesday" rule misses expiries shifted a day
+        # earlier by a trading holiday. On settlement day every constituent's OI
+        # collapses, creating a false basket read regardless of direction.
+        _is_settlement_day = bool(
+            (_fut_df.loc[_fut_df["trade_date"] == _ftd, "expiry_date"] == _ftd).any()
+        ) if _ftd else False
+        if _ftd and _fpd and not _is_settlement_day:
             _today_f = (
                 _fut_df[_fut_df["trade_date"] == _ftd]
                 .groupby("symbol", as_index=False).first()
@@ -927,9 +989,15 @@ def _build_market_context(trade_date: date) -> MarketContext:
                 ctx.fii_opt_call_net = call_net
                 ctx.fii_opt_put_net  = put_net
                 ctx.fii_opt_delta    = call_net - put_net
-            elif ct == "DII":    ctx.dii_fut_idx_net    = fut_net
-            elif ct == "CLIENT": ctx.client_fut_idx_net = fut_net
-            elif ct in ("PRO", "PROPRIETORY", "PROP"): ctx.pro_fut_idx_net = fut_net
+            elif ct == "DII":
+                ctx.dii_fut_idx_net = fut_net
+                ctx.dii_opt_delta   = call_net - put_net
+            elif ct == "CLIENT":
+                ctx.client_fut_idx_net = fut_net
+                ctx.client_opt_delta   = call_net - put_net
+            elif ct in ("PRO", "PROPRIETORY", "PROP"):
+                ctx.pro_fut_idx_net = fut_net
+                ctx.pro_opt_delta   = call_net - put_net
 
         # Previous date (for day-over-day change)
         if ctx.fii_prev_fao_date:
@@ -1320,6 +1388,278 @@ def _sig_rsi(idx_hist: pd.DataFrame) -> Optional[IndexSignal]:
     return None
 
 
+# ── Price-structure Support / Resistance (Signal 6b — S/R Confluence) ─────────
+# Swing-pivot S/R zones from the daily index OHLC, then a confluence read: did the
+# last few sessions TEST a level and hold/reject it, and do the option writers
+# (put/call OI walls), volume expansion and FII flow agree with that defense?
+# Edwards & Magee level logic + the OI-wall confirmation this engine already trusts.
+
+_SR_PIVOT_WING  = 2      # fractal pivot = extreme of ±2 bars (5-bar fractal)
+_SR_CLUSTER_PCT = 0.45   # pivots within this % of each other merge into one zone
+_SR_BAND_PCT    = 0.30   # zone half-width used for test / hold / break detection
+_SR_NEAR_PCT    = 3.5    # only read zones within this % of spot
+_SR_MIN_TOUCH   = 2      # a level needs ≥2 pivot touches to count as a line
+_SR_TEST_WIN    = 4      # sessions scanned for hold / reject / break events
+_SR_WALL_PCT    = 0.60   # OI wall within this % of a price level = confluence
+_SR_VOL_CONFIRM = 1.15   # volume ≥1.15× 20D avg on the event day (validated threshold)
+
+
+def _detect_sr_zones(idx_hist: pd.DataFrame) -> list[dict]:
+    """Swing-pivot S/R zones from daily OHLC.
+
+    Confirmed 5-bar fractal pivots (the last _SR_PIVOT_WING bars can never confirm
+    a pivot, so the detection is point-in-time safe), clustered into zones when
+    pivots sit within _SR_CLUSTER_PCT of each other. Returns zones with ≥2 touches:
+    [{level, touches, last_bar}] sorted by level ascending.
+    """
+    if idx_hist is None or len(idx_hist) < 25:
+        return []
+    df = idx_hist.sort_values("trade_date").reset_index(drop=True)
+    hi = df["high_val"].astype(float)
+    lo = df["low_val"].astype(float)
+    n, w = len(df), _SR_PIVOT_WING
+
+    pivots: list[tuple[float, int]] = []   # (price, bar index)
+    for i in range(w, n - w):
+        h, l = hi.iloc[i], lo.iloc[i]
+        if pd.notna(h) and h >= hi.iloc[i - w:i + w + 1].max():
+            pivots.append((float(h), i))
+        if pd.notna(l) and l <= lo.iloc[i - w:i + w + 1].min():
+            pivots.append((float(l), i))
+    if not pivots:
+        return []
+
+    pivots.sort(key=lambda p: p[0])
+    clusters: list[dict] = []
+    for price, bar in pivots:
+        if clusters and abs(price - clusters[-1]["level"]) / clusters[-1]["level"] * 100 <= _SR_CLUSTER_PCT:
+            c = clusters[-1]
+            c["prices"].append(price); c["bars"].append(bar)
+            c["level"] = float(np.mean(c["prices"]))
+        else:
+            clusters.append({"level": price, "prices": [price], "bars": [bar]})
+
+    return [
+        {"level": c["level"], "touches": len(c["prices"]), "last_bar": max(c["bars"])}
+        for c in clusters if len(c["prices"]) >= _SR_MIN_TOUCH
+    ]
+
+
+def _sr_level_read(
+    idx_hist: pd.DataFrame,
+    spot_close: Optional[float],
+    levels: Optional[IndexKeyLevels] = None,
+    fii_5d: Optional[float] = None,
+) -> dict:
+    """Read the last _SR_TEST_WIN sessions against the nearby S/R zones.
+
+    Pure-price core (works on OHLC alone — validated over the full index history)
+    plus optional confluence inputs: OI walls (levels) and FII 5D flow (fii_5d).
+    Returns a dict consumed by _sig_sr_confluence and the IndexPrediction sr_* fields.
+    """
+    out: dict = {
+        "support": None, "resistance": None,
+        "sup_touches": 0, "res_touches": 0,
+        "bull": 0.0, "bear": 0.0, "score": 0.0, "direction": 0,
+        "bull_notes": [], "bear_notes": [], "range_read": False,
+    }
+    if not spot_close or idx_hist is None or len(idx_hist) < 25:
+        return out
+    zones = _detect_sr_zones(idx_hist)
+    if not zones:
+        return out
+
+    df = idx_hist.sort_values("trade_date").reset_index(drop=True)
+    closes = df["close_val"].astype(float)
+    highs  = df["high_val"].astype(float)
+    lows   = df["low_val"].astype(float)
+    vols   = df["turnover_cr"].fillna(0.0)
+    if float(vols.sum()) <= 0:
+        vols = df["volume"].fillna(0.0)
+    n = len(df)
+    win = min(_SR_TEST_WIN, n - 21)   # need 20 prior bars for the volume baseline
+    if win < 1:
+        return out
+
+    def _vol_ratio(i: int) -> Optional[float]:
+        base = float(vols.iloc[max(0, i - 20):i].mean())
+        return (float(vols.iloc[i]) / base) if base > 0 else None
+
+    # Most-recent event per zone over the last `win` sessions.
+    # hold   = dipped into the zone intraday but closed back above (defense)
+    # reject = poked into the zone intraday but closed back below (supply)
+    # break_dn / break_up = close crossed through the whole band in one session
+    near_band = spot_close * _SR_NEAR_PCT / 100
+    events: list[dict] = []
+    for z in zones:
+        if abs(z["level"] - spot_close) > near_band:
+            continue
+        b_lo = z["level"] * (1 - _SR_BAND_PCT / 100)
+        b_hi = z["level"] * (1 + _SR_BAND_PCT / 100)
+        for i in range(n - win, n):
+            c, c_prev = float(closes.iloc[i]), float(closes.iloc[i - 1])
+            kind = None
+            if c_prev > b_hi and c < b_lo:
+                kind = "break_dn"
+            elif c_prev < b_lo and c > b_hi:
+                kind = "break_up"
+            elif float(lows.iloc[i]) <= b_hi and c > b_hi:
+                kind = "hold"
+            elif float(highs.iloc[i]) >= b_lo and c < b_lo:
+                kind = "reject"
+            if kind:
+                events.append({
+                    "zone": z, "kind": kind, "bar": i,
+                    "ago": n - 1 - i, "vol_ratio": _vol_ratio(i),
+                    "date": df["trade_date"].iloc[i],
+                })
+
+    # Nearest defended support below spot / nearest supply resistance above spot
+    sup = max((z for z in zones if z["level"] < spot_close
+               and spot_close - z["level"] <= near_band),
+              key=lambda z: z["level"], default=None)
+    res = min((z for z in zones if z["level"] > spot_close
+               and z["level"] - spot_close <= near_band),
+              key=lambda z: z["level"], default=None)
+    out["support"]     = round(sup["level"], 0) if sup else None
+    out["resistance"]  = round(res["level"], 0) if res else None
+    out["sup_touches"] = sup["touches"] if sup else 0
+    out["res_touches"] = res["touches"] if res else 0
+
+    def _wall_near(level: float, *walls) -> Optional[float]:
+        cand = [w for w in walls if w]
+        if not cand:
+            return None
+        best = min(cand, key=lambda w: abs(w - level))
+        return best if abs(best - level) / level * 100 <= _SR_WALL_PCT else None
+
+    bull = bear = 0.0
+
+    # ── Support defended ─────────────────────────────────────────────────────
+    if sup is not None:
+        holds = [e for e in events if e["zone"] is sup and e["kind"] == "hold"]
+        if holds:
+            latest = min(holds, key=lambda e: e["ago"])
+            bull += 1.0 + 0.4 * min(len(holds) - 1, 2)
+            out["bull_notes"].append(
+                f"support {sup['level']:,.0f} ({sup['touches']}-touch) tested "
+                f"{len(holds)}× in last {win} sessions and HELD (latest {latest['date']})")
+            if sup["touches"] >= 3:
+                bull += 0.25
+            vr = latest["vol_ratio"]
+            if vr is not None and vr >= _SR_VOL_CONFIRM:
+                bull += 0.5
+                out["bull_notes"].append(f"defense on {vr:.2f}× volume (real buying)")
+            pw = _wall_near(sup["level"],
+                            levels.top_put_strike if levels else None,
+                            levels.second_put_strike if levels else None)
+            if pw is not None:
+                bull += 0.75
+                out["bull_notes"].append(
+                    f"put wall {pw:,.0f} sits ON the price support — writers defend the same line")
+
+    # ── Resistance rejecting ─────────────────────────────────────────────────
+    if res is not None:
+        rejects = [e for e in events if e["zone"] is res and e["kind"] == "reject"]
+        if rejects:
+            latest = min(rejects, key=lambda e: e["ago"])
+            bear += 1.0 + 0.4 * min(len(rejects) - 1, 2)
+            out["bear_notes"].append(
+                f"resistance {res['level']:,.0f} ({res['touches']}-touch) tested "
+                f"{len(rejects)}× in last {win} sessions and REJECTED (latest {latest['date']})")
+            if res["touches"] >= 3:
+                bear += 0.25
+            vr = latest["vol_ratio"]
+            if vr is not None and vr >= _SR_VOL_CONFIRM:
+                bear += 0.5
+                out["bear_notes"].append(f"rejection on {vr:.2f}× volume (real supply)")
+            cw = _wall_near(res["level"],
+                            levels.top_call_strike if levels else None,
+                            levels.second_call_strike if levels else None)
+            if cw is not None:
+                bear += 0.75
+                out["bear_notes"].append(
+                    f"call wall {cw:,.0f} sits ON the price resistance — writers cap the same line")
+
+    # ── Fresh breaks (last 2 sessions, price still beyond the zone) ──────────
+    for e in events:
+        if e["ago"] > 1:
+            continue
+        z = e["zone"]
+        if e["kind"] == "break_dn" and spot_close < z["level"] * (1 - _SR_BAND_PCT / 100):
+            bear += 1.25
+            out["bear_notes"].append(
+                f"BROKE {z['touches']}-touch support {z['level']:,.0f} ({e['date']}) — level flips to resistance")
+            vr = e["vol_ratio"]
+            if vr is not None and vr >= _SR_VOL_CONFIRM:
+                bear += 0.5
+                out["bear_notes"].append(f"breakdown on {vr:.2f}× volume")
+        elif e["kind"] == "break_up" and spot_close > z["level"] * (1 + _SR_BAND_PCT / 100):
+            bull += 1.25
+            out["bull_notes"].append(
+                f"BROKE ABOVE {z['touches']}-touch resistance {z['level']:,.0f} ({e['date']}) — level flips to support")
+            vr = e["vol_ratio"]
+            if vr is not None and vr >= _SR_VOL_CONFIRM:
+                bull += 0.5
+                out["bull_notes"].append(f"breakout on {vr:.2f}× volume")
+
+    # ── FII flow agreement (5D cumulative ₹Cr in THIS index's futures) ───────
+    if fii_5d is not None and abs(fii_5d) >= 500 and bull != bear:
+        if fii_5d > 0 and bull > bear:
+            bull += 0.25
+            out["bull_notes"].append(f"FII 5D futures flow +₹{fii_5d:,.0f}Cr agrees")
+        elif fii_5d < 0 and bear > bull:
+            bear += 0.25
+            out["bear_notes"].append(f"FII 5D futures flow −₹{abs(fii_5d):,.0f}Cr agrees")
+
+    # Defended floor AND capped ceiling at once = range market, not a direction.
+    if bull >= 1.0 and bear >= 1.0:
+        out["range_read"] = True
+        out["bull"], out["bear"] = bull, bear
+        return out
+
+    net = max(-2.5, min(2.5, bull - bear))
+    out["bull"], out["bear"] = bull, bear
+    out["score"] = net
+    out["direction"] = 1 if net >= 0.75 else (-1 if net <= -0.75 else 0)
+    return out
+
+
+def _sig_sr_confluence(sr: dict) -> Optional[IndexSignal]:
+    """Signal 6b — S/R Confluence: price level memory + writer/volume/FII confirmation."""
+    if sr.get("range_read"):
+        s_txt = f"{sr['support']:,.0f}" if sr.get("support") else "—"
+        r_txt = f"{sr['resistance']:,.0f}" if sr.get("resistance") else "—"
+        return IndexSignal(
+            name="S/R Range — Floor & Ceiling Both Defended", category="Price Action",
+            direction=0, score=0.0, emoji="↔️",
+            headline=f"Range market: support {s_txt} held AND resistance {r_txt} rejected",
+            description=("Recent sessions defended the floor and rejected the ceiling — "
+                         "two-sided conviction. Bullish case: " + "; ".join(sr["bull_notes"]) +
+                         ". Bearish case: " + "; ".join(sr["bear_notes"]) +
+                         ". Expect rotation between the levels until one side breaks."),
+        )
+    if sr.get("direction", 0) == 0 or not (sr.get("bull_notes") or sr.get("bear_notes")):
+        return None
+    if sr["direction"] > 0:
+        return IndexSignal(
+            name="S/R Confluence — Support Defended", category="Price Action",
+            direction=1, score=sr["score"], emoji="🛡️",
+            headline=sr["bull_notes"][0],
+            description=("Price-structure read (Edwards & Magee): " + "; ".join(sr["bull_notes"]) +
+                         ". A defended multi-touch level with writer/volume agreement is the "
+                         "market's revealed demand line — dips into it are being bought."),
+        )
+    return IndexSignal(
+        name="S/R Confluence — Resistance / Breakdown", category="Price Action",
+        direction=-1, score=sr["score"], emoji="🧱",
+        headline=sr["bear_notes"][0],
+        description=("Price-structure read (Edwards & Magee): " + "; ".join(sr["bear_notes"]) +
+                     ". Supply is active at the level — rallies into it are being sold "
+                     "(or the demand line just failed)."),
+    )
+
+
 def _context_only(sig: Optional[IndexSignal]) -> Optional[IndexSignal]:
     """Keep a signal's institutional read for display but zero its composite vote.
 
@@ -1339,68 +1679,73 @@ def _sig_oi_price_matrix(
     pct_chg: Optional[float],
     fut_oi_chg: int,
     fut_oi_base: int = 0,
-    is_rollover: bool = False,
+    oi_uncomparable: bool = False,
+    roll_note: str = "",
 ) -> IndexSignal:
     """OI-Price matrix — Murphy. Most reliable institutional directional signal.
 
-    Uses percentage-based OI threshold (>0.5% change) to be scale-invariant across
-    both old zip format (OI in lots) and new DAT format (OI in underlying units).
+    Runs on TOTAL futures OI summed across all active expiries, not the near month
+    alone. Near-month-only OI bleeds to the next contract during rollover week and
+    fakes "Long Unwinding / Short Covering" (near OI can fall ~20%/day while total OI
+    is flat); total OI is continuous through the roll, so the verdict reflects real
+    net positioning. `roll_note` annotates how far the roll has progressed. The
+    percentage OI threshold (>0.5%) keeps the read scale-invariant across data formats.
 
-    is_rollover=True: today's near contract differs from yesterday's (monthly expiry).
-    OI comparison is meaningless on rollover day — the signal falls back to pure price
-    direction at half score, labeled explicitly so the user is not misled.
+    oi_uncomparable=True: no prior-day total to diff against (e.g. first day of data)
+    — fall back to pure price direction at half score, labeled so the user isn't misled.
     """
     pct = pct_chg or 0.0
     up  = pct > 0.10; dn = pct < -0.10
 
-    # ── Rollover day: OI comparison is invalid — brand-new contract, no prev ──
-    if is_rollover:
+    # ── No comparable prior OI: can't read the matrix — price direction only ──
+    if oi_uncomparable:
         if up:
             return IndexSignal(
-                "Expiry Rollover — Price Up (OI N/A)", "Futures OI", 1, 1.0,
-                f"Rollover day — price +{pct:.2f}%, OI change not comparable",
-                f"Monthly futures rollover: near contract changed today. OI change crosses contracts "
-                f"and is meaningless. Price direction only: +{pct:.2f}% (mild bullish lean). "
-                "Wait 1–2 days for OI to settle into new contract.", "🔄",
+                "Price Up — Futures OI N/A", "Futures OI", 1, 1.0,
+                f"Price +{pct:.2f}%, OI change not comparable",
+                f"No prior-day futures OI to compare against. Price direction only: "
+                f"+{pct:.2f}% (mild bullish lean).{roll_note}", "🔄",
             )
         if dn:
             return IndexSignal(
-                "Expiry Rollover — Price Down (OI N/A)", "Futures OI", -1, -1.0,
-                f"Rollover day — price {pct:.2f}%, OI change not comparable",
-                f"Monthly futures rollover: near contract changed today. OI change crosses contracts "
-                f"and is meaningless. Price direction only: {pct:.2f}% (mild bearish lean). "
-                "Wait 1–2 days for OI to settle into new contract.", "🔄",
+                "Price Down — Futures OI N/A", "Futures OI", -1, -1.0,
+                f"Price {pct:.2f}%, OI change not comparable",
+                f"No prior-day futures OI to compare against. Price direction only: "
+                f"{pct:.2f}% (mild bearish lean).{roll_note}", "🔄",
             )
         return IndexSignal(
-            "Expiry Rollover — Flat (OI N/A)", "Futures OI", 0, 0.0,
-            "Rollover day — price flat, OI not comparable across contracts",
-            "Monthly rollover: OI comparison invalid. No directional edge today.", "🔄",
+            "Flat — Futures OI N/A", "Futures OI", 0, 0.0,
+            "OI not comparable; price flat",
+            f"No prior-day futures OI to compare against. No directional edge today.{roll_note}", "🔄",
         )
 
     oi_chg_pct = (fut_oi_chg / max(fut_oi_base, 1)) * 100 if fut_oi_base > 0 else 0.0
     oi_up = oi_chg_pct > 0.5
     oi_dn = oi_chg_pct < -0.5
-    # Cap display value: extreme % (from tiny base OI near rollover) is misleading.
-    # Direction logic above already uses the raw value correctly.
+    # Cap display value: extreme % from a tiny base is misleading; logic uses the raw value.
     oi_disp = max(-999.9, min(999.9, oi_chg_pct))
     if up and oi_up:
-        return IndexSignal("Fresh Long Buildup", "Futures OI", 1, 3.0, "Fresh Long Build",
-            f"Price +{pct:.2f}% AND OI +{oi_disp:.1f}%. New money entering longs — "
+        sig = IndexSignal("Fresh Long Buildup", "Futures OI", 1, 3.0, "Fresh Long Build",
+            f"Price +{pct:.2f}% AND total OI +{oi_disp:.1f}%. New money entering longs — "
             "strongest bullish confirmation. Institutions building directional long.", "🟢")
-    if up and oi_dn:
-        return IndexSignal("Short Covering Rally", "Futures OI", 1, 1.0, "Short Covering",
-            f"Price +{pct:.2f}% but OI {oi_disp:+.1f}% (falling). "
+    elif up and oi_dn:
+        sig = IndexSignal("Short Covering Rally", "Futures OI", 1, 1.0, "Short Covering",
+            f"Price +{pct:.2f}% but total OI {oi_disp:+.1f}% (falling). "
             "Short covering rally — real but lacks fresh conviction.", "🟡")
-    if dn and oi_up:
-        return IndexSignal("Fresh Short Buildup", "Futures OI", -1, -3.0, "Fresh Short Build",
-            f"Price {pct:.2f}% AND OI +{oi_disp:.1f}%. "
+    elif dn and oi_up:
+        sig = IndexSignal("Fresh Short Buildup", "Futures OI", -1, -3.0, "Fresh Short Build",
+            f"Price {pct:.2f}% AND total OI +{oi_disp:.1f}%. "
             "New shorts added into decline — strongest bearish confirmation.", "🔴")
-    if dn and oi_dn:
-        return IndexSignal("Long Unwinding", "Futures OI", -1, -1.0, "Long Unwinding",
-            f"Price {pct:.2f}% and OI {oi_disp:+.1f}% (falling). "
+    elif dn and oi_dn:
+        sig = IndexSignal("Long Unwinding", "Futures OI", -1, -1.0, "Long Unwinding",
+            f"Price {pct:.2f}% and total OI {oi_disp:+.1f}% (falling). "
             "Longs closing — bearish but self-limiting.", "🟡")
-    return IndexSignal("Sideways / Indecisive", "Futures OI", 0, 0.0, "Indecisive OI",
-        f"Price {pct:.2f}% with small OI change ({oi_disp:+.1f}%). No directional conviction.", "⚪")
+    else:
+        sig = IndexSignal("Sideways / Indecisive", "Futures OI", 0, 0.0, "Indecisive OI",
+            f"Price {pct:.2f}% with small total OI change ({oi_disp:+.1f}%). No directional conviction.", "⚪")
+    if roll_note:
+        sig.description += roll_note
+    return sig
 
 
 def _sig_carry(carry_pct_ann: Optional[float], carry_pts: Optional[float]) -> Optional[IndexSignal]:
@@ -1416,9 +1761,10 @@ def _sig_carry(carry_pct_ann: Optional[float], carry_pts: Optional[float]) -> Op
             f"Carry +{carry_pct_ann:.1f}% ann — Fair Value",
             f"Futures at +{carry_pts:.0f} pts ({carry_pct_ann:.1f}% ann). Normal range (4-9%).", "⚪")
     if 0.0 <= carry_pct_ann < 4.0:
-        return IndexSignal("Futures Slight Discount", "Carry", -1, -1.0,
-            f"Carry {carry_pct_ann:.1f}% ann — Slight Discount",
-            f"Futures at {carry_pts:.0f} pts ({carry_pct_ann:.1f}% ann). Below fair value.", "🟡")
+        return IndexSignal("Futures Below Fair Value", "Carry", -1, -1.0,
+            f"Carry {carry_pct_ann:.1f}% ann — Below Fair Value",
+            f"Futures at +{carry_pts:.0f} pts ({carry_pct_ann:.1f}% ann) — still in contango "
+            "but below the 4-9% fair-value band. Soft demand for long futures exposure.", "🟡")
     return IndexSignal("Backwardation — Stress Signal", "Carry", -1, -2.0,
         f"Backwardation {carry_pts:.0f} pts — Bearish / Stress",
         f"Futures BELOW spot by {abs(carry_pts):.0f} pts ({carry_pct_ann:.1f}% ann). "
@@ -1689,63 +2035,73 @@ def _sig_range_position(spot_close, high, low, pct_chg) -> Optional[IndexSignal]
 
 def _sig_fii_institutional(ctx: MarketContext) -> Optional[IndexSignal]:
     """
-    FII net index futures OI vs Client divergence.
-    Schwager: follow smart money. FAO divergence resolves in FII's direction >90% of cases.
-    Score decays with data age via _lag_mult so 3-day-old FAO fires at 40% weight.
+    Informed-desk positioning in index futures (FAO participant-wise OI).
+
+    Index futures are zero-sum: FII + DII + Pro + Client = 0. So "FII short vs
+    Client long" is an accounting IDENTITY — Client (retail) is the residual mirror
+    of the institutions, not independent evidence. And FIIs are structurally net-SHORT
+    index futures as a standing hedge on their cash longs, so that read fired on ~100%
+    of days with no edge (51% hit in the walk-forward).
+
+    We instead read the UNHEDGED informed cohorts whose positioning is genuinely
+    directional:
+      • DII — domestic institutions (mutual funds / insurers), counter-cyclical.
+      • Pro — proprietary / prop desks: sharp, unhedged, short-horizon money
+              (previously loaded but never used).
+    Their combined net is the institutional lean. FII's hedge-heavy level is shown for
+    context only (its informative part — covering vs adding — is the separate FII
+    Position-Change signal); Client is the retail counterparty. A genuine FII NET-LONG
+    (rare — the hedge dropped) is kept as a distinct strong-bullish tell.
+    Score decays with data age via _lag_mult.
     """
-    if ctx.fao_date is None: return None
-    fii = ctx.fii_fut_idx_net; cli = ctx.client_fut_idx_net; dii = ctx.dii_fut_idx_net
+    if ctx.fao_date is None:
+        return None
+    fii = ctx.fii_fut_idx_net
+    dii = ctx.dii_fut_idx_net
+    pro = ctx.pro_fut_idx_net
+    cli = ctx.client_fut_idx_net
     lag = (ctx.trade_date - ctx.fao_date).days
     lm  = _lag_mult(lag)
     tag = f" [FAO {ctx.fao_date.strftime('%d %b')}{', ' + str(lag) + 'd lag' if lag else ''}]"
-    dii_txt = f" | DII: {dii:+,}" if dii != 0 else ""
 
-    # Hedge awareness: an FII index-futures SHORT that is offset by net-long stock
-    # futures is a market-neutral HEDGE, not a directional bearish bet.
-    # Guard: only apply hedge dampening when FAO and FII-stats data are from the
-    # SAME day (≤1-day gap). When dates diverge, stock-fut book may have changed,
-    # and mixing asynchronous data risks misclassifying a genuine directional short
-    # as a hedge. When dates align, dampen bearish score to 40%.
-    _stats_fao_gap = (
-        abs((ctx.fii_stats_date - ctx.fao_date).days)
-        if ctx.fii_stats_date and ctx.fao_date else 99
-    )
-    is_hedge = bool(
-        _stats_fao_gap <= 1 and
-        ctx.fii_stock_fut_net_cr and ctx.fii_stock_fut_net_cr > 500
-    )
-    bear_mult = 0.4 if is_hedge else 1.0
-    neutral_note = ""
-    if is_hedge:
-        neutral_note = (f" Note: FII also net BUYING stock futures (+Rs{ctx.fii_stock_fut_net_cr:,.0f}Cr) "
-                        "= index short is a hedge, not pure bearish — score dampened.")
+    roles = f"FII {fii:+,} (mm/hedge) · DII {dii:+,} (support) · Pro {pro:+,} (directional) · Client {cli:+,} (retail)"
 
-    FII_T, CLI_T = 80_000, 100_000
-    if fii < -FII_T and cli > CLI_T:
-        return IndexSignal("FII Short vs Retail Long — Smart Money BEARISH",
-            "Institutional", -1, round(-3.0 * bear_mult * lm, 2),
-            f"FII {fii:+,} | Client {cli:+,}{tag}",
-            f"FII {abs(fii):,} net SHORT vs Client net LONG {cli:,}{dii_txt}. "
-            "Institutional-retail divergence usually resolves in the institutions' direction. "
-            f"Institutions positioned against retail longs.{neutral_note}", "🐻")
-    if fii > FII_T and cli < -CLI_T:
-        return IndexSignal("FII Long vs Retail Short — Smart Money BULLISH",
+    # ── 1) Rare ROLE-BREAKS — the strongest tells ────────────────────────────────
+    # FII net LONG: market makers dropped the structural hedge and went long — rare,
+    # strongly bullish.
+    if fii > 80_000:
+        return IndexSignal("FII Net LONG Index Futures — Hedge Dropped (Strong Bull)",
             "Institutional", 1, round(3.0 * lm, 2),
-            f"FII {fii:+,} | Client {cli:+,}{tag}",
-            f"FII net LONG {fii:,} vs Client net SHORT {abs(cli):,}{dii_txt}. "
-            "Smart money bullish vs retail shorts — short squeeze setup.", "🐂")
-    if fii < -FII_T:
-        return IndexSignal("FII Net Short — Institutional Bearish Bias",
-            "Institutional", -1, round(-2.0 * bear_mult * lm, 2),
-            f"FII Net {fii:+,} contracts (SHORT){tag}",
-            f"FII carrying {abs(fii):,} net short index futures{dii_txt}.{neutral_note} "
-            "Institutional short position creates overhead pressure on rallies.", "📉")
-    if fii > FII_T:
-        return IndexSignal("FII Net Long — Institutional Bullish Bias",
-            "Institutional", 1, round(2.0 * lm, 2),
-            f"FII Net {fii:+,} contracts (LONG){tag}",
-            f"FII carrying {fii:,} net long index futures{dii_txt}. "
-            "Institutional long positioning provides momentum support.", "📈")
+            f"FII {fii:+,} (net LONG){tag}",
+            f"FIIs are net LONG {fii:,} index futures — they rarely abandon the hedge. "
+            f"{roles}. A genuine institutional upside bet.", "🐂")
+    # DII net SHORT: domestic institutions normally net long to SUPPORT the market —
+    # a net short means support is withdrawn, a real bearish warning.
+    if dii < -40_000:
+        return IndexSignal("DII Net SHORT — Support Withdrawn (Bearish Warning)",
+            "Institutional", -1, round(-2.5 * lm, 2),
+            f"DII {dii:+,} (net SHORT){tag}",
+            f"DIIs are net SHORT {abs(dii):,} index futures — they normally buy to cushion "
+            f"the downside, so a short stance removes the floor. {roles}.", "📉")
+
+    # ── 2) Pro = primary DIRECTIONAL read (cautious, condition-dependent desks) ──
+    # FII (hedge) and DII (support) carry structural defaults, so Pro — which has none —
+    # is the cleanest informed directional tell. DII supporting in the same direction
+    # adds a mild confirmation note; it is not itself the driver.
+    PRO_T = 10_000
+    if pro > PRO_T:
+        dii_note = " DII also supporting (net long) — downside cushioned." if dii > 0 else ""
+        return IndexSignal("Pro Desks Net Long — Informed Directional Bullish",
+            "Institutional", 1, round(1.5 * lm, 2),
+            f"Pro {pro:+,} (net LONG){tag}",
+            f"Proprietary desks — the cautious, condition-driven money — are net LONG "
+            f"index futures, the cleanest informed directional lean.{dii_note} {roles}.", "🏦")
+    if pro < -PRO_T:
+        return IndexSignal("Pro Desks Net Short — Informed Directional Bearish",
+            "Institutional", -1, round(-1.5 * lm, 2),
+            f"Pro {pro:+,} (net SHORT){tag}",
+            f"Proprietary desks — the cautious, condition-driven money — have turned net "
+            f"SHORT index futures, an informed bearish lean. {roles}.", "📉")
     return None
 
 
@@ -1771,6 +2127,56 @@ def _sig_fii_options_delta(ctx: MarketContext) -> Optional[IndexSignal]:
             f"Options delta {delta:,} = FII structurally hedged against downside "
             "(standing put book, not a fresh directional bet).", "🛡️")
     return None
+
+
+def _sig_options_participant(ctx: MarketContext) -> Optional[IndexSignal]:
+    """
+    Role-aware index-OPTIONS positioning (FAO participant-wise OI).
+
+    Options market structure (per participant delta = call_net − put_net):
+      • FII — the real MARKET MAKER / smart money in index options (runs the dominant
+        book). Its footprint is the informed side.
+      • Pro — proprietary desks that largely SHADOW the FII footprint; alignment with FII
+        CONFIRMS the read (Pro on FII's side = smart-money consensus).
+      • Client (retail) & DII — the WEAK / uninformed side; Client is the dumb-money crowd
+        you FADE, DII is negligible in options and ignored.
+
+    Signal: when retail (Client) is at an EXTREME OPPOSITE the FII footprint — the normal
+    smart-vs-dumb divergence — fade the crowd (i.e. side with FII). Pro confirming FII
+    strengthens it; Pro diverging from FII weakens it.
+    """
+    if ctx.fao_date is None:
+        return None
+    cli = ctx.client_opt_delta
+    fii = ctx.fii_opt_delta
+    pro = ctx.pro_opt_delta
+    lag = (ctx.trade_date - ctx.fao_date).days
+    lm  = _lag_mult(lag)
+    tag = f" [FAO {ctx.fao_date.strftime('%d %b')}{', ' + str(lag) + 'd lag' if lag else ''}]"
+
+    RETAIL_T = 500_000   # extreme retail options skew (net contracts) — heuristic
+    if abs(cli) < RETAIL_T or fii == 0:
+        return None
+    if (cli * fii) > 0:
+        return None      # retail aligned with the FII footprint — no smart-vs-dumb edge
+
+    pro_follows_fii = (pro * fii) > 0    # Pro shadowing the market maker = confirmation
+    base   = 1.5 if pro_follows_fii else 0.8
+    score  = round(base * lm, 2)
+    pro_txt = (f" Pro {pro:+,} {'shadows FII (confirms)' if pro_follows_fii else 'diverges from FII (weakens)'}.")
+    smart_txt = f"Smart money: FII (market maker) delta {fii:+,}.{pro_txt}"
+
+    if cli > 0:   # retail bullish, opposite the FII footprint → fade → BEARISH
+        return IndexSignal("Retail Options Euphoria vs FII Footprint — Contrarian Bearish",
+            "Institutional", -1, -score, f"Client {cli:+,} vs FII {fii:+,}{tag}",
+            f"Retail (Client) heavily bullish via options (delta +{cli:,}: long calls / "
+            f"put writing) against the FII market-maker book. {smart_txt} Crowded retail "
+            "opposite smart money tends to resolve in the institutions' favour.", "🎈")
+    return IndexSignal("Retail Options Fear vs FII Footprint — Contrarian Bullish",
+        "Institutional", 1, score, f"Client {cli:+,} vs FII {fii:+,}{tag}",
+        f"Retail (Client) heavily bearish via options (delta {cli:,}: heavy put buying) "
+        f"against the FII market-maker book. {smart_txt} Capitulation opposite smart money "
+        "tends to mean-revert up.", "😱")
 
 
 def _sig_fii_flow(ctx: MarketContext, fno_symbol: str) -> Optional[IndexSignal]:
@@ -1835,6 +2241,10 @@ def _sig_fii_oi_buildup(ctx: MarketContext, fno_symbol: str) -> Optional[IndexSi
     Growing OI + net short = adding conviction to their short = more bearish.
     Shrinking OI + net short = covering = potential reversal catalyst.
     """
+    # NIFTY only: the "while NET SHORT/LONG" qualifier below comes from the POOLED
+    # FAO net (fii_fut_idx_net, ~76% NIFTY). Pairing BankNifty's per-symbol OI ₹Cr
+    # trend with a NIFTY-dominated position sign misattributes the direction.
+    if fno_symbol != "NIFTY": return None
     oi_now = ctx.fii_oi_cr_latest.get(fno_symbol)
     oi_ago = ctx.fii_oi_cr_5d_ago.get(fno_symbol)
     if oi_now is None or oi_ago is None or abs(oi_ago) < 1.0: return None
@@ -1885,7 +2295,7 @@ def _sig_fii_position_change(ctx: MarketContext) -> Optional[IndexSignal]:
     lm      = _lag_mult(lag)
     tag     = f" [{ctx.fii_prev_fao_date.strftime('%d %b')} → {ctx.fao_date.strftime('%d %b')}{', ' + str(lag) + 'd lag' if lag else ''}]" if ctx.fao_date else ""
 
-    # Only signal on meaningful moves (>3,000 contracts = ~Rs500Cr at Nifty levels)
+    # Only signal on meaningful moves (>5,000 contracts; ±10,000 = strong conviction)
     if chg < -5_000:
         s = round((-2.0 if chg < -10_000 else -1.0) * lm, 2)
         return IndexSignal("FII Adding to Short — Increasing Conviction",
@@ -2431,7 +2841,7 @@ def _sig_multi_expiry_pcr(
             f"Weekly AND monthly options both showing extreme put buying (PCR >{weekly_pcr:.2f} / "
             f"{monthly_pcr:.2f}). Institutional hedging is synchronized across timeframes — a rare "
             "event that marks a fear peak. Contrarian: when everyone is hedged, downside is "
-            "already priced in. Historical pattern: double-PCR spike = 68% 5-day bounce.", "🔄",
+            "already priced in.", "🔄",
         )
 
     # Both below 0.7 = broad complacency → dangerous
@@ -2452,8 +2862,8 @@ def _sig_multi_expiry_pcr(
             f"Weekly hedging ({w_tag}) vs monthly calm ({m_tag})",
             f"Weekly PCR {weekly_pcr:.2f} = heavy put buying for this week's expiry. "
             f"Monthly PCR {monthly_pcr:.2f} = institutions are NOT extending hedges to next month. "
-            "This divergence tells us the fear is short-horizon, not systemic. "
-            "Pattern: weekly-fear / monthly-calm → bounce after weekly expiry in ~70% of cases.", "📉",
+            "This divergence tells us the fear is short-horizon, not systemic — "
+            "the pressure tends to clear once the weekly expiry passes.", "📉",
         )
 
     # Near-term unhedged but monthly is hedged = institutions see risk retail doesn't
@@ -2544,8 +2954,10 @@ def _sig_gamma_wall(
     m_total = monthly_call_oi + monthly_put_oi
 
     if gamma_ratio > 0.58 and dte_weekly <= 6:
+        # Score 0.0: a gamma pin is a RANGE statement, not a bearish one. The old
+        # -0.5 silently voted bearish in the composite every pre-expiry week.
         return IndexSignal(
-            "Weekly Gamma Dominance — Range Compression (Nifty)", "Options OI", 0, -0.5,
+            "Weekly Gamma Dominance — Range Compression (Nifty)", "Options OI", 0, 0.0,
             f"Weekly OI {gamma_ratio*100:.0f}% of total — {w_total:,} vs monthly {m_total:,}",
             f"Weekly expiry concentrates {gamma_ratio*100:.0f}% of total call+put OI "
             f"({w_total:,} weekly vs {m_total:,} monthly). "
@@ -2755,23 +3167,100 @@ def _sig_memory_engine(mem) -> Optional[IndexSignal]:
 # We cap the NET institutional contribution so it counts as one strong vote.
 _INSTITUTIONAL_CAP = 3.0
 
+# Per-family caps on the NET contribution of each signal family to the composite.
+#
+# WHY: signals within a family are highly collinear (they slice the SAME underlying
+# fact), so an uncapped linear sum over-counts one fact N times and manufactures
+# false "STRONG" conviction — the mechanism behind the saturated −20 bearish
+# misfires (e.g. 53 "Options OI" signals all firing off one OI snapshot). Capping
+# each family's net score bounds it to "one strong vote" regardless of member count,
+# de-correlating the composite.
+#
+# CAP SIZE is scaled by the family's MEASURED next-day information coefficient
+# (walk-forward over the live track record — see backtest_signals.py).
+# Re-measured 2026-06-19 over 381 days × 4 indices, AFTER pruning the non-index-F&O
+# families (VWAP/RSI/Sector/VIX/constituents) out of the vote:
+#     Price Action +0.121 (66% hit, but rare — z-score extremes only) → most room
+#     Options OI +0.020, Statistical Regime +0.015, Futures OI +0.014 → weak +: moderate
+#     Institutional −0.009 (net bearish leak from raw FII position-change signals;
+#         Pro-Desk members carry the edge, +0.142/+0.052)            → capped, see below
+#     Carry −0.004, Memory −0.019, Sector −0.01                      → EXCLUDED (cap 0)
+#     Market Context −0.13 (VIX wrong-sign as a vote)                → EXCLUDED (cap 0)
+# NOTE: composite IC after the prune is +0.059 NIFTY / +0.002–0.022 others — positive
+# but within ~1 SE of zero. Caps were NOT re-tuned off this single in-sample run
+# (overfitting guard); only chronically wrong-sign signals were demoted to context.
+_FAMILY_CAPS: dict[str, float] = {
+    "Price Action":       7.0,
+    "Institutional":      _INSTITUTIONAL_CAP,
+    "Statistical Regime": 4.0,
+    "Options OI":         5.0,
+    "Futures OI":         4.0,
+    # Sector / Carry / Market Context EXCLUDED (cap 0): each has ≤0 measured next-day
+    # IC (Sector −0.01, Carry −0.04, Market Context −0.13) and is NOT pure index-F&O
+    # data the engine is now scoped to. Any surviving member shows as context only.
+    "Sector":             0.0,
+    "Carry":              0.0,
+    "Market Context":     0.0,
+    "Memory":             0.0,   # excluded from composite — context only
+}
+_FAMILY_CAP_DEFAULT = 4.0
+
 
 def _aggregate_composite(signals: list[IndexSignal]) -> float:
-    """Composite directional score with the collinear Institutional block capped.
+    """IC-weighted, family-capped composite directional score.
 
-    Non-institutional signals sum normally; the institutional signals are summed
-    then clamped to ±_INSTITUTIONAL_CAP before being added. This removes the
-    structural over-counting without discarding institutional information.
+    Each signal family's NET score is clamped to a per-family cap (``_FAMILY_CAPS``)
+    before summing, so collinear signals within a family count as one bounded vote
+    instead of over-counting a single fact N times. Cap size reflects the family's
+    measured next-day IC; the Memory family (cap 0) is excluded from the composite
+    and surfaced as context only. See ``_FAMILY_CAPS`` for the rationale.
     """
-    inst  = sum(s.score for s in signals if s.category == "Institutional")
-    other = sum(s.score for s in signals if s.category != "Institutional")
-    inst_capped = max(-_INSTITUTIONAL_CAP, min(_INSTITUTIONAL_CAP, inst))
-    return float(other + inst_capped)
+    fam_net: dict[str, float] = {}
+    for s in signals:
+        fam_net[s.category] = fam_net.get(s.category, 0.0) + s.score
+    total = 0.0
+    for cat, net in fam_net.items():
+        cap = _FAMILY_CAPS.get(cat, _FAMILY_CAP_DEFAULT)
+        if cap <= 0:
+            continue   # family excluded from the composite
+        total += max(-cap, min(cap, net))
+    return float(total)
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # VERDICT
 # ═══════════════════════════════════════════════════════════════════════════════
+
+# Per-index empirical calibration of the 1σ expected-move band. India VIX measures
+# NIFTY IV, so the realized+VIX blend systematically UNDER-sizes the wider non-NIFTY
+# indices (worst for midcaps). Audited on prediction_log via
+# scripts/validate_range_coverage.py: the raw ±1σ band contains the next close ~68%
+# pooled (NIFTY 72% · BANKNIFTY 68% · FINNIFTY 70% · MIDCPNIFTY 63%). These widen the
+# band per index toward a consistent, honest ~1σ. Values are SHRUNK toward 1.0 and
+# checked out-of-sample: a 75% target did NOT generalise (return tails are
+# non-stationary), but the MIDCAP widening robustly did (+8.5pp held-out coverage).
+_EM_CALIBRATION: dict[str, float] = {
+    "NIFTY": 1.00, "BANKNIFTY": 1.06, "FINNIFTY": 1.08, "MIDCPNIFTY": 1.18,
+}
+
+# RiskMetrics EWMA decay for the realized-vol leg. λ=0.94 → α=0.06, center-of-mass ≈ 16
+# sessions (≈32-day span). Reacts faster to vol-regime shifts than a flat 20-day window
+# and avoids the "vol cliff" (a single jump inflating σ equally for 20 days, then dropping
+# off the window edge). Coverage ≡ flat-20D in backtest, so _EM_CALIBRATION is unaffected.
+_EWMA_LAMBDA = 0.94
+
+# ── Single conviction axis: verdict ⇄ directional target ⇄ sideways band ─────────
+# conviction = composite / _CONVICTION_DIVISOR (clamped ±1). The model is "directional"
+# iff |conviction| ≥ _C_SIDE; below that the projected move sits inside the noise band,
+# so there is NO point target and the verdict is SIDEWAYS. Because the verdict threshold,
+# the sideways-band width, and the target's zero-point are ALL derived from this one
+# boundary, the three can never contradict (the old design used 3/7/12 for the verdict,
+# ÷20 for the target, and ×0.40 for the band — independent knobs that routinely disagreed,
+# e.g. a green "UP" target of +75 pts printed inside a ±78 pt "range-bound" band).
+_CONVICTION_DIVISOR = 20.0
+_C_SIDE             = 0.40                                   # sideways/directional boundary (σ units)
+_DIR_COMPOSITE_MIN  = _CONVICTION_DIVISOR * _C_SIDE          # = 8.0 composite to call a direction
+
 
 def _compute_expected_move(
     idx_hist: pd.DataFrame,
@@ -2782,6 +3271,7 @@ def _compute_expected_move(
     levels: IndexKeyLevels,
     is_nifty: bool,
     gamma_ratio: Optional[float] = None,
+    cal_mult: float = 1.0,
 ) -> dict:
     """
     Quantify the MAGNITUDE of tomorrow's expected move — "how many points".
@@ -2818,10 +3308,19 @@ def _compute_expected_move(
     if len(closes) < 10:
         return out
 
-    rets = closes.pct_change().dropna().tail(20)
+    rets = closes.pct_change().dropna()
     if len(rets) < 5:
         return out
-    realized_sigma_pct = float(rets.std()) * 100.0           # daily 1σ, %
+    # Realized 1σ via RiskMetrics EWMA (λ=0.94, zero-mean): σ²_t = λσ²_{t-1} + (1-λ)r²_{t-1}.
+    # Exponentially-weighted, so recent vol dominates and a single jump decays out smoothly
+    # (no flat-window cliff). Backtested next-day coverage ≡ flat-20D std (≈73% pooled, CIs
+    # overlap → _EM_CALIBRATION still valid). Falls back to flat std on short history.
+    # See scripts/backtest_sigma_estimator.py.
+    if len(rets) >= 20:
+        ewma_var = (rets ** 2).ewm(alpha=1 - _EWMA_LAMBDA, adjust=False).mean()
+        realized_sigma_pct = float(ewma_var.iloc[-1] ** 0.5) * 100.0   # daily 1σ, %
+    else:
+        realized_sigma_pct = float(rets.tail(20).std()) * 100.0        # daily 1σ, %
 
     vix_sigma_pct = None
     if vix_close and vix_close > 0:
@@ -2830,10 +3329,15 @@ def _compute_expected_move(
     if vix_sigma_pct is not None:
         w_realized = 0.5 if is_nifty else 0.7
         sigma_pct  = w_realized * realized_sigma_pct + (1 - w_realized) * vix_sigma_pct
-        basis_src  = (f"50/50 realized+VIX" if is_nifty else "70/30 realized+VIX")
+        basis_src  = (f"50/50 EWMA+VIX" if is_nifty else "70/30 EWMA+VIX")
     else:
         sigma_pct  = realized_sigma_pct
-        basis_src  = "realized 20D vol"
+        basis_src  = "EWMA realized vol"
+
+    # Per-index empirical calibration (see _EM_CALIBRATION). Applied to sigma_pct so it
+    # flows consistently into range / sideways / target / breakout / weekly downstream.
+    if cal_mult and cal_mult > 0:
+        sigma_pct *= cal_mult
 
     expected_move_pts = spot_close * sigma_pct / 100.0
 
@@ -2844,13 +3348,22 @@ def _compute_expected_move(
         sigma_pct          *= 0.70
         pin_note = " · expiry pin ×0.7"
 
-    # Data-driven sideways band: 40% of the 1σ move (matches the user's
-    # "±40 pts = sideways, beyond = directional" intuition, but volatility-scaled).
-    sideways_band = 0.40 * expected_move_pts
+    # Data-driven sideways band: the conviction boundary × the 1σ move (volatility-scaled
+    # "±X pts = sideways, beyond = directional"). Same _C_SIDE that gates the verdict.
+    sideways_band = _C_SIDE * expected_move_pts
 
-    # Directional target: conviction (composite/20, clamped ±1) × expected move
-    conviction  = max(-1.0, min(1.0, composite / 20.0))
-    target_move = conviction * expected_move_pts
+    # Directional target on the SAME conviction axis as the band and the verdict, so the
+    # three can't contradict. Below the boundary there is no point target (the projected
+    # move is inside the noise band → range-bound). At/above it, the target interpolates
+    # from the band edge (at the boundary) up to the 1σ edge (at full conviction), which
+    # guarantees  sideways_band ≤ |target| ≤ expected_move  whenever a target is shown.
+    conviction = max(-1.0, min(1.0, composite / _CONVICTION_DIVISOR))
+    if abs(conviction) < _C_SIDE:
+        target_move = 0.0                                   # sub-band → no directional target
+    else:
+        span = (abs(conviction) - _C_SIDE) / (1.0 - _C_SIDE)   # 0 at boundary → 1 at full conv.
+        mag  = sideways_band + span * (expected_move_pts - sideways_band)
+        target_move = mag if conviction > 0 else -mag
     target_close = spot_close + target_move
 
     # ── OI wall context (informational — does NOT change the statistical range) ──
@@ -2891,7 +3404,8 @@ def _compute_expected_move(
         sideways_band_pts=round(sideways_band, 0),
         move_basis=(
             f"1σ ≈ {sigma_pct:.2f}% ({basis_src}{pin_note}); "
-            f"~75% of days close within ±{expected_move_pts:.0f} pts (VIX premium widens range vs theoretical 68%)"
+            f"≈68% of days close within ±{expected_move_pts:.0f} pts "
+            f"(empirical 1σ band, per-index vol-calibrated)"
             f"{wall_suffix}"
         ),
     )
@@ -3066,14 +3580,21 @@ def _compute_weekly_range(
     sigma_daily_pct: Optional[float],
     trade_date: date,
     is_nifty: bool,
+    target_expiry: Optional[date] = None,
+    prefix: str = "wk",
 ) -> dict:
     """
-    Forward WEEKLY range — where price can travel until the NEXT expiry.
+    Forward to-expiry range — where price can travel until a given option expiry,
+    built PURELY from that expiry's own option chain (ATM straddle + OI walls + max pain).
 
-    Expiry-aware & dynamic: targets the nearest option expiry STRICTLY AFTER today,
-    so on an expiry day it automatically ROLLS to the next cycle (Nifty → next
-    Tuesday weekly; Bank/Fin/Midcap → next monthly, their only series). Recomputed
-    each EOD — the range shrinks as expiry nears and resets after it.
+    Default (``target_expiry=None``): targets the nearest expiry STRICTLY AFTER today,
+    so on an expiry day it automatically ROLLS to the next cycle (Nifty → next Tuesday
+    weekly; Bank/Fin/Midcap → next monthly, their only series). Recomputed each EOD —
+    the range shrinks as expiry nears and resets after it. Output keys: ``wk_*``.
+
+    Pass ``target_expiry`` (with ``prefix="mn"``) to build a SEPARATE range to a later
+    expiry off ITS chain — e.g. the NIFTY monthly range from monthly-expiry OI, distinct
+    from the weekly. Returns empty if that expiry isn't listed today.
 
     Width = blend of the ATM STRADDLE premium (the market's implied move to expiry,
     forward-looking — the institutional measure) and the statistical σ·√T move,
@@ -3089,14 +3610,27 @@ def _compute_weekly_range(
     fut_exp = sorted({e for e in opt["expiry_date"].tolist() if e and e > trade_date})
     if not fut_exp:
         return out
-    target = fut_exp[0]
+    if target_expiry is not None:
+        if target_expiry not in fut_exp:
+            return out   # requested expiry not listed today → no range
+        target = target_expiry
+    else:
+        target = fut_exp[0]
     chain = opt[opt["expiry_date"] == target]
     if chain.empty:
         return out
 
     days_cal = (target - trade_date).days
     days_trd = max(1, round(days_cal * 5.0 / 7.0))
-    kind = "monthly" if (not is_nifty or _is_monthly_expiry_day(target)) else "weekly"
+    # Monthly = the last listed expiry within its calendar month — holiday-proof,
+    # unlike the "last Tuesday" calendar rule (expiry shifts earlier on holidays).
+    # Relative to TARGET (not the nearest), so an explicit monthly target_expiry is
+    # labelled "monthly" even though earlier weeklies exist in the same month.
+    _later_same_month = any(
+        e.year == target.year and e.month == target.month and e > target
+        for e in fut_exp
+    )
+    kind = "monthly" if (not is_nifty or not _later_same_month) else "weekly"
 
     # ATM straddle = market-implied move to expiry
     strikes  = [float(k) for k in chain["strike_price"].unique()]
@@ -3132,16 +3666,16 @@ def _compute_weekly_range(
     if levels.max_pain:
         notes.append(f"max pain {levels.max_pain:.0f}")
 
-    out.update(
-        wk_expiry=target, wk_dte_cal=days_cal, wk_kind=kind,
-        wk_move_pts=round(weekly_move, 0),
-        wk_range_low=round(range_low, 0), wk_range_high=round(range_high, 0),
-        wk_straddle_pts=round(straddle, 0) if straddle else None,
-        wk_put_floor=put_floor, wk_call_cap=call_cap,
-        wk_max_pain=levels.max_pain,
-        wk_basis=f"to {target:%d %b} · {days_cal}d {kind} · {basis}"
+    out.update({
+        f"{prefix}_expiry": target, f"{prefix}_dte_cal": days_cal, f"{prefix}_kind": kind,
+        f"{prefix}_move_pts": round(weekly_move, 0),
+        f"{prefix}_range_low": round(range_low, 0), f"{prefix}_range_high": round(range_high, 0),
+        f"{prefix}_straddle_pts": round(straddle, 0) if straddle else None,
+        f"{prefix}_put_floor": put_floor, f"{prefix}_call_cap": call_cap,
+        f"{prefix}_max_pain": levels.max_pain,
+        f"{prefix}_basis": f"to {target:%d %b} · {days_cal}d {kind} · {basis}"
                  + ((" · " + " · ".join(notes)) if notes else ""),
-    )
+    })
     return out
 
 
@@ -3161,8 +3695,13 @@ def _compute_verdict(
 
     oversold        = any(s.category == "Price Action" and s.direction == 1 and "Oversold" in s.name for s in signals)
     squeeze_setup   = any("Short Squeeze" in s.name for s in signals)
-    fii_covering    = any("Covering" in s.name and s.category == "Institutional" and s.direction == 1 for s in signals)
-    vix_falling     = any(s.category == "Market Context" and s.direction > 0 for s in signals)
+    # Require a live vote (score != 0): "FII Covering Shorts" is now context-only (demoted
+    # as wrong-sign, IC −0.168), so it must NOT drive the "upside wildcard" verdict narrative.
+    fii_covering    = any("Covering" in s.name and s.category == "Institutional"
+                          and s.direction == 1 and s.score != 0 for s in signals)
+    # Name-matched: family+direction alone also caught "VIX Fear Zone" (a contrarian
+    # bullish read fired while VIX is SPIKING) and the PE-undervalued signal.
+    vix_falling     = any("VIX Falling" in s.name for s in signals)
     fii_bearish     = any(s.category == "Institutional" and s.direction < 0 and abs(s.score) >= 2 for s in signals)
     broad_rally     = any("Broad-Based Rally" in s.name for s in signals)
 
@@ -3197,61 +3736,65 @@ def _compute_verdict(
             return "MEDIUM"   # Entropy too noisy for high-confidence call
         return conf
 
-    # ── Score-driven verdict (23-signal system; max ≈ ±35) ───────────────────
-    # Thresholds calibrated so HIGH requires ~6+ signals aligned
+    # ── Score-driven verdict — directional ONLY above the conviction band ─────
+    # A direction is called iff |composite| ≥ _DIR_COMPOSITE_MIN (⇔ conviction ≥ _C_SIDE),
+    # the SAME boundary that sets the sideways band and the directional target's zero-point.
+    # Below it the projected move lives inside the noise band, so the verdict is SIDEWAYS
+    # and any lean is shown only as the likely BREAK side / wildcard — never a green arrow
+    # inside a "range-bound" band. HIGH keeps its ~6-aligned-signal threshold (±12).
     if composite >= 12:
         risk = "FII short position remains key headwind." if fii_bearish else "Global macro reversal could override."
         return ("UP", _cap_confidence("HIGH"), "#00C853",
                 f"Strong multi-signal bullish alignment (score {composite:+.1f})",
                 primary_driver, risk)
-    if composite >= 7:
+    if composite >= _DIR_COMPOSITE_MIN:
         return ("UP", _cap_confidence("MEDIUM"), "#69F0AE",
                 f"Moderate bullish tilt — bias is UP (score {composite:+.1f})",
                 primary_driver,
                 "Watch FII position for sustained follow-through." if fii_bearish else
                 "Watch carry and PCR for confirmation.")
-    if composite >= 3:
-        squeeze_note = " Short squeeze risk elevated." if squeeze_setup else ""
-        return ("UP", "LOW", "#B9F6CA",
-                f"Mild bullish bias (score {composite:+.1f}){squeeze_note}",
-                primary_driver, "Low conviction — tight stops if long.")
     if composite <= -12:
         return ("DOWN", _cap_confidence("HIGH"), "#FF5252",
                 f"Strong multi-signal bearish alignment (score {composite:+.1f})",
                 primary_driver, "Check oversold bounce / DII support floor before shorting.")
-    if composite <= -7:
+    if composite <= -_DIR_COMPOSITE_MIN:
         return ("DOWN", _cap_confidence("MEDIUM"), "#FF6D00",
                 f"Moderate bearish tilt — bias is DOWN (score {composite:+.1f})",
                 primary_driver, "Mean-reverting market; deep scores can reverse sharply.")
-    if composite <= -3:
-        squeeze_note = " BUT short squeeze risk is real." if squeeze_setup else ""
-        return ("DOWN", "LOW", "#FF8A65",
-                f"Mild bearish bias (score {composite:+.1f}){squeeze_note}",
-                primary_driver,
-                "Short squeeze risk elevated — FII covering would reverse quickly." if squeeze_setup else
-                "Watch for FII short covering as reversal trigger.")
 
-    # Neutral zone — tiebreakers
+    # ── Sub-band (|composite| < boundary) → RANGE-BOUND. Mild leans and the
+    #    squeeze/oversold/covering setups are wildcards = the likely break side if the
+    #    range fails, not a directional base case. Keeps the chip consistent with a
+    #    target that is, by construction, inside the sideways band. ──────────────────
     if squeeze_setup and broad_rally:
-        return ("UP", "LOW", "#B9F6CA",
-                "Neutral overall — but short squeeze + broad rally = upside bias",
+        return ("SIDEWAYS", "LOW", "#FFD600",
+                "Range-bound — short squeeze + broad rally is the upside wildcard",
                 "Short squeeze setup: extreme PCR + HOD close + FII trapped",
-                "FII can add more shorts — squeeze not guaranteed.")
+                "Break side is up if the range fails — FII can add shorts; not a base case.")
     if oversold and vix_falling:
-        return ("UP", "LOW", "#B9F6CA",
-                "Neutral F&O — Oversold + falling VIX; mean-reversion bounce likely",
+        return ("SIDEWAYS", "LOW", "#FFD600",
+                "Range-bound — oversold + falling VIX; mean-reversion bounce is the upside wildcard",
                 "Oversold z-score + falling VIX (mean-reversion bias)",
-                "Oversold can persist — use stops.")
+                "Break side is up if the range fails — oversold can persist.")
     if oversold:
-        return ("UP", "LOW", "#B9F6CA",
-                "Neutral F&O — oversold mean-reversion bounce likely",
+        return ("SIDEWAYS", "LOW", "#FFD600",
+                "Range-bound — oversold mean-reversion bounce is the upside wildcard",
                 "Oversold 3D z-score (mean-reversion bias)",
-                "Oversold can persist — use stops.")
+                "Break side is up if the range fails — oversold can persist.")
     if fii_covering:
-        return ("UP", "LOW", "#B9F6CA",
-                "Neutral F&O — FII short covering is the key wildcard",
+        return ("SIDEWAYS", "LOW", "#FFD600",
+                "Range-bound — FII short covering is the key wildcard",
                 "FII covering shorts creates buying pressure",
-                "FII can pause or reverse coverage — monitor daily FAO data.")
+                "Break side is up if FII keep covering — monitor daily FAO data.")
+    if composite >= 3:
+        squeeze_note = " Short squeeze is an upside wildcard." if squeeze_setup else ""
+        return ("SIDEWAYS", "LOW", "#FFD600",
+                f"Range-bound — mild bullish lean below the directional band (score {composite:+.1f}){squeeze_note}",
+                primary_driver, "Sub-band conviction — trade the range; upside is the likely break side.")
+    if composite <= -3:
+        return ("SIDEWAYS", "LOW", "#FFD600",
+                f"Range-bound — mild bearish lean below the directional band (score {composite:+.1f})",
+                primary_driver, "Sub-band conviction — trade the range; downside is the likely break side.")
     return ("SIDEWAYS", "LOW", "#78909C",
             f"No clear directional edge — range-bound likely (score {composite:+.1f})",
             "Composite score in neutral zone — signals mixed",
@@ -3320,7 +3863,9 @@ def _compute_prediction(
     futures_price = carry_pts = carry_pct_ann = None
     carry_label = "No Data"
     fut_oi = fut_oi_chg = 0
-    is_rollover = False   # default when no active futures exist (else set below)
+    fut_oi_total = fut_oi_total_chg = 0   # rollover-immune basis for the OI-price matrix
+    roll_share: Optional[float] = None    # next+far OI as a share of total (rollover gauge)
+    total_oi_comparable = False           # is a prior-day total available to diff against?
 
     fut_rows = fno_today[
         (fno_today["instrument"] == "FUTIDX") &
@@ -3332,32 +3877,35 @@ def _compute_prediction(
         fut_expiry     = _to_date(nr["expiry_date"])
         days_to_expiry = max((fut_expiry - trade_date).days, 0) if fut_expiry else 30
         futures_price  = float(nr["settle_price"]) if pd.notna(nr["settle_price"]) else None
-        fut_oi         = int(nr["open_interest"])
-        # Compute OI change: matched by SAME expiry_date (not rank) so rollover
-        # days don't create false OI spikes by comparing different contracts.
-        # When prev_futs is empty, the near contract is brand-new (just rolled);
-        # is_rollover=True flags this so the signal is labeled correctly.
-        fut_oi_chg  = 0
-        is_rollover = False
+        fut_oi         = int(nr["open_interest"])    # near month (shown in the snapshot row)
+        # Near-month OI change, matched by SAME expiry_date — kept for the snapshot field.
         if not fno_prev.empty:
             prev_futs = fno_prev[
                 (fno_prev["instrument"] == "FUTIDX") &
                 (fno_prev["expiry_date"] == nr["expiry_date"])
             ]
             if not prev_futs.empty:
-                prev_oi    = int(prev_futs["open_interest"].sum())
-                fut_oi_chg = fut_oi - prev_oi
-            else:
-                # Same expiry_date not found in yesterday → contract just rolled
-                is_rollover = True
-        # On futures expiry day (DTE=0), the near contract's OI collapses due to
-        # settlement (both longs and shorts close simultaneously), not directional
-        # activity. The OI-Price Matrix would show extreme percentages like -3246%
-        # because the remaining residual OI is tiny relative to yesterday's full OI.
-        # Treat as rollover-like: signal fires price-direction-only at half-score
-        # with an "Expiry Day" label rather than "Short Covering / Long Unwinding".
-        if days_to_expiry == 0 and not is_rollover:
-            is_rollover = True   # settlement ≡ rollover for OI-matrix purposes
+                fut_oi_chg = fut_oi - int(prev_futs["open_interest"].sum())
+
+        # ── Total-OI (rollover-immune) basis for the OI-Price matrix ──────────────
+        # Near-month-only OI falsely reads "Long Unwinding / Short Covering" during
+        # rollover week: positions MIGRATE to the next month rather than close, so the
+        # near contract's OI can fall ~20%/day while TOTAL futures OI is flat. Summing
+        # all active forward expiries (same >trade_date gate on today AND prev = an
+        # apples-to-apples set) keeps OI continuous through the roll, so the matrix
+        # reflects genuine net positioning. roll_share surfaces how far the roll has gone.
+        fut_oi_total = int(fut_rows["open_interest"].sum())
+        if fut_oi_total > 0:
+            roll_share = (fut_oi_total - fut_oi) / fut_oi_total   # OI beyond the near month
+        if not fno_prev.empty:
+            prev_active = fno_prev[
+                (fno_prev["instrument"] == "FUTIDX") &
+                (fno_prev["open_interest"] > 0) &
+                (fno_prev["expiry_date"] > trade_date)            # same forward gate as today
+            ]
+            if not prev_active.empty:
+                fut_oi_total_chg    = fut_oi_total - int(prev_active["open_interest"].sum())
+                total_oi_comparable = True
 
         if spot_close and futures_price and days_to_expiry >= 3:
             carry_pts     = futures_price - spot_close
@@ -3489,15 +4037,33 @@ def _compute_prediction(
 
     # — Signals 1-7: index-specific price/futures/options —
     add(_sig_price_action(idx_hist))
-    # VWAP + RSI are shown as institutional CONTEXT but do NOT vote in the composite.
-    # Walk-forward (pooled 4 indices, point-in-time) found no standalone next-day edge
-    # at 1/5/10-day horizons — in fact slightly mean-reverting. So we keep the read
-    # (where price sits vs the institutional control line, RSI regime/divergence) but
-    # zero its score, exactly like the FII put-hedge context signal.
-    add(_context_only(_sig_vwap(idx_hist)))   # institutional cost-basis / control line
-    add(_context_only(_sig_rsi(idx_hist)))    # institution-grade RSI (Cardwell + divergence)
-    sigs.append(_sig_oi_price_matrix(day_change_pct, fut_oi_chg, fut_oi, is_rollover=is_rollover))
-    add(_sig_carry(carry_pct_ann, carry_pts))
+    # VWAP + RSI removed: walk-forward (pooled 4 indices, point-in-time) found no
+    # standalone next-day edge at 1/5/10-day horizons — in fact slightly mean-reverting.
+    # They were already context-only (zero vote); now dropped from the output entirely.
+    # OI-Price matrix runs on TOTAL futures OI (rollover-immune); roll_note flags when a
+    # roll is underway so the verdict isn't read as positions closing.
+    _roll_note = ""
+    if roll_share is not None and roll_share >= 0.20:
+        _roll_note = (f" · 🔄 Rollover underway — {roll_share * 100:.0f}% of futures OI now sits "
+                      f"in the next/far month; near-month OI alone would misread this as unwinding.")
+    sigs.append(_sig_oi_price_matrix(
+        day_change_pct, fut_oi_total_chg, fut_oi_total,
+        oi_uncomparable=not total_oi_comparable, roll_note=_roll_note))
+    # Carry sanity-bound: suppress the directional carry signal when the annualised carry
+    # is outside the plausible arbitrage band (thin/stale settle artifact). None → keep
+    # (the no-data path); a real-but-implausible value (e.g. Midcap 38%) → suppress.
+    if carry_pct_ann is None or _CARRY_MIN_ANN <= carry_pct_ann <= _CARRY_MAX_ANN:
+        add(_sig_carry(carry_pct_ann, carry_pts))
+
+    # ── Options-chain liquidity gate (PCR / max-pain / OI-premium) ───────────────
+    _opt_oi_total = int((call_oi or 0) + (put_oi or 0))
+    _opt_top_strike_oi = 0
+    if not _opt_near_t.empty:
+        _opt_top_strike_oi = int(
+            _opt_near_t.groupby(["option_type", "strike_price"])["open_interest"].sum().max() or 0
+        )
+    _opt_conc = (_opt_top_strike_oi / _opt_oi_total) if _opt_oi_total > 0 else 1.0
+    _opt_chain_liquid = (_opt_oi_total >= _OPT_OI_MIN) and (_opt_conc <= _OPT_CONC_MAX)
     # Compare PCR only against the SAME expiry's prior-day OI (via _opt_near_p, which is
     # fno_prev filtered to today's near_expiry).  On the first day of a new cycle,
     # _opt_near_p is empty → _prev_pcr = None → no crossing detection fires.
@@ -3512,34 +4078,70 @@ def _compute_prediction(
         _p_put_oi  = int(_opt_near_p[_opt_near_p["option_type"] == "PE"]["open_interest"].sum())
         if _p_call_oi > 0:
             _prev_pcr = round(_p_put_oi / _p_call_oi, 2)
-    add(_sig_pcr(pcr, _prev_pcr))
-    add(_sig_opt_oi_premium(_opt_near_t, _opt_near_p))   # Signal 5 — OI-Premium matrix
-    if spot_close and dte_options <= 5:
+    if _opt_chain_liquid:
+        add(_sig_pcr(pcr, _prev_pcr))
+        add(_sig_opt_oi_premium(_opt_near_t, _opt_near_p))   # Signal 5 — OI-Premium matrix
+    if spot_close and dte_options <= 5 and _opt_chain_liquid:
         add(_sig_max_pain(levels.max_pain, spot_close, dte_options))
-    add(_sig_range_position(spot_close, high_val, low_val, day_change_pct))
+    # Range-position (Closed Near HOD/LOD) removed from the output.
+    # Signal 6b — S/R Confluence: swing-pivot price levels from daily OHLC, read
+    # against the last 4 sessions (hold / reject / break) with OI-wall, volume and
+    # FII-flow confirmation. OI walls are passed only when the chain is liquid
+    # enough to trust them (same gate as PCR / max pain).
+    # CONTEXT-ONLY, same verdict as VWAP/RSI: walk-forward (scripts/
+    # validate_sr_signal.py) measured pooled IC +0.02 / hit 52% over 293 days ×
+    # 4 indices price-only, and IC −0.11 / hit 43% with full confluence on the
+    # recent 47-day F&O window — no validated next-day directional edge. The
+    # LEVELS themselves (sr_support / sr_resistance) stay on the prediction as
+    # the range/risk map; the read informs but does not vote.
+    _sr = _sr_level_read(
+        idx_hist, spot_close,
+        levels=levels if _opt_chain_liquid else None,
+        fii_5d=market_ctx.fii_cumul_flows_5d.get(fno_symbol),
+    )
+    # S/R Confluence (Edwards & Magee support/resistance) removed from the output.
 
-    # — Signals 7-13: FII / institutional (all use MarketContext) —
-    add(_sig_fii_institutional(market_ctx))
-    add(_sig_fii_options_delta(market_ctx))
-    add(_sig_fii_flow(market_ctx, fno_symbol))
-    add(_sig_fii_cumulative_flow(market_ctx, fno_symbol))
-    add(_sig_fii_oi_buildup(market_ctx, fno_symbol))
-    add(_sig_fii_position_change(market_ctx))
-    add(_sig_short_squeeze_setup(market_ctx, fno_symbol, day_change_pct, range_pos, pcr))
+    # — Signals 7-13: FII / institutional —
+    # The aggregate FII index-futures POSITION (fao_participant fut_idx net, e.g. −271,979)
+    # is a single pooled number across ALL index futures — ~76% NIFTY / 17% BankNifty by OI.
+    # Attributing it to an index where FIIs barely trade futures (FinNifty ~0.1%, Midcap ~6%
+    # of FII index-fut OI) is misattribution and a prime driver of the collinear all-four-
+    # bearish failures. Gate the position-LEVEL signals to indices with a MATERIAL share of
+    # FII index-futures OI; the per-index FLOW signals (sourced per-symbol from
+    # fii_derivatives_stats) always fire. Fails OPEN when per-index OI data is unavailable.
+    _fii_oi_by_sym = market_ctx.fii_oi_cr_latest or {}
+    _fii_oi_total  = sum(float(v) for v in _fii_oi_by_sym.values() if v)
+    _fii_oi_this   = float(_fii_oi_by_sym.get(fno_symbol, 0.0) or 0.0)
+    _fii_participates = (
+        (_fii_oi_this / _fii_oi_total) >= _FII_FUT_OI_SHARE_MIN
+        if _fii_oi_total > 0 else True   # no per-index data → preserve prior behaviour
+    )
+
+    add(_sig_fii_flow(market_ctx, fno_symbol))            # per-index flow — always
+    add(_sig_fii_cumulative_flow(market_ctx, fno_symbol)) # per-index 5D flow — always
+    if _fii_participates:
+        add(_sig_fii_institutional(market_ctx))
+        add(_sig_fii_options_delta(market_ctx))
+        add(_sig_options_participant(market_ctx))   # retail (Client) options contrarian + Pro confirm
+        add(_sig_fii_oi_buildup(market_ctx, fno_symbol))
+        # FII 1-day position-change read demoted to CONTEXT: walk-forward (381d × 4idx,
+        # 2026-06-19) measured both its members wrong-sign — "FII Covering Shorts →
+        # Reversal" IC −0.168 over 306 fires (~2.9 SE) and "FII Adding to Short" IC
+        # −0.099 over 487 fires. A naive directional read of FII index-futures position
+        # change is exactly the contrarian-noise the prior documents, so it informs but
+        # does not vote (Pro-Desk + flow + short-squeeze keep the real Institutional edge).
+        add(_context_only(_sig_fii_position_change(market_ctx)))
+        add(_sig_short_squeeze_setup(market_ctx, fno_symbol, day_change_pct, range_pos, pcr))
 
     # — Signals 14-17: market context —
-    add(_sig_vix_regime(market_ctx))
-    add(_sig_sector_breadth(market_ctx))
-    add(_sig_defensive_cyclical(market_ctx))
-    add(_sig_valuation_pe(market_ctx))
-    # Signal 17b: sector RS vs Nifty — fires for BankNifty / FinNifty / MidcapNifty only
-    add(_sig_index_relative_strength(fno_symbol, day_change_pct, market_ctx))
-    # Signals 17c/d/e: constituent breadth + futures + options — NIFTY, BANKNIFTY, FINNIFTY
-    _cstats = market_ctx.constituent_stats.get(fno_symbol)
-    if _cstats:
-        add(_sig_constituent_breadth(_cstats, fno_symbol))      # 17c cash breadth + delivery
-        add(_sig_constituent_fut_oi(_cstats, fno_symbol))       # 17d stock futures OI-Price
-        add(_sig_constituent_opt_oi_prem(_cstats, fno_symbol))  # 17e stock options OI-Premium
+    # Pruned to keep the engine purely index-F&O focused (next-day / week / month
+    # index move from index options, index futures, FII/DII/Pro/Client positioning).
+    # Removed as NOT index-derivative data (and ≤0 measured next-day IC):
+    #   • VIX regime  — directional vote IC −0.13 (wrong-sign). VIX still sizes the
+    #     expected-move RANGE directly (vix_close), just no longer votes on direction.
+    #   • Sector breadth / defensive-cyclical / RS vs Nifty — cash-equity rotation.
+    #   • Constituent stock fut/opt OI (17c/d/e) — single-STOCK F&O; FIIs trade the
+    #     INDEX, not the basket, so these dilute the index read.
 
     # — Signals 18-20: Nifty 50 multi-expiry (fires only when weekly ≠ monthly) —
     if fno_symbol == "NIFTY" and monthly_exp_me is not None:
@@ -3566,7 +4168,7 @@ def _compute_prediction(
         regime = get_regime_signals(fno_symbol, index_name, trade_date)
         add(_sig_market_memory(regime))
         add(_sig_hmm_regime(regime))
-        add(_sig_entropy_regime(regime))
+        # Entropy regime (PE / predictability) removed from the output.
     except Exception:
         pass   # Regime signals are supplementary — never block the core prediction
 
@@ -3632,6 +4234,7 @@ def _compute_prediction(
         idx_hist, spot_close, market_ctx.vix_close, composite,
         dte_options, levels, is_nifty=(fno_symbol == "NIFTY"),
         gamma_ratio=gamma_ratio_val,
+        cal_mult=_EM_CALIBRATION.get(fno_symbol, 1.0),
     )
 
     # Volume confirmation: today's traded value vs its trailing 20-day average.
@@ -3669,8 +4272,31 @@ def _compute_prediction(
         trade_date, is_nifty=(fno_symbol == "NIFTY"),
     )
 
+    # ── Monthly (to monthly-expiry) range — NIFTY only, from the MONTHLY chain ──
+    # Built off the monthly expiry's own straddle + OI walls + max pain, a separate
+    # wider scenario band beside the weekly. Skipped when near_expiry already IS the
+    # monthly (then wk_* already runs to the monthly, so a second copy is redundant),
+    # and for Bank/Fin/Midcap (monthly-only — their wk_* range IS the monthly).
+    mn: dict = {}
+    if fno_symbol == "NIFTY" and monthly_exp_me is not None and not near_is_monthly:
+        mn = _compute_weekly_range(
+            fno_today, spot_close, em.get("expected_move_pct"),
+            trade_date, is_nifty=True,
+            target_expiry=monthly_exp_me, prefix="mn",
+        )
+
+    # Surface silent F&O staleness: when the bhavcopy lags the index date, every
+    # OI/PCR/walls read is from the older session — say so on the verdict card.
+    _note = ""
+    if today_fno_date and today_fno_date < trade_date:
+        _fno_lag = (trade_date - today_fno_date).days
+        risk  = (f"F&O data is from {today_fno_date:%d %b} ({_fno_lag}d old) — "
+                 f"OI/PCR/wall reads are stale. ") + risk
+        _note = f"F&O bhavcopy {today_fno_date:%d %b} is {_fno_lag}d behind the index data."
+
     pred_out = IndexPrediction(
         fno_symbol=fno_symbol, display_name=display_name, as_of_date=trade_date,
+        note=_note,
         spot_close=spot_close, prev_close=prev_close_price,
         day_change_pct=day_change_pct, high=high_val, low=low_val,
         near_expiry=near_expiry_display, days_to_expiry=dte_options,
@@ -3718,6 +4344,17 @@ def _compute_prediction(
         wk_straddle_pts=wk.get("wk_straddle_pts"), wk_put_floor=wk.get("wk_put_floor"),
         wk_call_cap=wk.get("wk_call_cap"), wk_max_pain=wk.get("wk_max_pain"),
         wk_basis=wk.get("wk_basis", ""),
+        # Monthly (to monthly-expiry) range — NIFTY only
+        mn_expiry=mn.get("mn_expiry"), mn_dte_cal=mn.get("mn_dte_cal"),
+        mn_kind=mn.get("mn_kind", ""), mn_move_pts=mn.get("mn_move_pts"),
+        mn_range_low=mn.get("mn_range_low"), mn_range_high=mn.get("mn_range_high"),
+        mn_straddle_pts=mn.get("mn_straddle_pts"), mn_put_floor=mn.get("mn_put_floor"),
+        mn_call_cap=mn.get("mn_call_cap"), mn_max_pain=mn.get("mn_max_pain"),
+        mn_basis=mn.get("mn_basis", ""),
+        # Price-structure S/R (Signal 6b)
+        sr_support=_sr.get("support"), sr_resistance=_sr.get("resistance"),
+        sr_support_touches=_sr.get("sup_touches", 0),
+        sr_resistance_touches=_sr.get("res_touches", 0),
     )
 
     # Auto-store prediction in memory engine (non-fatal).

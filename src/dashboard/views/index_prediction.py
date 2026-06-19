@@ -98,19 +98,27 @@ def _card_move_line(pred: "IndexPrediction") -> str:
     tmv = pred.target_move_pts or 0
     tgt_color = _POS if tmv > 0 else (_NEG if tmv < 0 else _NEU)
     arrow     = "▲" if tmv > 0 else ("▼" if tmv < 0 else "↔")
+    tgt_html  = (f"<b style='color:{_NEU}'>↔ range</b>" if abs(tmv) < 1
+                 else f"<b style='color:{tgt_color}'>{arrow}{abs(tmv):,.0f}</b>")
     return (
         f"<div style='margin-top:5px;font-size:0.74em;color:#888'>"
         f"Range <b style='color:#fff'>{lo:,.0f}–{hi:,.0f}</b> "
         f"<span style='color:#666'>(±{em:,.0f})</span> "
-        f"&nbsp;Tgt <b style='color:{tgt_color}'>{arrow}{abs(tmv):,.0f}</b>"
+        f"&nbsp;Tgt {tgt_html}"
         f"</div>"
     )
 
 
-def _expected_move_box(pred: "IndexPrediction") -> str:
+def _expected_move_box(pred: "IndexPrediction", no_edge: bool = False) -> str:
     """
     Prominent expected-move forecast: range, directional target, sideways band.
     Returns an HTML snippet (empty string if no data).
+
+    The three magnitudes share one conviction axis (see _compute_expected_move), so they
+    cannot contradict:  band ≤ |target| ≤ 1σ range. A sub-band conviction yields NO point
+    target (target_move == 0) — we render "none → range-bound" rather than an arrow inside
+    the band. When `no_edge` (measured hit-rate ≤ coin-flip) the target is greyed to a
+    "lean", subordinate to the range, so it can't masquerade as a tradeable level.
     """
     if pred.expected_move_pts is None or pred.spot_close is None:
         return ""
@@ -124,43 +132,96 @@ def _expected_move_box(pred: "IndexPrediction") -> str:
     band = pred.sideways_band_pts or 0
     spot = pred.spot_close
 
-    range_label = "Expected Range (~75%)"
+    has_target = abs(tmv) >= 1                       # sub-band → target_move is 0 → no arrow
+    arrow      = "▲" if tmv > 0 else ("▼" if tmv < 0 else "↔")
+    # Under no measured edge, demote the target to a grey "lean" so it sits below the range.
+    tgt_color  = "#9e9e9e" if no_edge else (_POS if tmv > 0 else (_NEG if tmv < 0 else _NEU))
 
-    tgt_color = _POS if tmv > 0 else (_NEG if tmv < 0 else _NEU)
-    arrow     = "▲" if tmv > 0 else ("▼" if tmv < 0 else "↔")
+    # Sub-band → no honest point target (validated: next-day move not predictable vs spot).
+    # Show the structural MAGNET instead — where OI gravity pulls IF price drifts. Labeled
+    # weak, because max-pain doesn't actually pin (49% vs 50% null) except very near expiry.
+    mp  = getattr(pred.levels, "max_pain", None) if pred.levels else None
+    dte = pred.days_to_expiry
+    if not has_target:
+        if mp:
+            mp_pts   = mp - spot
+            mp_arrow = "↓" if mp_pts < 0 else ("↑" if mp_pts > 0 else "↔")
+            pull     = ("pull strengthens into expiry" if (dte is not None and dte <= 2)
+                        else "weak pull — gravity, not a pin")
+            tgt_label = "Magnet (OI gravity)"
+            tgt_value = f"<span style='color:{_NEU}'>{mp_arrow} {mp:,.0f}</span>"
+            tgt_sub   = f"{mp_pts:+,.0f} pts · max pain · {pull}"
+        else:
+            tgt_label = "Directional Target"
+            tgt_value = f"<span style='color:{_NEU}'>— none</span>"
+            tgt_sub   = f"move within ±{band:,.0f} pt band → range-bound"
+        sub_color = "#888"
+    else:
+        tgt_label = "Directional Lean" if no_edge else "Directional Target"
+        tgt_value = f"<span style='color:{tgt_color}'>{arrow} {tgt:,.0f}</span>"
+        tgt_sub   = (f"{tmv:+,.0f} pts — no measured edge, trade the range" if no_edge
+                     else f"{tmv:+,.0f} pts from {spot:,.0f}")
+        sub_color = tgt_color
 
-    # Directional verdict on magnitude vs sideways band
-    if abs(tmv) <= band:
+    # Magnitude verdict line — consistent with the verdict chip (band is the same boundary).
+    if not has_target:
+        # Sub-band = a SWING regime. Spell out that the lean (composite tilt), the magnet
+        # (OI gravity) and the zero target are DIFFERENT axes — a mild-bull score sitting
+        # beside a downward magnet is not a contradiction, it's an oscillation signature.
+        _cs   = pred.composite_score or 0
+        lean  = "bullish" if _cs > 1 else ("bearish" if _cs < -1 else "flat")
+        mp_dir = ""
+        if mp:
+            mp_dir = " (pulling down)" if (mp - spot) < 0 else (" (pulling up)" if (mp - spot) > 0 else "")
         magnitude_verdict = (
-            f"<span style='color:{_NEU}'>Within ±{band:.0f} pt sideways band → "
-            f"range-bound likely</span>"
+            f"<span style='color:{_NEU}'>Range-bound → expect a <b>SWING inside the ±{band:,.0f} pt band</b> "
+            f"(up-then-down or down-then-up), not a trend. The mild <b>{lean} lean</b> is only a slight tilt "
+            f"and the <b>magnet</b>{mp_dir} is OI gravity — <b>different axes, not a contradiction</b>; the "
+            f"directional target is <b>0</b>. Trade the band edges; a close beyond ±{band:,.0f} pts flips to "
+            f"the breakout scenarios below.</span>"
         )
     else:
         dir_word = "upside" if tmv > 0 else "downside"
         magnitude_verdict = (
-            f"<span style='color:{tgt_color}'>Beyond ±{band:.0f} pt band → "
-            f"directional {dir_word} bias of ~{abs(tmv):.0f} pts</span>"
+            f"<span style='color:{tgt_color}'>Clears the ±{band:,.0f} pt band → "
+            f"{dir_word} {'lean' if no_edge else 'target'} of ~{abs(tmv):,.0f} pts "
+            f"(between band edge and the 1σ range)</span>"
         )
+
+    # EOD close anchor — the price every range/target/band is measured from, shown here
+    # so it's readable without scrolling up to the price header.
+    chg     = pred.day_change_pct
+    chg_col = _POS if (chg or 0) > 0 else (_NEG if (chg or 0) < 0 else _NEU)
+    chg_txt = f" <span style='color:{chg_col};font-size:0.82em'>({chg:+.2f}%)</span>" if chg is not None else ""
+    asof    = pred.as_of_date.strftime("%d %b") if pred.as_of_date else ""
+    close_anchor = (
+        f"<div style='margin-bottom:8px;padding-bottom:7px;border-bottom:1px solid #2a2a2a'>"
+        f"<span style='color:#888;font-size:0.72em;text-transform:uppercase;letter-spacing:0.5px'>"
+        f"{pred.display_name} EOD Close </span>"
+        f"<b style='color:#fff;font-size:1.15em'>{spot:,.0f}</b>{chg_txt}"
+        f"<span style='color:#666;font-size:0.72em'> &nbsp;· as of {asof} · ranges below are from here</span>"
+        f"</div>"
+    )
 
     return (
         f"<div style='background:#161616;border:1px solid #333;border-radius:8px;"
         f"padding:10px 14px;margin-bottom:10px'>"
+        f"{close_anchor}"
         f"<div style='display:flex;justify-content:space-between;flex-wrap:wrap;gap:8px'>"
         # Expected range
         f"<div style='min-width:160px'>"
         f"<div style='color:#888;font-size:0.72em;text-transform:uppercase;letter-spacing:0.5px'>"
-        f"Expected Range (~75%)</div>"
+        f"Expected Range (~68%)</div>"
         f"<div style='color:#fff;font-weight:700;font-size:1.0em'>"
         f"{lo:,.0f} – {hi:,.0f}</div>"
         f"<div style='color:#888;font-size:0.75em'>±{em:,.0f} pts (±{pct:.2f}%)</div>"
         f"</div>"
-        # Directional target
+        # Directional target / lean
         f"<div style='min-width:150px'>"
         f"<div style='color:#888;font-size:0.72em;text-transform:uppercase;letter-spacing:0.5px'>"
-        f"Directional Target</div>"
-        f"<div style='color:{tgt_color};font-weight:700;font-size:1.0em'>"
-        f"{arrow} {tgt:,.0f}</div>"
-        f"<div style='color:{tgt_color};font-size:0.75em'>{tmv:+,.0f} pts from {spot:,.0f}</div>"
+        f"{tgt_label}</div>"
+        f"<div style='font-weight:700;font-size:1.0em'>{tgt_value}</div>"
+        f"<div style='color:{sub_color};font-size:0.75em'>{tgt_sub}</div>"
         f"</div>"
         # Sideways band
         f"<div style='min-width:150px'>"
@@ -171,6 +232,12 @@ def _expected_move_box(pred: "IndexPrediction") -> str:
         f"</div>"
         f"</div>"
         f"<div style='margin-top:6px;font-size:0.78em'>{magnitude_verdict}</div>"
+        # Tail odds — symmetric 1σ split (NOT skewed by composite: it has ~0 next-day IC,
+        # so tilting these probabilities would just relabel noise). Honest reach map.
+        f"<div style='margin-top:3px;font-size:0.74em;color:#999'>"
+        f"Reach odds: <b style='color:{_POS}'>~16%</b> &gt; {hi:,.0f} &nbsp;·&nbsp; "
+        f"<b style='color:#bbb'>~68%</b> inside {lo:,.0f}–{hi:,.0f} &nbsp;·&nbsp; "
+        f"<b style='color:{_NEG}'>~16%</b> &lt; {lo:,.0f}</div>"
         f"<div style='margin-top:3px;color:#666;font-size:0.72em'>{pred.move_basis}</div>"
         f"</div>"
     )
@@ -216,7 +283,8 @@ def _breakout_extension_box(pred: "IndexPrediction") -> str:
         f"<div style='background:#0d1117;border:1px solid #2a3a2a;border-radius:8px;"
         f"padding:8px 14px;margin-bottom:10px'>"
         f"<div style='color:#555;font-size:0.68em;text-transform:uppercase;letter-spacing:0.5px;"
-        f"margin-bottom:6px'>Breakout Scenarios — if range breaks by &gt;{thr:.0f} pts</div>"
+        f"margin-bottom:6px'>Breakout Scenarios (next-day) — if the 1σ range breaks by &gt;{thr:.0f} pts · "
+        f"horizon is NEXT-DAY, not the weekly/monthly bands above</div>"
         # Two columns: upside | downside
         f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:10px'>"
         # Upside breakout
@@ -307,10 +375,21 @@ def _render_card(pred: IndexPrediction) -> None:
     dir_color  = pred.direction_color
     ctx        = pred.market_context
 
-    # FII net display
+    # FII net display — the fao_participant net is an AGGREGATE across all index
+    # futures (~76% NIFTY). Only attribute it to indices with a material share of FII
+    # index-futures OI; for thin ones (FinNifty/Midcap) FIIs barely trade futures, so
+    # showing the pooled short there is misleading. Mirrors the engine's signal gate.
     fii_net   = ctx.fii_fut_idx_net if ctx else 0
-    fii_str   = f"{fii_net:+,}" if ctx and ctx.fao_date else "—"
-    fii_emoji = "🐂" if fii_net > 80_000 else ("🐻" if fii_net < -80_000 else "⚪")
+    _oi_by    = (ctx.fii_oi_cr_latest or {}) if ctx else {}
+    _oi_tot   = sum(float(v) for v in _oi_by.values() if v)
+    _oi_this  = float(_oi_by.get(pred.fno_symbol, 0.0) or 0.0)
+    _fii_material = (_oi_tot <= 0) or (_oi_this / _oi_tot >= 0.10)
+    if ctx and ctx.fao_date and _fii_material:
+        fii_str   = f"{fii_net:+,}"
+        fii_emoji = "🐂" if fii_net > 80_000 else ("🐻" if fii_net < -80_000 else "⚪")
+    else:
+        fii_str   = "n/a · negligible FII fut OI" if (ctx and ctx.fao_date) else "—"
+        fii_emoji = "⚪"
 
     # VIX display
     vix_str   = f"{ctx.vix_close:.1f}" if ctx and ctx.vix_close else "—"
@@ -322,7 +401,7 @@ def _render_card(pred: IndexPrediction) -> None:
     # FII position change display (covering vs adding)
     fii_chg     = ctx.fii_net_change_1d if ctx else 0
     fii_chg_str = ""
-    if ctx and ctx.fii_prev_fao_date and fii_chg != 0:
+    if ctx and ctx.fii_prev_fao_date and fii_chg != 0 and _fii_material:
         fii_chg_color = _POS if fii_chg > 0 else _NEG
         fii_chg_label = "COV" if fii_chg > 0 else "ADD"
         fii_chg_str   = (
@@ -656,7 +735,11 @@ def _render_signals(pred: IndexPrediction) -> None:
 
 def _render_key_levels(pred: IndexPrediction) -> None:
     lv = pred.levels
-    if all(v is None for v in [lv.top_put_strike, lv.max_pain, lv.top_call_strike]):
+    has_oi_levels = any(v is not None for v in [lv.top_put_strike, lv.max_pain, lv.top_call_strike])
+    has_price_sr  = bool(pred.sr_support or pred.sr_resistance)
+    # Price-structure S/R comes from the index OHLC and must render even when the
+    # options chain produced no walls — the two level sources are independent.
+    if not has_oi_levels and not has_price_sr:
         return
     _h("Key Levels", "Put Wall = strong support (where put sellers will defend the market). Call Wall = strong resistance (where call sellers will suppress rallies). Max Pain = level where option writers lose the least — markets magnetically move toward this as expiry nears, especially in the last 5 trading days.")
     c1, c2, c3 = st.columns(3)
@@ -685,6 +768,35 @@ def _render_key_levels(pred: IndexPrediction) -> None:
                 <div style="color:#fff;font-size:1.4em;font-weight:700">{_fmt(lv.top_call_strike, 0) if lv.top_call_strike else '—'}</div>
                 <div style="color:#888;font-size:0.75em">OI: {lv.call_oi_at_top:,}</div>
                 {f'<div style="color:#555;font-size:0.7em">2nd: {lv.second_call_strike:.0f}</div>' if lv.second_call_strike else ''}
+            </div>""", unsafe_allow_html=True,
+        )
+
+    # ── Price-structure S/R (swing-pivot zones from daily OHLC — Signal 6b) ──
+    if pred.sr_support or pred.sr_resistance:
+        def _conf(price_lvl, wall1, wall2):
+            """True when an OI wall sits within 0.6% of the price level (confluence)."""
+            if not price_lvl:
+                return False
+            return any(w and abs(w - price_lvl) / price_lvl * 100 <= 0.60 for w in (wall1, wall2))
+        sup_conf = _conf(pred.sr_support, lv.top_put_strike, lv.second_put_strike)
+        res_conf = _conf(pred.sr_resistance, lv.top_call_strike, lv.second_call_strike)
+        sup_txt = (f"<b style='color:#69f0ae'>{pred.sr_support:,.0f}</b> "
+                   f"({pred.sr_support_touches} touches)"
+                   + (" · 🤝 on the put wall" if sup_conf else "")
+                   if pred.sr_support else "—")
+        res_txt = (f"<b style='color:#ff5252'>{pred.sr_resistance:,.0f}</b> "
+                   f"({pred.sr_resistance_touches} touches)"
+                   + (" · 🤝 on the call wall" if res_conf else "")
+                   if pred.sr_resistance else "—")
+        st.markdown(
+            f"""<div style="background:#16202b;border-radius:8px;padding:10px 14px;margin-top:8px;font-size:0.85em">
+                <span style="color:#aaa;font-weight:600">PRICE-STRUCTURE S/R</span>
+                <span style="color:#555">(swing-pivot zones, ~60D daily OHLC)</span> ·
+                Support {sup_txt} &nbsp;|&nbsp; Resistance {res_txt}
+                <div style="color:#555;font-size:0.85em;margin-top:2px">
+                    Chart-derived levels the market actually traded at — independent of the
+                    options chain. 🤝 = an OI wall defends the same line (strongest levels).
+                    Range map, not a directional vote.</div>
             </div>""", unsafe_allow_html=True,
         )
 
@@ -785,8 +897,58 @@ def _weekly_range_box(pred: "IndexPrediction") -> str:
         f"<div style='color:#7fdbff;font-size:0.74em'>±{mv:,.0f} pts ({pct:.1f}%) — where price can travel until expiry</div>"
         f"<div style='color:#888;font-size:0.70em;margin-top:3px'>implied by {impl}</div>"
         + (f"<div style='color:#aaa;font-size:0.72em;margin-top:2px'>{oi_line}</div>" if oi_line else "")
+        + "<div style='color:#777;font-size:0.68em;margin-top:3px'>📊 validated: the CLOSE lands "
+          "inside by expiry ~68% (NIFTY/Bank) — but price tests OUTSIDE intraday in ~60% of weeks. "
+          "A settle-by-expiry zone, <b>not an intraday stop level</b>.</div>"
         + "</div>"
     )
+
+
+def _monthly_range_box(pred: "IndexPrediction") -> str:
+    """
+    Forward MONTHLY range to the monthly expiry — NIFTY only, built from the MONTHLY
+    chain's own ATM straddle + σ√T, bounded by monthly OI walls / max pain. A wider,
+    slower scenario band beside the weekly. Empty when there is no distinct monthly
+    (Bank/Fin/Midcap are monthly-only, or NIFTY's near expiry already IS the monthly).
+    """
+    if pred.mn_range_low is None or pred.mn_range_high is None or pred.spot_close is None:
+        return ""
+    lo, hi, mv = pred.mn_range_low, pred.mn_range_high, pred.mn_move_pts or 0
+    exp = pred.mn_expiry.strftime("%d %b") if pred.mn_expiry else "—"
+    dte = pred.mn_dte_cal
+    pct = (mv / pred.spot_close * 100) if pred.spot_close else 0
+    impl = (f"ATM straddle {pred.mn_straddle_pts:,.0f} (market-implied) + σ√T"
+            if pred.mn_straddle_pts else "σ√T statistical")
+    oi_bits = []
+    if pred.mn_put_floor:  oi_bits.append(f"🛡️ put floor <b>{pred.mn_put_floor:,.0f}</b>")
+    if pred.mn_max_pain:   oi_bits.append(f"🎯 max pain <b>{pred.mn_max_pain:,.0f}</b>")
+    if pred.mn_call_cap:   oi_bits.append(f"🧱 call cap <b>{pred.mn_call_cap:,.0f}</b>")
+    oi_line = " &nbsp;·&nbsp; ".join(oi_bits)
+    return (
+        f"<div style='background:#0d1117;border:1px solid #4a3a1e;border-radius:8px;"
+        f"padding:8px 14px;margin-bottom:10px'>"
+        f"<div style='color:#ffb74d;font-size:0.68em;text-transform:uppercase;letter-spacing:0.5px;"
+        f"margin-bottom:4px'>🗓️ Monthly Range → expiry {exp} (MONTHLY · {dte}d) · updates daily</div>"
+        f"<div style='color:#ffb74d;font-weight:700;font-size:1.05em'>{lo:,.0f} &nbsp;—&nbsp; {hi:,.0f}</div>"
+        f"<div style='color:#ffcc80;font-size:0.74em'>±{mv:,.0f} pts ({pct:.1f}%) — where price can travel until the monthly expiry</div>"
+        f"<div style='color:#888;font-size:0.70em;margin-top:3px'>implied by {impl} (monthly chain)</div>"
+        + (f"<div style='color:#aaa;font-size:0.72em;margin-top:2px'>{oi_line}</div>" if oi_line else "")
+        + "<div style='color:#777;font-size:0.68em;margin-top:3px'>📊 runs TIGHT: the close lands inside "
+          "by expiry only ~57–61% (small sample, ~13 expiries) — read as a <b>typical-move</b> band, "
+          "not a 68% band; awaiting more expiries before recalibration.</div>"
+        + "</div>"
+    )
+
+
+def _range_cards(pred: "IndexPrediction") -> str:
+    """Weekly + monthly to-expiry bands. Side-by-side (weekly left / monthly right)
+    when both exist (NIFTY); otherwise the single weekly box full-width."""
+    wk = _weekly_range_box(pred)
+    mn = _monthly_range_box(pred)
+    if wk and mn:
+        return (f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:10px;"
+                f"align-items:stretch'>{wk}{mn}</div>")
+    return wk or mn
 
 
 def _confidence_phrase(pred: IndexPrediction) -> str:
@@ -855,48 +1017,83 @@ def _verdict_meter_note(pred: IndexPrediction) -> str:
     )
 
 
+def _measured_trust_box(acc: dict, display_name: str) -> str:
+    """Per-index realized track record, rendered ON the verdict card so the
+    displayed confidence can never read higher than the measured next-day
+    hit-rate. Pooling hides the worst case (NIFTY ≈ 22%), so this is symbol-
+    specific. Returns "" when there is too little history to judge."""
+    if not acc:
+        return ""
+    sh, ic, n = acc["sign_hit"], acc["ic"], acc["n_dir"]
+    if sh >= 56:
+        col, tag, msg = "#00c853", "has held an edge", \
+            "the directional read has worked — still size with the range."
+    elif sh >= 48:
+        col, tag, msg = "#ffd600", "≈ coin-flip", \
+            "no measured directional edge — trade the range, not the arrow."
+    else:
+        col, tag, msg = "#ff5252", "below coin-flip", \
+            "the arrow has been WRONG more often than right — do NOT trade the " \
+            "direction; use only the range / levels / risk flags below."
+    return (
+        f"<div style='background:rgba(255,255,255,0.03);border-left:3px solid {col};"
+        f"border-radius:0 6px 6px 0;padding:6px 10px;margin-bottom:10px;font-size:0.8em;color:#ddd'>"
+        f"<b style='color:{col}'>⚖ Reality check — {display_name}:</b> measured next-day "
+        f"directional hit-rate <b style='color:{col}'>{sh:.0f}%</b> (n={n}) · IC {ic:+.3f} — "
+        f"<b style='color:{col}'>{tag}</b>. {msg}</div>"
+    )
+
+
 def _render_verdict(pred: IndexPrediction) -> None:
     dir_color  = pred.direction_color
     conf_color = _CONF_COLOR.get(pred.confidence, "#78909C")
     dir_emoji  = _DIR_EMOJI.get(pred.direction, "↔")
-    st.markdown(
-        f"""
-        <div style="
-            background:#1e1e1e;border:1px solid {dir_color};
-            border-radius:10px;padding:16px 20px;margin-bottom:12px;
-        ">
-            <div style="display:flex;align-items:center;gap:12px;margin-bottom:10px">
-                <div style="
-                    background:{dir_color};color:#000;font-weight:700;
-                    font-size:1.1em;padding:6px 16px;border-radius:8px
-                ">{dir_emoji} {pred.direction}</div>
-                <div style="color:{conf_color};font-weight:600">{_confidence_phrase(pred)}</div>
-                <div style="margin-left:auto;font-size:0.82em;text-align:right">
-                    {_meter_html(pred.composite_score, show_raw=True)}
-                    <div style="color:#666;font-size:0.85em;margin-top:2px">
-                        {len(pred.signals)} signals &nbsp;|&nbsp; 0=Max Bear · 50=Neutral · 100=Max Bull
-                    </div>
-                </div>
-            </div>
-            <div style="color:#ddd;font-size:0.9em;margin-bottom:10px">{pred.headline}</div>
-            {_verdict_meter_note(pred)}
-            {_expected_move_box(pred)}
-            {_weekly_range_box(pred)}
-            {_breakout_extension_box(pred)}
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.82em">
-                <div>
-                    <div style="color:#69f0ae;font-weight:600;margin-bottom:2px">Key Driver</div>
-                    <div style="color:#aaa">{pred.key_driver}</div>
-                </div>
-                <div>
-                    <div style="color:#ff5252;font-weight:600;margin-bottom:2px">Key Risk</div>
-                    <div style="color:#aaa">{pred.key_risk}</div>
-                </div>
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
+    # Per-index measured track record — gates how confident the card may LOOK.
+    try:
+        from src.analytics.index_prediction import get_engine_accuracy
+        _acc = get_engine_accuracy(fno_symbol=pred.fno_symbol)
+    except Exception:
+        _acc = {}
+    # When the measured directional hit-rate is at/below a coin-flip, strip the
+    # confidence colour to a warning hue so "MEDIUM/HIGH CONFIDENCE" can't masquerade
+    # as actionable next to a verdict that has not earned it.
+    if _acc and _acc["sign_hit"] < 48:
+        conf_color = "#ff5252" if _acc["sign_hit"] < 44 else "#ffae00"
+    # Built by concatenation (no indented triple-quoted template): an optional
+    # box returning "" must never leave a whitespace-only line, otherwise
+    # CommonMark ends the HTML block early and renders the rest as a code block.
+    html = (
+        f"<div style='background:#1e1e1e;border:1px solid {dir_color};"
+        f"border-radius:10px;padding:16px 20px;margin-bottom:12px'>"
+        f"<div style='display:flex;align-items:center;gap:12px;margin-bottom:10px'>"
+        f"<div style='background:{dir_color};color:#000;font-weight:700;"
+        f"font-size:1.1em;padding:6px 16px;border-radius:8px'>{dir_emoji} {pred.direction}</div>"
+        f"<div style='color:{conf_color};font-weight:600'>{_confidence_phrase(pred)}</div>"
+        f"<div style='margin-left:auto;font-size:0.82em;text-align:right'>"
+        f"{_meter_html(pred.composite_score, show_raw=True)}"
+        f"<div style='color:#666;font-size:0.85em;margin-top:2px'>"
+        f"{len(pred.signals)} signals &nbsp;|&nbsp; 0=Max Bear · 50=Neutral · 100=Max Bull</div>"
+        f"</div>"
+        f"</div>"
+        f"<div style='color:#ddd;font-size:0.9em;margin-bottom:10px'>{pred.headline}</div>"
+        f"{_measured_trust_box(_acc, pred.display_name)}"
+        f"{_verdict_meter_note(pred)}"
+        f"{_expected_move_box(pred, no_edge=bool(_acc and _acc['sign_hit'] < 48))}"
+        f"{_range_cards(pred)}"
+        f"{_breakout_extension_box(pred)}"
+        f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.82em'>"
+        f"<div>"
+        f"<div style='color:#69f0ae;font-weight:600;margin-bottom:2px'>Key Driver</div>"
+        f"<div style='color:#aaa'>{pred.key_driver}</div>"
+        f"</div>"
+        f"<div>"
+        f"<div style='color:#ff5252;font-weight:600;margin-bottom:2px'>Key Risk</div>"
+        f"<div style='color:#aaa'>{pred.key_risk}</div>"
+        f"</div>"
+        f"</div>"
+        f"</div>"
     )
+    st.markdown(html, unsafe_allow_html=True)
 
 
 # ── Market Context tab ────────────────────────────────────────────────────────
@@ -1550,18 +1747,18 @@ def render(selected_date: date) -> None:
         )
 
     st.caption(
-        "26-signal quant engine: OI-Price Matrix · Carry · Max Pain · PCR · OI-Premium Matrix · "
-        "Wyckoff Range · Price Mean-Reversion · Anchored VWAP · Institutional RSI · "
-        "FII Institutional · FII Options Delta · FII Flow · "
-        "FII 5D Cumulative · FII OI Buildup · FII Position Change · Short Squeeze Setup · "
-        "India VIX · Sector Breadth · Cyclical/Defensive Rotation · PE Valuation · "
-        "Multi-Expiry PCR · Dual Max Pain · Gamma Wall · Hurst · HMM · Entropy"
+        "Index-F&O market-structure engine: OI-Price Matrix · PCR · OI-Premium Matrix · Max Pain · "
+        "Price Mean-Reversion · FII Institutional · FII Options Delta · FII Flow · FII 5D Cumulative · "
+        "FII OI Buildup · Pro/Client Participant · Short Squeeze · Multi-Expiry PCR · Dual Max Pain · "
+        "Gamma Wall · Hurst · HMM. Carry, FII Position-Change & Memory shown as context (no vote). "
+        "Pruned as non-index-F&O / no measured edge: VWAP · RSI · Sector Breadth · Cyclical-Defensive · "
+        "PE Valuation · VIX-vote · constituent stock OI · Entropy. Live signal count shown per card."
     )
 
     with st.expander("📖 How to read this page", expanded=False):
         st.markdown("""
 **Prediction Cards (top row)** — one card per index (Nifty 50, Bank Nifty, Fin Nifty, Midcap Nifty).
-- **Direction badge** (🟢 UP / 🔴 DOWN / 🟡 SIDEWAYS) — tomorrow's expected move from the 26-signal engine
+- **Direction badge** (🟢 UP / 🔴 DOWN / 🟡 SIDEWAYS) — tomorrow's expected move from the index-F&O signal engine (live signal count shown on each card)
 - **Bull/Bear Meter (0–100)** — intuitive conviction scale replacing the raw ±20 score:
   - **0–20 = STRONG BEAR** 🔴🔴 — very high bearish conviction, multiple strong signals aligned
   - **21–35 = BEAR** 🔴 — clear bearish bias, institutions positioned short
@@ -1572,10 +1769,10 @@ def render(selected_date: date) -> None:
   - **81–100 = STRONG BULL** 🟢🟢 — very high bullish conviction
   - Raw score shown in brackets for reference — 50 = neutral, each 10 points = one strong signal
 - **Expected Move forecast** (in the Verdict & Signals tab) — answers *how many points*:
-  - **Expected Range (~75%)** — the 1σ volatility band: tomorrow's close lands inside this ~75% of the time
-    (India VIX trades at a premium to realized vol, so the blended range is wider than pure 1σ = 68%).
-    Computed from realized 20-day volatility blended with India VIX (forward-looking implied vol).
-    Bank Nifty's range is naturally wider than Nifty (index-specific volatility).
+  - **Expected Range (~68%)** — the 1σ volatility band: tomorrow's close lands inside this ~68% of the time
+    (validated coverage on the live prediction_log: NIFTY ~72% / others 63–70%; a 75% target failed OOS,
+    so the band is an honest ~1σ, not 75%). Computed from realized 20-day volatility blended with India VIX
+    (forward-looking implied vol), per-index vol-calibrated. Bank Nifty / Midcap ranges are naturally wider.
   - **Directional Target** — where the engine expects the close, skewed within the range by conviction
     (composite score). Strong bull → upper end / above; neutral → middle; strong bear → lower end / below.
   - **Sideways Band** — the data-driven ± threshold (40% of the 1σ move). If the predicted move stays
@@ -1596,7 +1793,7 @@ def render(selected_date: date) -> None:
 - **VIX Regime** — CALM / NORMAL / ELEVATED / HIGH based on VIX level; determines how much signal weight to give to volatility signals
 
 **Detail Tabs** — select an index from the dropdown, then explore:
-- **Verdict & Signals** — full 17-signal breakdown with individual scores and explanations
+- **Verdict & Signals** — full signal breakdown with individual scores and explanations
 - **Key Levels** — put wall, call wall, max pain chart with cost-of-carry context
 - **Today vs Yesterday** — spot changes in OI, carry, PCR, breadth to see what shifted overnight
 - **OI Structure** — call/put OI chart showing where options writers have concentrated positions (these act as support/resistance)
