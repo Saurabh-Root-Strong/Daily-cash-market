@@ -21,19 +21,26 @@ _LAST_UPDATED_FILE = PROJECT_ROOT / "logs" / "last_updated.txt"
 
 
 def _read_last_updated() -> str | None:
+    """Latest data date for the 'Last fetched' caption — DERIVED from the DB so it can
+    never drift from the data. (The old marker file was written only by the scheduler,
+    so a manual Refresh advanced the data but left this caption frozen at the prior run.)
+    Falls back to the legacy marker file only if the DB query fails."""
+    from datetime import date as _date
+
+    def _fmt(d) -> str:
+        if hasattr(d, "date"):
+            d = d.date()
+        return d.strftime("%d %b %Y") + (" (Today)" if d == _date.today() else "")
+
     try:
-        raw = _LAST_UPDATED_FILE.read_text().strip()
-        # File now contains latest trade_date (YYYY-MM-DD) from DB, not a wall-clock timestamp
-        try:
-            from datetime import date as _date
-            d = _date.fromisoformat(raw[:10])
-            suffix = " (Today)" if d == _date.today() else ""
-            return d.strftime("%d %b %Y") + suffix
-        except ValueError:
-            pass
-        # Fallback: old format with full timestamp
-        ts = datetime.fromisoformat(raw)
-        return ts.strftime("%d %b %Y %I:%M %p")
+        from src.data.repository import query_dataframe
+        df = query_dataframe("SELECT MAX(trade_date) AS d FROM daily_data", [])
+        if df is not None and not df.empty and df["d"].iloc[0] is not None:
+            return _fmt(df["d"].iloc[0])
+    except Exception:
+        pass
+    try:  # legacy fallback: the marker file written by run_daily.bat
+        return _fmt(_date.fromisoformat(_LAST_UPDATED_FILE.read_text().strip()[:10]))
     except Exception:
         return None
 
@@ -298,22 +305,17 @@ def main() -> None:
                     except Exception:
                         pass
             else:
-                # Local: fetch today's EOD data then fill stale prediction outcomes
-                with st.spinner("Fetching latest market data…"):
+                # Local: run the SAME full pipeline the 7:30 scheduler runs, so a manual
+                # refresh is a COMPLETE substitute for a missed run — fetch + log today's
+                # prediction + FII/DII cash + fill outcomes + sector memory + marker.
+                # (Previously this called only run_daily_job(), leaving the prediction
+                # unlogged and the 'Last fetched' marker stale.)
+                with st.spinner("Running daily update — fetch, predictions, outcomes…"):
                     try:
-                        from src.ingestion.orchestrator import run_daily_job
-                        run_daily_job()
+                        from src.cli import run_daily_pipeline
+                        run_daily_pipeline()
                     except Exception as _e:
-                        st.warning(f"Data fetch: {_e}")
-                with st.spinner("Filling prediction outcomes…"):
-                    try:
-                        from datetime import date as _date
-                        from src.analytics.memory_engine import update_outcomes
-                        _filled = update_outcomes(_date.today())
-                        if _filled:
-                            st.toast(f"✅ Filled outcomes for {_filled} prediction(s)")
-                    except Exception as _e:
-                        st.warning(f"Outcome fill: {_e}")
+                        st.warning(f"Daily update: {_e}")
             st.cache_data.clear()
             st.rerun()
 

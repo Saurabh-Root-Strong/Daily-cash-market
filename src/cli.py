@@ -19,7 +19,16 @@ def cmd_backfill(args) -> int:
     return 0
 
 
-def cmd_daily(_args) -> int:
+def run_daily_pipeline(write_marker: bool = True) -> int:
+    """Canonical end-of-day routine — the SINGLE code path for the daily update.
+
+    Fetch EOD data → log index predictions → fetch FII/DII cash → fill prediction
+    outcomes → record sector memory → refresh the last_updated marker. Called by BOTH
+    the 7:30 PM scheduler (cmd_daily / run_daily.bat) AND the dashboard 'Refresh Data'
+    button, so a MANUAL refresh is a complete substitute for a missed scheduled run —
+    no half-updates and no marker drift. (Refresh previously called only run_daily_job(),
+    which advanced the data but skipped prediction logging and left the marker stale.)
+    """
     from datetime import date
     from src.ingestion.orchestrator import run_daily_job
     run_daily_job()
@@ -91,7 +100,24 @@ def cmd_daily(_args) -> int:
             print(f"Sector memory: filled forward outcomes for {sec_filled} records")
     except Exception as exc:
         print(f"Sector memory update failed (non-fatal): {exc}")
+
+    # Refresh the last_updated marker from the DB's latest trade date — single source of
+    # truth, written by EVERY caller (scheduler and dashboard) so it can never go stale.
+    if write_marker and trade_dt is not None:
+        try:
+            from pathlib import Path
+            marker = Path(__file__).resolve().parents[1] / "logs" / "last_updated.txt"
+            marker.parent.mkdir(exist_ok=True)
+            marker.write_text(str(trade_dt)[:10])
+        except Exception as exc:
+            print(f"last_updated marker write failed (non-fatal): {exc}")
     return 0
+
+
+def cmd_daily(_args) -> int:
+    """Scheduled daily entrypoint (run_daily.bat) — delegates to the canonical pipeline
+    that the dashboard Refresh button also uses, so both paths stay identical."""
+    return run_daily_pipeline()
 
 
 def cmd_seed_sectors(_args) -> int:
