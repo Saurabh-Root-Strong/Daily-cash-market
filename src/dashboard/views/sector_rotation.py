@@ -522,7 +522,10 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                  defense_mode: bool = False,
                  score_col: str = "accum_score",
                  fno_filter: "tuple | None" = None,
-                 fno_match_all: bool = True) -> None:
+                 fno_match_all: bool = True,
+                 fno_only: bool = False,
+                 fno_oi_op: "str | None" = None,
+                 fno_oi_threshold: float = 0.0) -> None:
     meta       = _SIGNAL_META.get(row["signal"], {})
     color      = meta.get("color", "#888")
     is_avoid   = row["signal"] in _AVOID_SIGNAL_SET
@@ -885,16 +888,21 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                 )
 
             # ── F&O overlay: per-expiry futures OI + options PCR ────────────
+            # Label cols carry the display string (e.g. "🟢 LB +39%"); the *_oi_chg_pct
+            # cols carry the raw signed OI-change % that feeds the strength gate below.
             _FNO_EXP_COLS = ["near_fut_label", "next_fut_label", "far_fut_label",
                              "near_opt_label", "next_opt_label", "far_opt_label"]
+            _FNO_NUM_COLS = ["near_oi_chg_pct", "next_oi_chg_pct", "far_oi_chg_pct"]
+            _fno_symbols: set[str] = set()   # F&O underlying universe for this date
             try:
                 _fno_exp = cached_fno_expiry_breakdown(selected_date)
                 if not _fno_exp.empty:
-                    exp_cols = [c for c in ["symbol"] + _FNO_EXP_COLS
+                    _fno_symbols = set(_fno_exp["symbol"])
+                    exp_cols = [c for c in ["symbol"] + _FNO_EXP_COLS + _FNO_NUM_COLS
                             if c in _fno_exp.columns]
                     stocks = stocks.merge(_fno_exp[exp_cols], on="symbol", how="left")
                 else:
-                    for c in _FNO_EXP_COLS:
+                    for c in _FNO_EXP_COLS + _FNO_NUM_COLS:
                         stocks[c] = None
             except Exception as _e:
                 import logging as _log
@@ -902,7 +910,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                     "F&O expiry breakdown failed for %s: %s: %s",
                     selected_date, type(_e).__name__, _e,
                 )
-                for c in _FNO_EXP_COLS:
+                for c in _FNO_EXP_COLS + _FNO_NUM_COLS:
                     stocks[c] = None
 
             if invest_signal:
@@ -1014,12 +1022,25 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                     (shown["ltp"] <= max_price)
                 ]
 
+            # ── F&O universe filter — keep only NSE F&O underlyings ─────────────
+            # _fno_symbols is the set of stocks with futures/options for this date.
+            # When "F&O stocks only" is selected this drops every cash-only name.
+            _fno_only_active = False
+            if fno_only and "symbol" in shown.columns:
+                shown = shown[shown["symbol"].isin(_fno_symbols)]
+                _fno_only_active = True
+
             # ── F&O positioning filter — PER-EXPIRY (OR within; Any/All across) ──
             # fno_filter = {expiry: [(instrument, [tokens], short), ...]}. Within an
             # expiry ANY selected signal matches (OR). Across expiries the combine is
             # controlled by fno_match_all: True = AND (must hold in every expiry),
             # False = OR (hold in at least one). e.g. {Near:[LB], Next:[SB]} →
             # match_all=True: Near=LB AND Next=SB; match_all=False: Near=LB OR Next=SB.
+            # OI-strength gate: |OI Δ%| ≥/≤ threshold on the FUTURES leg only. The
+            # number in a futures label is the day-over-day OI change % (same
+            # contract); we compare its MAGNITUDE so Short Covering / Long
+            # Unwinding (OI falling, value negative) are gated on absolute size.
+            _oi_gate_on = bool(fno_oi_op) and fno_oi_threshold > 0
             _fno_part = None
             if fno_filter and not shown.empty:
                 import functools as _ft, operator as _op
@@ -1033,8 +1054,19 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                         if _col in shown.columns:
                             # .astype(bool): apply() on an empty arrow-str column yields
                             # an empty STR Series; OR/AND on str raises — force boolean.
-                            _sig_masks.append(shown[_col].fillna("").apply(
-                                lambda s, ts=_toks: any(t in str(s) for t in ts)).astype(bool))
+                            _m = shown[_col].fillna("").apply(
+                                lambda s, ts=_toks: any(t in str(s) for t in ts)).astype(bool)
+                            # Strength gate only constrains FUTURES signals (the OI%
+                            # number lives on the futures label). Options buckets are
+                            # categorical and pass through unchanged.
+                            if _instr == "Futures" and _oi_gate_on:
+                                _numcol = f"{_e}_oi_chg_pct"
+                                if _numcol in shown.columns:
+                                    _mag = pd.to_numeric(shown[_numcol], errors="coerce").abs()
+                                    _g = (_mag >= fno_oi_threshold if fno_oi_op == "ge"
+                                          else _mag <= fno_oi_threshold)
+                                    _m = _m & _g.fillna(False)   # NaN OI% never passes the gate
+                            _sig_masks.append(_m)
                     if _sig_masks:
                         _exp_masks.append(_ft.reduce(_op.or_, _sig_masks))   # OR within expiry
                         _tags.append(f"{_exp.split()[0]}={'/'.join(sorted({sh for _, _, sh in _sigs}))}")
@@ -1042,11 +1074,15 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                     _join = _op.and_ if fno_match_all else _op.or_
                     shown = shown[_ft.reduce(_join, _exp_masks)]             # Any/All across expiries
                     _sep = " & " if fno_match_all else " | "
-                    _fno_part = "F&O " + _sep.join(_tags)
+                    _oi_tag = (f" (OI {'≥' if fno_oi_op == 'ge' else '≤'} {fno_oi_threshold:.0f}%)"
+                               if _oi_gate_on else "")
+                    _fno_part = "F&O " + _sep.join(_tags) + _oi_tag
 
             n_hidden = len(stocks) - len(shown)
-            if n_hidden or _fno_part:
+            if n_hidden or _fno_part or _fno_only_active:
                 filter_parts = [f"Wtd Deliv % > {deliv_threshold:.0f}%"]
+                if _fno_only_active:
+                    filter_parts.append("F&O stocks only")
                 if deliv_vs_100d_pct > 0:
                     filter_parts.append(f"7D ≥ {deliv_vs_100d_pct:.0f}%+ above own 100D avg")
                 if min_price > 0 and max_price > 0:
@@ -1102,9 +1138,13 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                              "🔴 SB = Short Buildup (OI↑ + price↓ — fresh shorts)\n"
                              "🔵 SC = Short Covering (OI↓ + price↑)\n"
                              "🟠 LU = Long Unwinding (OI↓ + price↓)\n"
-                             "⚪ = Neutral (small move)\n"
-                             "⟳ rolling = expiry rollover in progress — OI unreliable, see Next month\n"
-                             "Number = OI change % vs yesterday (SAME contract, not rank-matched)"),
+                             "⚪ = Neutral (small move: |price|<0.1% or |OI Δ|<0.5%)\n"
+                             "⟳ rolling = expiry rollover in progress — OI unreliable, see Next month\n\n"
+                             "Number = OI change % vs yesterday, SAME contract:\n"
+                             "    (today's OI − prev-day OI) ÷ prev-day OI × 100\n"
+                             "+ve = OI rose (LB/SB build); −ve = OI fell (SC/LU unwind).\n"
+                             "Use the 'Futures OI Δ% strength gate' above to keep only "
+                             "moves of a given magnitude (e.g. |OI Δ%| ≥ 10%)."),
                     "next_fut_label": _htc(
                         "Fut Next",
                         help="FUTURES — Next-month OI signal (most informative near expiry):\n"
@@ -2524,7 +2564,20 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
     # Expiry box drives the filter; the plain (non-tagged) signal box says WHAT to
     # look for. fno_filter = {expiry: [(instrument, [tokens], short), ...]} built by
     # crossing every selected expiry with every selected signal.
-    _gcol1, _gcol2, _gcol3 = st.columns([1, 1, 2])
+    _gcol0, _gcol1, _gcol2, _gcol3 = st.columns([1, 1, 1, 2])
+    with _gcol0:
+        fno_universe = st.radio(
+            "Stock universe — filters the per-stock lists below",
+            ["All stocks", "F&O stocks only"],
+            key="rotation_stock_universe",
+            help="All stocks = every name in the sector. F&O stocks only = restrict "
+                 "the 'View stocks in …' drill-down lists to NSE F&O underlyings "
+                 "(stocks that have futures/options). Sector-level stats (top-3 "
+                 "contributors, single-stock dominance warning) always use the full "
+                 "stock set. The F&O instrument/expiry/signal filters on the right "
+                 "further narrow this universe by positioning.",
+        )
+        fno_only = fno_universe.startswith("F&O")
     with _gcol1:
         fno_instruments = st.multiselect(
             "F&O filter — instrument", ["Futures", "Options"], key="rot_fno_instr",
@@ -2563,6 +2616,38 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                  "expiry (e.g. LB/SC in Near OR Next). ALL = it must show the signal in "
                  "EVERY selected expiry simultaneously (stricter — confirmation across months).")
         fno_match_all = _mode.startswith("All")
+
+    # ── Futures OI-strength gate ──────────────────────────────────────────────
+    # The number in each futures label (e.g. "🟢 LB +39%") is the day-over-day OI
+    # change % on the SAME contract:  (today_OI − prev_OI) / prev_OI × 100.
+    # This gate keeps only STRONG positioning moves (≥ X%) or nascent ones (≤ X%),
+    # compared on |OI Δ%| so SC/LU (OI falling, shown negative) are judged on size.
+    _fut_in_filter = "Futures" in fno_instruments
+    _scol1, _scol2, _scol3 = st.columns([1, 1, 2])
+    with _scol1:
+        _oi_mode = st.radio(
+            "Futures OI Δ% strength gate",
+            ["Off", "≥ strong", "≤ weak"],
+            horizontal=True, key="rot_fno_oi_mode", disabled=not _fut_in_filter,
+            help="Gate the selected FUTURES signals (LB/SB/SC/LU) by the size of the "
+                 "day-over-day OI change %.\n\n"
+                 "• ≥ strong — keep only big positioning moves (high conviction)\n"
+                 "• ≤ weak — isolate early / nascent moves\n\n"
+                 "Compared on MAGNITUDE |OI Δ%|, so Short Covering / Long Unwinding "
+                 "(OI falling, shown negative) are judged on absolute size. Applies "
+                 "per expiry; options buckets are unaffected.")
+    with _scol2:
+        _oi_thr = float(st.number_input(
+            "OI Δ% threshold", min_value=0.0, max_value=500.0, value=10.0, step=5.0,
+            key="rot_fno_oi_thr",
+            disabled=(not _fut_in_filter or _oi_mode == "Off"),
+            help="The OI change % cutoff. Example: 10 with '≥ strong' keeps only "
+                 "futures signals where open interest moved at least 10% vs the "
+                 "previous trading day (same contract)."))
+    fno_oi_op = (None if (not _fut_in_filter or _oi_mode == "Off")
+                 else ("ge" if _oi_mode.startswith("≥") else "le"))
+    fno_oi_threshold = _oi_thr
+
     fno_filter = fno_filter or None
 
     if _n_thin:
@@ -2598,7 +2683,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                              min_price=min_price, max_price=max_price,
                              regime_label=r_label, regime=regime, defense_mode=_defense_mode,
                              score_col=_rank_col, fno_filter=fno_filter,
-                             fno_match_all=fno_match_all)
+                             fno_match_all=fno_match_all, fno_only=fno_only,
+                             fno_oi_op=fno_oi_op, fno_oi_threshold=fno_oi_threshold)
 
     with col_avoid:
         st.markdown(f"### {regime.get('avoid_label', '🔴 SECTORS TO AVOID / EXIT')}")
@@ -2619,7 +2705,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                              min_price=min_price, max_price=max_price,
                              regime_label=r_label, regime=regime, defense_mode=_defense_mode,
                              score_col=_rank_col, fno_filter=fno_filter,
-                             fno_match_all=fno_match_all)
+                             fno_match_all=fno_match_all, fno_only=fno_only,
+                             fno_oi_op=fno_oi_op, fno_oi_threshold=fno_oi_threshold)
 
         # Tier 2 — relative laggards: weakest sectors by score, excluding any
         # already shown in the invest / caution / distribution lists. The absolute
@@ -2644,7 +2731,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                              min_price=min_price, max_price=max_price,
                              regime_label=r_label, regime=regime, defense_mode=_defense_mode,
                              score_col=_rank_col, fno_filter=fno_filter,
-                             fno_match_all=fno_match_all)
+                             fno_match_all=fno_match_all, fno_only=fno_only,
+                             fno_oi_op=fno_oi_op, fno_oi_threshold=fno_oi_threshold)
 
     if not caution.empty:
         st.markdown("---")
@@ -2659,7 +2747,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                          min_price=min_price, max_price=max_price,
                          regime_label=r_label, regime=regime, defense_mode=_defense_mode,
                          score_col=_rank_col, fno_filter=fno_filter,
-                         fno_match_all=fno_match_all)
+                         fno_match_all=fno_match_all, fno_only=fno_only,
+                         fno_oi_op=fno_oi_op, fno_oi_threshold=fno_oi_threshold)
 
     st.markdown("---")
 
