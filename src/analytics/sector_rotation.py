@@ -335,6 +335,42 @@ def get_sector_rotation(
         _tradable["sector"], _tradable["z_score"].rank(pct=True),
     ))
 
+    # ── Bottom-up ROBUST delivery signals (the coherent, mega-cap-independent,
+    # %-based, multi-day replacement for the 1-day turnover-weighted ₹-value z).
+    # Validated over 371d: coherence with own constituents ρ −0.05 → +0.49,
+    # contradictions 26% → 10%, forward IC no worse. See sector_signal_v2.py.
+    # Sectors absent here (thin / no delivery history) fall back to the legacy
+    # z-percentile + dv5d gates below, so nothing silently drops out.
+    robz_pct_map: dict = {}
+    robz_raw_map: dict = {}
+    breadth_accum_map: dict = {}
+    ratio5_rob_map: dict = {}
+    slope_rob_map: dict = {}
+    rob_comp_pct_map: dict = {}   # cross-sectional rank of the robust delivery composite
+    try:
+        from src.analytics.sector_signal_v2 import get_robust_delivery_signals
+        _rob = get_robust_delivery_signals(as_of_date, min_turnover_lacs)
+        if not _rob.empty:
+            _rob = _rob[~_rob["sector"].isin(("ETF", "Others"))]
+            robz_pct_map      = dict(zip(_rob["sector"], _rob["robz"].rank(pct=True)))
+            robz_raw_map      = dict(zip(_rob["sector"], _rob["robz"]))
+            breadth_accum_map = dict(zip(_rob["sector"], _rob["breadth_accum"]))
+            ratio5_rob_map    = dict(zip(_rob["sector"], _rob["deliv_ratio5"]))
+            slope_rob_map     = dict(zip(_rob["sector"], _rob["deliv_slope"]))
+            # Composite delivery strength = robust abnormality (½) + multi-day
+            # breadth (3⁄10) + sustained-flow ratio (⅕), each cross-sectionally
+            # ranked so the gate ADAPTS to the day's overall level (the same
+            # regime-proofing rationale as the legacy z-percentile), then ranked
+            # once more to a clean 0..1 discriminator. Absolute floors (ratio5,
+            # breadth) are applied ALONGSIDE this in the gate so a top-ranked
+            # sector in a broadly-shrinking week is not over-promoted.
+            _comp = (0.5 * _rob["robz"].rank(pct=True)
+                     + 0.3 * _rob["breadth_accum"].rank(pct=True)
+                     + 0.2 * _rob["deliv_ratio5"].rank(pct=True))
+            rob_comp_pct_map = dict(zip(_rob["sector"], _comp.rank(pct=True)))
+    except Exception as exc:
+        log.warning("Robust delivery signals failed (non-fatal, using legacy): %s", exc)
+
     # ── Build one record per sector ────────────────────────────────────────────
     records = []
     for _, row in perf.iterrows():
@@ -410,24 +446,46 @@ def get_sector_rotation(
         today_wtd_pct = float(row.get("today_wtd_deliv_pct",   float("nan")))
         avg_wtd_pct   = float(row.get("avg_wtd_deliv_pct_100d", float("nan")))
 
-        # Gates use the cross-sectional z-PERCENTILE, not raw z (see note above).
-        #   z_pct >= 0.50  ≈ old "z >= 1.0"   (above-median delivery abnormality)
-        #   z_pct >= 0.90  ≈ old "z >= 2.0"   (extreme — top 10% of sectors today)
-        #   z_pct <= 0.25  ≈ old "z <= -0.5"  (bottom quartile — now actually fires)
-        d_surge = z_pct >= 0.50
-        d_weak  = z_pct <= 0.25
+        # ── Robust bottom-up gate inputs (with legacy fallback) ───────────────
+        # These replace the 1-day turnover-weighted ₹-value z with %-based,
+        # median/MAD, multi-day, equal-weight signals aggregated FROM the stocks,
+        # so the sector verdict agrees with its own constituents (validated).
+        # A sector missing from the robust map (thin / no history) transparently
+        # falls back to the legacy z-percentile + dv5d anchors.
+        _has_rob   = sector in breadth_accum_map
+        rz_pct     = float(robz_pct_map.get(sector, z_pct))          # robust delivery rank
+        r_breadth  = float(breadth_accum_map.get(sector, breadth if not pd.isna(breadth) else 0.5))
+        r_ratio5   = float(ratio5_rob_map.get(sector, dv5d))         # robust sustained-flow ratio
+        eff_dv5d   = r_ratio5                                        # sustained-flow anchor (robust)
+
+        # Effective gates: robust composite RANK (adaptive) + absolute floors when
+        # available, legacy z-percentile + dv5d otherwise.
+        #   comp_pct — cross-sectional rank of the robust delivery composite (0..1)
+        #   floors   — sustained-flow ratio5 and multi-day breadth, so a top-ranked
+        #              sector in a broadly-shrinking week is NOT promoted to a buy.
+        comp_pct = float(rob_comp_pct_map.get(sector, 0.5))
+        if _has_rob:
+            d_surge = comp_pct >= 0.55                         # top ~45% delivery strength
+            d_surge_mid = comp_pct >= 0.55 and r_ratio5 >= 1.00
+            d_surge_confirmed = (comp_pct >= 0.70 and r_ratio5 >= 1.02 and r_breadth >= 0.40)
+            d_weak = comp_pct <= 0.25
+            d_weak_confirmed = (comp_pct <= 0.25 and r_ratio5 <= 0.98 and r_breadth <= 0.35)
+        else:
+            d_surge = z_pct >= 0.50
+            d_surge_mid = d_surge
+            d_weak  = z_pct <= 0.25
+            d_surge_confirmed = (d_surge and dv5d >= 1.15) or (z_pct >= 0.90 and dv5d >= 0.9)
+            d_weak_confirmed  = d_weak and dv5d <= 0.90
+
         p_up    = (not pd.isna(p1w)) and p1w > 1.0
         p_down  = (not pd.isna(p1w)) and p1w < -1.0
 
+        # pct_surge (delivery % vs 100D avg) still separates speculative turnover
+        # spikes from genuine conviction — unchanged, %-based already.
         if not pd.isna(today_wtd_pct) and not pd.isna(avg_wtd_pct) and avg_wtd_pct > 0:
             pct_surge = today_wtd_pct >= avg_wtd_pct * 0.85
         else:
             pct_surge = True
-
-        # Two-layer gate: percentile z (relative strength) AND dv5d (absolute,
-        # well-behaved ratio — the genuine sustained-flow anchor, unchanged).
-        d_surge_confirmed = (d_surge and dv5d >= 1.15) or (z_pct >= 0.90 and dv5d >= 0.9)
-        d_weak_confirmed  = d_weak and dv5d <= 0.90
 
         if d_surge_confirmed and pct_surge:
             if p_down:
@@ -447,29 +505,43 @@ def get_sector_rotation(
             drop_pct = (avg_wtd_pct - today_wtd_pct) / avg_wtd_pct * 100 if avg_wtd_pct > 0 else 0
             signal = "📊 Volume Spike"
             action = f"CAUTION — Delivery% ({pct_str}) is {drop_pct:.0f}% below 100D avg ({avg_str}); turnover surged but conviction fell; speculative, not institutional accumulation"
+        elif d_surge_mid and pct_surge:
+            # Mid-tier robust delivery strength (top-half but not top-decile) with
+            # sustained flow at/above norm — genuine but early accumulation.
+            if p_down:
+                signal = "🔥 Secret Accumulation"
+                action = "STRONG BUY — Institutions loading while retail panics"
+            else:
+                signal = "👀 Early Accumulation"
+                action = "WATCH — Institutional flow building, not yet top-conviction"
         elif p_up and d_weak_confirmed:
             signal = "⚠️ Distribution Trap"
             action = "EXIT / AVOID — Institutions selling into retail rally"
         elif p_down and d_weak_confirmed:
             signal = "❌ Active Selling"
             action = "AVOID — Broad institutional exit, no floor visible yet"
-        elif d_weak and dv5d < 1.05:
-            # Relatively weakest (bottom-quartile z-rank) AND recent flow not above
-            # its own norm. The dv5d<1.05 guard prevents flagging a sector that
-            # happens to rank low on z but still has genuinely strong sustained
-            # delivery — mild caution only, not a reversal signal.
+        elif d_weak and eff_dv5d < 0.95:
+            # Relatively weakest (bottom-tercile robust rank + low breadth) AND
+            # recent 5-day flow genuinely BELOW its own norm. Tightened from <1.05
+            # to <0.95 so a sector whose sustained flow is merely AT norm is not
+            # mislabelled "fading" — mild caution only, not a reversal signal.
             signal = "📉 Weakening"
             action = "REDUCE — Relatively weakest flow, conviction fading"
         else:
             signal = "⚖️ Neutral"
             action = "HOLD — Flow within normal range, no clear directional bias"
 
-        # ── Investment horizon ─────────────────────────────────────────────────
-        # Short term: top-decile delivery abnormality (z-percentile) + breadth
-        short_term = z_pct >= 0.90 and (not pd.isna(breadth)) and breadth >= 0.5
-        # Long term: trend slope positive + DV Ratio above average + broad participation
-        long_term  = (trend_slope > 0.05 and dv_ratio > 1.1
-                      and (not pd.isna(breadth)) and breadth >= 0.4)
+        # ── Investment horizon (sustained-conviction strength ladder) ───────────
+        # NOTE: these tags are a conviction-STRENGTH heuristic, not a per-horizon
+        # forward forecast. They are gated on the SUSTAINED-FLOW anchor dv5d (the
+        # 5-day avg delivery ratio — a validated score component) + today's dv_ratio
+        # + breadth. The old gate used trend_slope, which was measured to have ~0
+        # information coefficient at every horizon (see the score note below) and so
+        # could VETO a label on a dead factor; it is no longer used here.
+        # Short term: top-decile robust delivery abnormality + broad participation
+        short_term = rz_pct >= 0.90 and r_breadth >= 0.5
+        # Long term: robust sustained flow well above its own norm + broad breadth
+        long_term  = (eff_dv5d >= 1.3 and r_breadth >= 0.4)
 
         if short_term and long_term:
             horizon = "Short + Long Term"
@@ -485,24 +557,22 @@ def get_sector_rotation(
         cov = []
 
         if signal in _buy_signals:
-            # Swing (3–15 days): top-decile delivery abnormality + broad participation
-            if z_pct >= 0.90 and (not pd.isna(breadth)) and breadth >= 0.5:
+            # Swing (3–15 days): top-decile robust abnormality + broad participation
+            if rz_pct >= 0.90 and r_breadth >= 0.5:
                 cov.append("Swing (3–15 days)")
-            # Positional (1–2 months): DV Ratio elevated + positive slope + breadth
-            if (dv_ratio > 1.2 and trend_slope > 0.03
-                    and (not pd.isna(breadth)) and breadth >= 0.4):
+            # Positional (1–2 months): robust sustained flow elevated + breadth
+            if eff_dv5d >= 1.5 and r_breadth >= 0.5:
                 cov.append("Positional (4–8 weeks)")
-            # Mid Term (3–4 months): sustained high slope + strong DV Ratio + deep breadth
-            if (trend_slope > 0.12 and dv_ratio > 1.3
-                    and (not pd.isna(breadth)) and breadth >= 0.5):
+            # Mid Term (3–4 months): strongly sustained robust flow + deep breadth
+            if eff_dv5d >= 1.8 and r_breadth >= 0.6:
                 cov.append("Mid Term (3–4 months)")
         else:
-            # Avoid signals — how long the weakness may persist
-            if z_pct <= 0.10 and (not pd.isna(breadth)) and breadth <= 0.3:
+            # Avoid signals — how long the weakness may persist (sustained-WEAKNESS ladder)
+            if rz_pct <= 0.10 and r_breadth <= 0.3:
                 cov.append("Swing (3–15 days)")
-            if dv_ratio < 0.8 and trend_slope < -0.03:
+            if eff_dv5d <= 0.90 and r_breadth <= 0.35:
                 cov.append("Positional (4–8 weeks)")
-            if trend_slope < -0.12 and dv_ratio < 0.7:
+            if eff_dv5d <= 0.80 and r_breadth <= 0.25:
                 cov.append("Mid Term (3–4 months)")
 
         coverage = " + ".join(cov) if cov else "—"
@@ -528,6 +598,13 @@ def get_sector_rotation(
             "today_wtd_deliv_pct":  round(today_wtd_pct, 1) if not pd.isna(today_wtd_pct) else None,
             "avg_wtd_deliv_pct_100d": round(avg_wtd_pct, 1) if not pd.isna(avg_wtd_pct)  else None,
             "delivery_accel":       delivery_accel,
+            # ── Robust bottom-up delivery signals (analysis + display) ──────────
+            "robz":                 round(float(robz_raw_map.get(sector, float("nan"))), 3)
+                                        if sector in robz_raw_map else None,
+            "breadth_accum":        round(r_breadth, 3),
+            "deliv_ratio5":         round(r_ratio5, 3),
+            "deliv_slope":          round(float(slope_rob_map.get(sector, float("nan"))), 4)
+                                        if sector in slope_rob_map else None,
             "_dv5d":                dv5d,
             "_dv":                  dv_ratio,
             "_z":                   z_score,
@@ -536,6 +613,11 @@ def get_sector_rotation(
             "_slope":               trend_slope,
             "_accel":               delivery_accel,
             "_p1m":                 p1m      if not pd.isna(p1m)      else 0.0,
+            # Robust scoring inputs (coalesced to legacy when robust absent).
+            "_r5":                  float(r_ratio5),
+            "_rbr":                 float(r_breadth),
+            "_rz":                  float(robz_raw_map.get(sector, z_score)),
+            "_rsl":                 float(slope_rob_map.get(sector, trend_slope)),
         })
 
     result = pd.DataFrame(records)
@@ -585,23 +667,28 @@ def get_sector_rotation(
     # labels. 0.45 captures most of the measured lift (~+40% IC) while keeping
     # delivery + breadth as the majority. RS falls back to 1W momentum if index
     # data is unavailable.
+    # Delivery inputs are now the ROBUST BOTTOM-UP factors (_r5 sustained-flow
+    # ratio, _rbr multi-day breadth, _rz robust %-based abnormality, _rsl slope),
+    # which agree with each sector's own constituents (validated ρ +0.49 vs −0.05
+    # for the legacy 1-day ₹-value z) at no cost to forward IC. RS/2W momentum
+    # stays the top weight — the measured alpha.
     rs_col = result["rs_2w"] if result["rs_2w"].notna().any() else result["_pm"]
     result["accum_score"] = (
         _rank01(rs_col)            * 45 +
-        _rank01(result["_dv5d"])   * 20 +
-        _rank01(result["_dv"])     * 10 +
-        _rank01(result["_br"])     * 15 +
-        _rank01(result["_z"])      * 10
+        _rank01(result["_r5"])     * 20 +   # robust sustained 5d/100d delivery ratio
+        _rank01(result["_rbr"])    * 15 +   # multi-day accumulation breadth
+        _rank01(result["_rz"])     * 10 +   # robust %-based delivery abnormality
+        _rank01(result["_rsl"])    * 10     # delivery-% slope (direction)
     ).round(1)
 
     # ── ACCUMULATION score (SIDEWAYS/range) — quiet smart-money delivery, NOT
     # momentum. In a range, sustained + accelerating delivery with broad breadth
     # leads the eventual breakout; RS is only a minor tilt.
     result["accumulation_score"] = (
-        _rank01(result["_dv5d"])   * 30 +   # sustained 5-day delivery
-        _rank01(result["_z"])      * 20 +   # cross-sectional delivery abnormality
+        _rank01(result["_r5"])     * 30 +   # robust sustained delivery flow
+        _rank01(result["_rz"])     * 20 +   # robust delivery abnormality
         _rank01(result["_accel"])  * 20 +   # multi-timeframe delivery acceleration
-        _rank01(result["_br"])     * 15 +   # broad participation
+        _rank01(result["_rbr"])    * 15 +   # multi-day accumulation breadth
         _rank01(rs_col)            * 15     # relative strength (minor)
     ).round(1)
 
@@ -609,11 +696,11 @@ def get_sector_rotation(
     # weakness (the Secret-Accumulation thesis at an index bottom): institutions
     # taking delivery while price is still beaten down → highest risk/reward entry.
     result["reversal_score"] = (
-        _rank01(result["_dv5d"])   * 30 +   # delivery strength despite weakness
-        _rank01(result["_z"])      * 20 +   # delivery abnormality
+        _rank01(result["_r5"])     * 30 +   # robust delivery strength despite weakness
+        _rank01(result["_rz"])     * 20 +   # robust delivery abnormality
         _rank01(result["_accel"])  * 20 +   # institutions ramping
         _rank01(-result["_p1m"])   * 15 +   # oversold (more down = higher)
-        _rank01(result["_br"])     * 15     # breadth
+        _rank01(result["_rbr"])    * 15     # multi-day accumulation breadth
     ).round(1)
 
     result = result.drop(columns=[c for c in result.columns if c.startswith("_")])

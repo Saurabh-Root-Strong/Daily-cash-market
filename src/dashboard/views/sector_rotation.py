@@ -640,7 +640,11 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
     dv   = row.get("dv_ratio")
     dv5d = row.get("dv_ratio_5d")
     z    = row.get("z_score")
-    br   = row.get("breadth")
+    # Prefer the multi-day accumulation breadth (fraction of constituents in
+    # genuine multi-day accumulation — the metric the verdict is now gated on).
+    # Falls back to the legacy 1-day value breadth for sectors without robust data.
+    _ba  = row.get("breadth_accum")
+    br   = _ba if (_ba is not None and not (isinstance(_ba, float) and pd.isna(_ba))) else row.get("breadth")
     p1w  = row.get("price_1w")
     dv1w = row.get("deliv_val_1w_cr")
     action_text = str(row.get("action", ""))
@@ -808,7 +812,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
         f"<span>DV Today: <b>{dv_str}</b></span>"
         f"<span>5D Avg: <b style='color:{dv5d_color}'>{dv5d_str}</b></span>"
         f"<span>Z-Rank: <b style='color:{z_color}'>{z_str}</b></span>"
-        f"<span>Breadth: <b>{br_str}</b></span>"
+        f"<span>Accum Breadth: <b>{br_str}</b></span>"
         f"<span>1W Price: <b style='color:{p1w_color}'>{p1w_str}</b></span>"
         f"</div>"
         f"<div style='margin-top:4px;font-size:11px;color:rgba(255,255,255,0.5)'>"
