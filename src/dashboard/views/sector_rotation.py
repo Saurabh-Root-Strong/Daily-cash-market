@@ -35,7 +35,9 @@ from src.dashboard.cache.queries import (
     cached_fno_expiry_breakdown,
     cached_market_regime,
     cached_sector_memory_context,
+    cached_price_action,
 )
+from src.analytics.price_action import PA_CLASSES
 from src.dashboard.constants import NEGATIVE_COLOR, POSITIVE_COLOR, PLOT_BG, PAPER_BG, GRID_COLOR
 from src.dashboard.components.charts import hex_to_rgba as _hex_to_rgba  # deduped helper
 
@@ -525,7 +527,9 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                  fno_match_all: bool = True,
                  fno_only: bool = False,
                  fno_oi_op: "str | None" = None,
-                 fno_oi_threshold: float = 0.0) -> None:
+                 fno_oi_threshold: float = 0.0,
+                 price_action: "pd.DataFrame | None" = None,
+                 pa_filter: "tuple | None" = None) -> None:
     meta       = _SIGNAL_META.get(row["signal"], {})
     color      = meta.get("color", "#888")
     is_avoid   = row["signal"] in _AVOID_SIGNAL_SET
@@ -827,6 +831,15 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
         if stocks.empty:
             st.caption("No stock data for this period.")
         else:
+            # ── Price-action character overlay (merge by symbol) ──────────────
+            if (price_action is not None and not price_action.empty
+                    and "symbol" in price_action.columns):
+                _pa_keep = [c for c in ["symbol", "pa_class", "pa_gappy", "pa_high_vol",
+                                        "efficiency_ratio", "avg_body_pct", "long_wick_freq",
+                                        "gap_freq", "atr_pct"]
+                            if c in price_action.columns]
+                stocks = stocks.merge(price_action[_pa_keep], on="symbol", how="left")
+
             valid_deliv = stocks["wtd_deliv_per"].dropna()
             hi_thresh = float(valid_deliv.quantile(0.67)) if len(valid_deliv) >= 3 else float(valid_deliv.max())
             lo_thresh = float(valid_deliv.quantile(0.33)) if len(valid_deliv) >= 3 else float(valid_deliv.min())
@@ -984,6 +997,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                 )
 
             display_cols = ["symbol", "company_name", "industry", "ltp", "conviction",
+                            "pa_class", "efficiency_ratio",
                             "near_fut_label", "next_fut_label", "far_fut_label",
                             "near_opt_label", "next_opt_label", "far_opt_label",
                             "wtd_deliv_per", "deliv_vs_100d_pct", "avg_deliv_per_100d",
@@ -1025,6 +1039,19 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                     (shown["ltp"] > 0) &
                     (shown["ltp"] <= max_price)
                 ]
+
+            # ── Price-action character filter ────────────────────────────────
+            # pa_filter = (selected_classes, hide_gappy, hide_high_vol). Stocks
+            # without a computed character (too little history) are dropped only
+            # when a class filter is active — they cannot be verified.
+            if pa_filter and "pa_class" in shown.columns:
+                _pa_cls, _pa_hg, _pa_hv = pa_filter
+                if _pa_cls:
+                    shown = shown[shown["pa_class"].isin(_pa_cls)]
+                if _pa_hg and "pa_gappy" in shown.columns:
+                    shown = shown[~shown["pa_gappy"].fillna(False).astype(bool)]
+                if _pa_hv and "pa_high_vol" in shown.columns:
+                    shown = shown[~shown["pa_high_vol"].fillna(False).astype(bool)]
 
             # ── F&O universe filter — keep only NSE F&O underlyings ─────────────
             # _fno_symbols is the set of stocks with futures/options for this date.
@@ -1083,8 +1110,18 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                     _fno_part = "F&O " + _sep.join(_tags) + _oi_tag
 
             n_hidden = len(stocks) - len(shown)
-            if n_hidden or _fno_part or _fno_only_active:
+            _pa_active = pa_filter and (pa_filter[0] or pa_filter[1] or pa_filter[2])
+            if n_hidden or _fno_part or _fno_only_active or _pa_active:
                 filter_parts = [f"Wtd Deliv % > {deliv_threshold:.0f}%"]
+                if _pa_active:
+                    _pp = []
+                    if pa_filter[0]:
+                        _pp.append(" / ".join(pa_filter[0]))
+                    if pa_filter[1]:
+                        _pp.append("no gappy")
+                    if pa_filter[2]:
+                        _pp.append("no high-vol")
+                    filter_parts.append("Price action: " + ", ".join(_pp))
                 if _fno_only_active:
                     filter_parts.append("F&O stocks only")
                 if deliv_vs_100d_pct > 0:
@@ -1131,6 +1168,21 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                              "📉 Fading    = price rising but delivery not below avg\n"
                              "⚪ Neutral   = no clear signal\n\n"
                              "Falls back to sector-relative percentile for stocks with no 100D history"),
+                    "pa_class":      _htc(
+                        "Price Action", width="small",
+                        help="60-day price-action character — trend efficiency (net move ÷ path "
+                             "length) × bar conviction (body vs wick):\n"
+                             "📈 Clean Trend   = high efficiency, decisive bodies, contained vol\n"
+                             "🌊 Volatile Trend = trends but wide / whippy path (wider stops)\n"
+                             "🔀 Choppy / Whipsaw = big bars, no net progress (stop-hunt RISK)\n"
+                             "😴 Quiet Range   = small bars, coiling (await a breakout)\n\n"
+                             "Filter by character with the 'Price Action character' control above."),
+                    "efficiency_ratio": _hnc(
+                        "Trend Eff", format="%.2f",
+                        help="Kaufman Efficiency Ratio over 60 days = |net price change| ÷ sum of "
+                             "|daily changes|. 1.0 = perfectly clean one-way trend; ~0 = pure "
+                             "chop / range. The single best trend-vs-chop discriminator "
+                             "(candle body/wick shape is near-uncorrelated with it)."),
                     # ── Per-expiry Futures columns (Near / Next / Far) ─────────
                     # Format: "🟢 LB +38%"  /  "🔴 SB -12%"  /  "⚪ +1%"  /  "⟳ rolling"
                     # On expiry day: Near shows "⟳ rolling" (rollover noise),
@@ -2654,6 +2706,49 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
 
     fno_filter = fno_filter or None
 
+    # ── Price-Action character filter ─────────────────────────────────────────
+    # Per-stock candle-anatomy + trend-efficiency classifier over the last 60
+    # trading days. Trend efficiency (Kaufman ER) and candle shape are near-
+    # INDEPENDENT in this market, so this is an axis the delivery/RS signals do
+    # NOT capture: it tells you whether a name is a clean directional trend, a
+    # whippy trend, a big-bar whipsaw (stop-hunt risk) or a quiet coil.
+    _pcol1, _pcol2, _pcol3 = st.columns([2, 1, 1])
+    with _pcol1:
+        pa_classes = st.multiselect(
+            "Price Action character — filters the per-stock lists below",
+            list(PA_CLASSES), default=[], key="rotation_stock_pa_class",
+            help=(
+                "Keep only stocks with the chosen 60-day price-action character in the "
+                "drill-down lists. Two independent axes — trend efficiency (net move ÷ "
+                "path length) × bar conviction (body vs wick):\n\n"
+                "• 📈 Clean Trend — high efficiency, decisive bodies, contained vol → "
+                "the most tradable directional names\n"
+                "• 🌊 Volatile Trend — trends but with a wide/whippy path → wider stops\n"
+                "• 🔀 Choppy / Whipsaw — big bars, no net progress → stop-hunt RISK\n"
+                "• 😴 Quiet Range — small bars, coiling → await a breakout\n\n"
+                "Empty = no filter."
+            ),
+        )
+    with _pcol2:
+        pa_hide_gappy = st.checkbox(
+            "⚡ Hide gappy", value=False, key="rotation_stock_pa_gappy",
+            help="Drop stocks that gap (open >1% from prior close) on ≥35% of days — "
+                 "high overnight / event risk.",
+        )
+    with _pcol3:
+        pa_hide_hivol = st.checkbox(
+            "🔥 Hide high-vol", value=False, key="rotation_stock_pa_hivol",
+            help="Drop stocks whose average daily range is in the top quartile "
+                 "(ATR% ≥ 4.5) — outsized intraday swings.",
+        )
+    try:
+        _pa_df = cached_price_action(selected_date, 60, min_turnover)
+    except Exception as _pe:
+        import logging as _log
+        _log.getLogger(__name__).warning("price_action failed (non-fatal): %s", _pe)
+        _pa_df = pd.DataFrame()
+    pa_filter = (tuple(pa_classes), bool(pa_hide_gappy), bool(pa_hide_hivol))
+
     if _n_thin:
         st.caption(
             f"🔒 {_n_thin} thin / single-name / illiquid bucket(s) excluded from the "
@@ -2688,7 +2783,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                              regime_label=r_label, regime=regime, defense_mode=_defense_mode,
                              score_col=_rank_col, fno_filter=fno_filter,
                              fno_match_all=fno_match_all, fno_only=fno_only,
-                             fno_oi_op=fno_oi_op, fno_oi_threshold=fno_oi_threshold)
+                             fno_oi_op=fno_oi_op, fno_oi_threshold=fno_oi_threshold,
+                             price_action=_pa_df, pa_filter=pa_filter)
 
     with col_avoid:
         st.markdown(f"### {regime.get('avoid_label', '🔴 SECTORS TO AVOID / EXIT')}")
@@ -2710,7 +2806,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                              regime_label=r_label, regime=regime, defense_mode=_defense_mode,
                              score_col=_rank_col, fno_filter=fno_filter,
                              fno_match_all=fno_match_all, fno_only=fno_only,
-                             fno_oi_op=fno_oi_op, fno_oi_threshold=fno_oi_threshold)
+                             fno_oi_op=fno_oi_op, fno_oi_threshold=fno_oi_threshold,
+                             price_action=_pa_df, pa_filter=pa_filter)
 
         # Tier 2 — relative laggards: weakest sectors by score, excluding any
         # already shown in the invest / caution / distribution lists. The absolute
@@ -2736,7 +2833,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                              regime_label=r_label, regime=regime, defense_mode=_defense_mode,
                              score_col=_rank_col, fno_filter=fno_filter,
                              fno_match_all=fno_match_all, fno_only=fno_only,
-                             fno_oi_op=fno_oi_op, fno_oi_threshold=fno_oi_threshold)
+                             fno_oi_op=fno_oi_op, fno_oi_threshold=fno_oi_threshold,
+                             price_action=_pa_df, pa_filter=pa_filter)
 
     if not caution.empty:
         st.markdown("---")

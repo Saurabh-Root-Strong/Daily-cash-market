@@ -93,6 +93,16 @@ def cached_sector_stocks_rotation(
 
 
 @st.cache_data(ttl=_TTL)
+def cached_price_action(
+    trade_date: date, lookback_days: int = 60, min_turnover_lacs: float = 1.0
+) -> pd.DataFrame:
+    """Per-stock price-action character (trend efficiency + candle anatomy)."""
+    from src.analytics.price_action import get_price_action
+    return get_price_action(trade_date, lookback_days=lookback_days,
+                            min_turnover_lacs=min_turnover_lacs)
+
+
+@st.cache_data(ttl=_TTL)
 def cached_fao_latest(trade_date: date, data_type: str) -> pd.DataFrame:
     from src.analytics.fao_participants import get_fao_latest
     return get_fao_latest(trade_date, data_type=data_type)
