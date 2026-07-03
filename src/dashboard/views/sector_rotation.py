@@ -36,6 +36,8 @@ from src.dashboard.cache.queries import (
     cached_market_regime,
     cached_sector_memory_context,
     cached_price_action,
+    cached_forward_tilt,
+    cached_sector_defensive,
 )
 from src.analytics.price_action import PA_CLASSES
 from src.dashboard.constants import NEGATIVE_COLOR, POSITIVE_COLOR, PLOT_BG, PAPER_BG, GRID_COLOR
@@ -3451,17 +3453,169 @@ def _render_relative_strength(trade_date: date, min_turnover: float, all_dates: 
 
 # ── Entry Point ───────────────────────────────────────────────────────────────
 
+_TILT_STYLE = {
+    "OVERWEIGHT":  ("🟢", POSITIVE_COLOR, "Rotate INTO"),
+    "UNDERWEIGHT": ("🔴", NEGATIVE_COLOR, "Reduce / avoid"),
+    "WATCH":       ("🟡", "#d9a441",       "Accumulating, not yet moved"),
+    "NEUTRAL":     ("⚪", "#8a8f98",       "No tilt"),
+}
+
+
+def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
+    """Validated 1–2 week cross-sectional momentum tilt (regime-gated)."""
+    st.markdown("#### 🎯 1–2 Week Forward Tilt &nbsp; <sub>β</sub>", unsafe_allow_html=True)
+    st.caption(
+        "The **only** sector call that survived deep validation: cross-sectional "
+        "**momentum** (relative strength vs Nifty) predicts 1–2wk forward returns — "
+        "daily-IC t≈9, Monte-Carlo p<0.002 vs 600 random portfolios, cost- and "
+        "sub-period-robust. Measured accuracy: an OVERWEIGHT sector beats the median "
+        "sector **~55%** of the time on its own; a **causal sector-persistence gate** "
+        "(drops historically mean-reverting sectors like Realty / Banking / Consumer "
+        "Durables) lifts that to **~60%** and the OW-vs-UW basket wins ~64% of 5-day "
+        "rebalances. A statistical lean (~1–2% relative / 2wk), not a per-call oracle."
+    )
+
+    try:
+        df, regime = cached_forward_tilt(selected_date, min_turnover)
+    except Exception as exc:                                  # noqa: BLE001
+        st.error(f"Forward tilt unavailable: {exc}")
+        return
+    if df is None or df.empty:
+        st.info("Not enough history / liquid sectors on this date to compute the tilt.")
+        return
+
+    # ── market backdrop (context for a long-only book, not a reliability scaler) ─
+    mult = float(regime.get("confidence_mult", 1.0))
+    banner = regime.get("banner", "")
+    state = regime.get("state", "UNKNOWN")
+    if mult >= 0.95:
+        st.success(f"**Market backdrop: {state}** — {banner}")
+    else:
+        st.warning(f"**Market backdrop: {state}** — {banner}")
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Market backdrop", state)
+    n_rev = int(df["revert"].sum()) if "revert" in df.columns else 0
+    c2.metric("Reverting sectors", n_rev,
+              help="Sectors whose high-rank calls historically FADE — their overweights are "
+                   "demoted by the persistence gate.")
+    disp = regime.get("dispersion", float("nan"))
+    c3.metric("Sector dispersion", f"{disp:.1f}" if disp == disp else "—",
+              help="Cross-sectional spread of 2-week relative strength. Low ⇒ little to rotate on.")
+
+    # ── OW / UW / WATCH buckets ───────────────────────────────────────────────
+    def _bucket(name: str):
+        g = df[df["tilt"] == name].copy()
+        icon, color, sub = _TILT_STYLE[name]
+        st.markdown(f"<b style='color:{color}'>{icon} {name}</b> "
+                    f"<span style='color:#8a8f98'>· {sub}</span>", unsafe_allow_html=True)
+        if g.empty:
+            st.caption("— none —"); return
+        for _, r in g.iterrows():
+            flag = ""
+            if r["divergence"] >= 0.30:
+                flag = " · 🔼 delivery leads price (pre-breakout)"
+            elif r["divergence"] <= -0.30:
+                flag = " · 🔽 price leads delivery (late-stage)"
+            if r.get("revert", False):
+                flag += " · ↩ reverts historically"
+            if r["thin"]:
+                flag += " · ⚠ thin"
+            st.markdown(
+                f"**{r['sector']}** &nbsp; rs₂w {r['rs_2w']:+.1f}% · "
+                f"dv5d {r['dv5d']:.2f} · est {int(r['est_rel_bps']):+d}bps{flag}",
+                unsafe_allow_html=True)
+
+    col_ow, col_uw = st.columns(2)
+    with col_ow:
+        _bucket("OVERWEIGHT")
+        # transparency: top-ranked sectors dropped by the persistence gate
+        if "revert" in df.columns:
+            demoted = df[(df["rank"] >= 0.75) & (df["revert"]) & (df["tilt"] != "OVERWEIGHT")]
+            if not demoted.empty:
+                names = ", ".join(demoted["sector"])
+                st.caption(f"↩ demoted (historically revert): {names}")
+        st.write("")
+        _bucket("WATCH")
+    with col_uw:
+        _bucket("UNDERWEIGHT")
+
+    # ── defensive lens (DESCRIPTIVE context — NOT part of the alpha ranking) ────
+    # Audited (2026-07-03): a regime-conditional defensive BLEND degraded the tilt
+    # walk-forward — the down-market edge needs forward knowledge of market direction.
+    # So down-capture/beta are shown as descriptive context only; the engine never
+    # trades on them.
+    try:
+        _defn = cached_sector_defensive(selected_date, min_turnover)
+    except Exception:                                        # noqa: BLE001
+        _defn = pd.DataFrame()
+
+    # ── full ranked table ─────────────────────────────────────────────────────
+    with st.expander("Full ranked table — all sectors, factors + defensive lens"):
+        t = df[["sector", "tilt", "rank", "rs_2w", "rs_1w", "dv5d", "accum_breadth",
+                "persistence", "n_liq", "est_rel_bps", "confidence"]].copy()
+        t["rank"] = (t["rank"] * 100).round(0)
+        t["accum_breadth"] = (t["accum_breadth"] * 100).round(0)
+        if not _defn.empty:
+            t = t.merge(_defn[["sector", "down_capture", "beta"]], on="sector", how="left")
+        cfg = {
+            "sector": "Sector",
+            "tilt": "Tilt",
+            "rank": st.column_config.NumberColumn("Rank %ile", format="%d"),
+            "rs_2w": st.column_config.NumberColumn("RS 2wk %", format="%.1f"),
+            "rs_1w": st.column_config.NumberColumn("RS 1wk %", format="%.1f"),
+            "dv5d": st.column_config.NumberColumn("Deliv 5d×", format="%.2f"),
+            "accum_breadth": st.column_config.NumberColumn("Accum brd %", format="%d"),
+            "persistence": st.column_config.NumberColumn(
+                "Persistence", format="%.1f",
+                help="Trailing mean forward relative-edge. >0 = high ranks kept winning "
+                     "(trend, trust OW); <0 = they faded (revert, OW demoted)."),
+            "n_liq": st.column_config.NumberColumn("# liq", format="%d"),
+            "est_rel_bps": st.column_config.NumberColumn("Est rel (bps/10d)", format="%d"),
+            "confidence": st.column_config.NumberColumn("Conf", format="%.2f"),
+        }
+        if "down_capture" in t.columns:
+            cfg["down_capture"] = st.column_config.NumberColumn(
+                "Down-cap 🛡", format="%.2f",
+                help="Trailing avg sector fall ÷ Nifty fall on DOWN days. <1 = historically "
+                     "fell LESS than the market. Descriptive context — NOT a forward signal "
+                     "(a regime-conditional defensive blend failed to beat momentum in "
+                     "backtest).")
+            cfg["beta"] = st.column_config.NumberColumn(
+                "Beta", format="%.2f",
+                help="Sensitivity to Nifty. <1 = cushions market moves.")
+        st.dataframe(t, hide_index=True, use_container_width=True, column_config=cfg)
+        if "down_capture" in t.columns:
+            st.caption(
+                "🛡 **Defensive lens** answers *'if the market falls, which of these held up'* "
+                "— down-capture <1 = fell less than Nifty on down days. It is **descriptive, "
+                "not predictive**: blending it into the tilt degraded accuracy in backtest, so "
+                "the ranking ignores it. Use it to sanity-check drawdown risk, not to pick.")
+    st.caption(
+        "⚠ Validated on one broadly-bull 1.3yr sample. The **relative** tilt was regime-"
+        "independent in-sample (so market backdrop is context, not a confidence penalty), "
+        "but true momentum-crash reversals never occurred here — a sharp Nifty pullback "
+        "still raises a precautionary flag. UNDERWEIGHT = reduce/avoid, not a short. "
+        "WATCH = heavy accumulation but momentum not yet turned. ↩ = persistence gate "
+        "demoted a top-ranked but historically mean-reverting sector."
+    )
+
+
 def render(selected_date: date, min_turnover: float, all_dates: list | None = None) -> None:
     st.subheader("🔄 Sector Rotation — Smart Money Tracker")
 
-    tab_smart, tab_clock, tab_rs = st.tabs([
+    tab_smart, tab_tilt, tab_clock, tab_rs = st.tabs([
         "🎯 Smart Money (Daily Signal)",
+        "🧭 1–2 Wk Forward Tilt",
         "📅 Rotation Clock",
         "📈 vs Nifty50",
     ])
 
     with tab_smart:
         _render_smart_money(selected_date, min_turnover)
+
+    with tab_tilt:
+        _render_forward_tilt(selected_date, min_turnover)
 
     with tab_clock:
         _render_rotation_clock(selected_date, min_turnover, all_dates=all_dates)

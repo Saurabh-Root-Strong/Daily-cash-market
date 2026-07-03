@@ -103,6 +103,20 @@ def cached_price_action(
 
 
 @st.cache_data(ttl=_TTL)
+def cached_forward_tilt(trade_date: date, min_turnover_lacs: float = 1.0):
+    """Validated 1-2wk forward sector tilt + regime meta. Returns (DataFrame, dict)."""
+    from src.analytics.sector_forward_tilt import get_forward_tilt
+    return get_forward_tilt(trade_date, min_turnover_lacs=min_turnover_lacs)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_sector_defensive(trade_date: date, min_turnover_lacs: float = 1.0) -> pd.DataFrame:
+    """Per-sector defensive metrics (beta, down/up-capture, RS). DESCRIPTIVE context only."""
+    from src.analytics.sector_defensive import get_sector_defensive_metrics
+    return get_sector_defensive_metrics(trade_date, min_turnover_lacs=min_turnover_lacs)
+
+
+@st.cache_data(ttl=_TTL)
 def cached_fao_latest(trade_date: date, data_type: str) -> pd.DataFrame:
     from src.analytics.fao_participants import get_fao_latest
     return get_fao_latest(trade_date, data_type=data_type)

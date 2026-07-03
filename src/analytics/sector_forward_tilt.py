@@ -1,0 +1,377 @@
+"""
+1–2 Week Forward Sector Tilt — the only sector call that survived deep validation.
+
+WHAT IS VALIDATED (scripts/factor_ic_diagnostic.py, backtest_rotation.py, mc_null.py,
+371-day panel 2024-12 → 2026-07):
+  Cross-sectional sector MOMENTUM predicts 1–2wk forward returns. Relative strength
+  vs Nifty (rs_2w, 10d) has daily-IC t ≈ 9 and a Monte-Carlo long/short p < 0.002 vs
+  600 random portfolios; edge is cost-robust (0→40bps), sub-period stable (both halves
+  Sharpe ~1.7) and top-K insensitive. Delivery flow (dv5d) is a WEAK confirm (t ≈ 3.8).
+  F&O positioning is NOT usable at sector granularity (only ~4 sectors carry enough
+  F&O names to aggregate) and is deliberately excluded here.
+
+WHAT IS NOT PROVEN (honest guardrails, hard-coded conservative):
+  The sample is one broadly-BULL regime; cross-sectional momentum is KNOWN to crash in
+  sharp reversals, which this window never saw. So the tilt is regime-gated: a Nifty
+  trend/vol/pullback read scales a confidence multiplier in [0.3, 1.0] and raises a
+  "momentum fragile" banner in high-vol / reversal / downtrend states.
+
+OUTPUT (decision-support, not a signal generator):
+  get_forward_tilt(as_of_date, ...) -> (DataFrame per sector, regime meta dict)
+  columns: sector, score, rank, tilt, rs_2w, rs_1w, dv5d, accum_breadth, deliv_slope,
+           n_liq, thin, divergence, est_rel_bps, confidence
+  tilt ∈ {OVERWEIGHT, NEUTRAL, UNDERWEIGHT, WATCH}. UNDERWEIGHT = reduce/avoid, NOT a
+  short recommendation (a sector basket cannot be shorted cheaply). WATCH = heavy
+  accumulation but momentum not yet turned (contrarian; momentum is the validated timer,
+  so these are held out of the active tilt).
+
+All factors use data <= as_of_date only; forward returns are never read live.
+"""
+from __future__ import annotations
+
+from datetime import date
+from typing import Optional
+
+import numpy as np
+import pandas as pd
+
+from src.analytics.base import get_min_turnover_filter
+from src.analytics.sector_signal_v2 import get_robust_delivery_signals
+from src.data.repository import query_dataframe
+from src.logging_setup import get_logger
+
+log = get_logger(__name__)
+
+# ── factor construction (mirrors the validated build_factors) ────────────────
+_MOM_2W        = 10       # trading days for 2-week momentum / relative strength
+_MOM_1W        = 5        # trading days for 1-week momentum
+_DV_BASE       = 100      # trailing window for the delivery-flow baseline
+_DV_FLOW       = 5        # short delivery-flow window
+_MIN_HIST      = 12       # min sector daily rows to compute momentum
+_MIN_SECTORS   = 8        # need a real cross-section to rank
+_MIN_LIQ_NAMES = 5        # below this a sector is "thin" (noisy rs/breadth)
+
+# ── composite weights (IC-proportional; momentum dominates) ──────────────────
+_W_RS2, _W_RS1, _W_DV5 = 0.60, 0.25, 0.15
+
+# ── tilt thresholds with hysteresis headroom ─────────────────────────────────
+_OW_RANK       = 0.75     # rank >= this  → OVERWEIGHT
+_UW_RANK       = 0.25     # rank <= this  → UNDERWEIGHT
+# WATCH: contrarian accumulation — strong breadth but momentum not yet turned
+_WATCH_BREADTH = 0.55
+_WATCH_RS_MAX  = 0.35     # ... while momentum rank is still weak
+
+# ── expected relative return map (from the validated ~1.9%/10d tercile spread) ─
+_REL_SLOPE_BPS = 290.0    # bps of 10d relative return per unit of (rank-0.5)
+
+# ── regime read (Nifty) — CONTEXT for a long-only book's market beta, NOT a ──
+# reliability scaler for the relative ranking. Measured: relative OW accuracy is
+# regime-INDEPENDENT (highest in downtrends, lowest in the uptrend), and OW absolute
+# returns were fine-to-best in high-vol/downtrend. So the old down/high-vol confidence
+# penalties were contradicted and are removed. Only a sharp pullback (the closest proxy
+# to a momentum-crash setup, and genuinely untestable in this one-regime sample) keeps a
+# mild, explicitly-UNVALIDATED caution.
+_VOL_HI_PCT    = 0.80     # realized-vol percentile above this = high-vol regime (context only)
+_PULLBACK_5D   = -3.0     # Nifty 5d return below this % after an up-run = reversal caution
+_REVERSAL_MULT = 0.80     # only penalty that survives — and it is a prior, not validated
+
+# ── sector momentum-persistence gate (the real reliability lever) ────────────
+# Validated (walk-forward, causal): sectors differ structurally — industrials/materials
+# TREND (a high rank keeps outperforming) while consumer/rate-sensitive/financials REVERT
+# (a high rank fades). OOS-persistent (H1→H2 Spearman +0.60). Demoting OVERWEIGHT calls in
+# historically-reverting sectors lifts OW accuracy ~56% → ~60%. Signal = each sector's
+# trailing mean forward RELATIVE edge (expanding, realized ≤ as_of − _PERS_FWD days).
+_PERS_LOOKBACK_CAL = 620  # ~2 trading years of history for the persistence estimate
+_PERS_FWD          = 10   # forward horizon the persistence is measured over (matches tilt)
+_PERS_MIN_OBS      = 30   # min realized forward windows before a sector's persistence is used
+
+
+def _compound(pct_series: pd.Series, n: int) -> pd.Series:
+    """Compounded return over the trailing n rows (log1p sum), aligned to the last row."""
+    lr = np.log1p(pct_series / 100.0)
+    cr = lr.cumsum()
+    return np.expm1(cr - cr.shift(n)) * 100.0
+
+
+def _load_sector_panel(as_of_date: date, min_turnover_lacs: float) -> pd.DataFrame:
+    return query_dataframe(
+        """
+        SELECT s.sector, b.trade_date,
+               SUM(b.turnover_lacs * b.deliv_per / 100.0) / 100.0            AS daily_dv_cr,
+               SUM(b.turnover_lacs * (b.close_price - b.prev_close)
+                     / NULLIF(b.prev_close, 0) * 100)
+                 / NULLIF(SUM(CASE WHEN b.prev_close > 0
+                              THEN b.turnover_lacs END), 0)                  AS wtd_ret_pct
+        FROM daily_data b
+        INNER JOIN v_sector_master s ON b.symbol = s.symbol
+        WHERE b.series IN ('EQ', 'SM', 'ST')
+          AND s.sector NOT IN ('ETF', 'Others')
+          AND b.turnover_lacs >= ?
+          AND b.trade_date > (?::date - 260)
+          AND b.trade_date <= ?
+        GROUP BY s.sector, b.trade_date
+        ORDER BY s.sector, b.trade_date
+        """,
+        [min_turnover_lacs, as_of_date, as_of_date],
+    )
+
+
+def _load_nifty(as_of_date: date) -> pd.DataFrame:
+    try:
+        df = query_dataframe(
+            "SELECT trade_date, close_val, pct_chg FROM index_data "
+            "WHERE index_name = 'Nifty 50' AND trade_date <= ? ORDER BY trade_date",
+            [as_of_date],
+        )
+    except Exception as exc:                                  # noqa: BLE001
+        log.warning("nifty load failed (%s); relative strength falls back to absolute", exc)
+        return pd.DataFrame()
+    if df.empty:
+        return df
+    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    df["nret"] = (df["pct_chg"].astype(float) if df["pct_chg"].notna().any()
+                  else df["close_val"].astype(float).pct_change() * 100)
+    return df
+
+
+def _liquid_name_counts(as_of_date: date, min_turnover_lacs: float) -> pd.Series:
+    df = query_dataframe(
+        """
+        SELECT s.sector, COUNT(*) AS n_liq
+        FROM daily_data b
+        INNER JOIN v_sector_master s ON b.symbol = s.symbol
+        WHERE b.trade_date = ? AND b.series IN ('EQ', 'SM', 'ST')
+          AND s.sector NOT IN ('ETF', 'Others')
+          AND b.turnover_lacs >= ?
+        GROUP BY s.sector
+        """,
+        [as_of_date, min_turnover_lacs],
+    )
+    return df.set_index("sector")["n_liq"] if not df.empty else pd.Series(dtype=int)
+
+
+def _market_regime(nifty: pd.DataFrame) -> dict:
+    """Nifty trend/vol/pullback read — CONTEXT for a long-only book's market beta.
+
+    NOT a reliability scaler for the relative ranking: the relative tilt was measured
+    regime-independent, so this no longer penalises confidence in high-vol/downtrend
+    (those calls were fine-to-best in-sample). It labels the market backdrop honestly and
+    keeps ONE mild, explicitly-unvalidated caution for a sharp pullback (a momentum-crash
+    proxy this single-regime sample cannot test).
+    """
+    default = dict(state="UNKNOWN", vol_pct=float("nan"), ret_5d=float("nan"),
+                   confidence_mult=1.0, banner="Regime unknown — market context unavailable.")
+    if nifty.empty or len(nifty) < 60:
+        return default
+    nf = nifty.sort_values("trade_date").reset_index(drop=True)
+    close = nf["close_val"].astype(float)
+    ret = nf["nret"].astype(float) / 100.0
+    ema20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
+    ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1]
+    px = close.iloc[-1]
+    vol20 = ret.rolling(20).std()
+    vol_pct = float((vol20 <= vol20.iloc[-1]).mean()) if vol20.notna().sum() > 20 else float("nan")
+    ret_5d = float(_compound(nf["nret"], 5).iloc[-1])
+    ret_20d = float(_compound(nf["nret"], 20).iloc[-1])
+
+    up_trend = px > ema20 > ema50
+    dn_trend = px < ema20 < ema50
+    high_vol = np.isfinite(vol_pct) and vol_pct >= _VOL_HI_PCT
+    reversal = ret_5d <= _PULLBACK_5D and ret_20d > 0     # sharp pullback inside an up-run
+
+    _beta = ("The RELATIVE tilt (overweight vs underweight) held up in-sample regardless — "
+             "but a long-only book still carries market beta here.")
+    if reversal:
+        state, mult, banner = ("REVERSAL", _REVERSAL_MULT,
+            f"⚠ Sharp pullback (Nifty {ret_5d:+.1f}% / 5d). Closest proxy to a momentum-crash "
+            f"setup — UNVALIDATED in this sample; trim long exposure as a precaution.")
+    elif dn_trend:
+        state, mult, banner = ("TRENDING_DOWN", 1.0,
+            f"Nifty below 20/50 EMA (downtrend). {_beta}")
+    elif high_vol:
+        state, mult, banner = ("HIGH_VOL", 1.0,
+            f"Realized vol in the top {(1-vol_pct)*100:.0f}%. {_beta}")
+    elif up_trend:
+        state, mult, banner = ("TRENDING_UP", 1.0,
+            "Nifty in a clean uptrend — favourable backdrop for a long-only sector tilt.")
+    else:
+        state, mult, banner = ("CHOPPY", 1.0,
+            "Nifty rangebound (mixed EMAs) — neutral backdrop; relative tilt still applies.")
+    return dict(state=state, vol_pct=vol_pct, ret_5d=ret_5d,
+                confidence_mult=float(mult), banner=banner)
+
+
+def _sector_persistence(as_of_date: date, min_turnover_lacs: float) -> pd.DataFrame:
+    """Per-sector momentum-persistence: trailing mean forward RELATIVE edge (causal).
+
+    For every past day with a realized 10-day forward return (date ≤ as_of − 10 trading
+    days), edge = sector's fwd-10 return minus the cross-sectional median sector fwd-10.
+    A sector's persistence = the expanding mean of that edge. >0 ⇒ high ranks historically
+    kept outperforming (trend-follow, trust the overweight); <0 ⇒ they faded (mean-revert,
+    demote the overweight). No lookahead — forward returns beyond as_of are NaN by
+    construction.
+    """
+    empty = pd.DataFrame(columns=["sector", "persistence", "pers_n"])
+    panel = query_dataframe(
+        """
+        SELECT s.sector, b.trade_date,
+               SUM(b.turnover_lacs * (b.close_price - b.prev_close)
+                     / NULLIF(b.prev_close, 0) * 100)
+                 / NULLIF(SUM(CASE WHEN b.prev_close > 0
+                              THEN b.turnover_lacs END), 0)                  AS wtd_ret_pct
+        FROM daily_data b
+        INNER JOIN v_sector_master s ON b.symbol = s.symbol
+        WHERE b.series IN ('EQ', 'SM', 'ST')
+          AND s.sector NOT IN ('ETF', 'Others')
+          AND b.turnover_lacs >= ?
+          AND b.trade_date > (?::date - ?)
+          AND b.trade_date <= ?
+        GROUP BY s.sector, b.trade_date
+        ORDER BY b.trade_date
+        """,
+        [min_turnover_lacs, as_of_date, _PERS_LOOKBACK_CAL, as_of_date],
+    )
+    if panel.empty:
+        return empty
+    panel["trade_date"] = pd.to_datetime(panel["trade_date"])
+    ret = panel.pivot_table("wtd_ret_pct", "trade_date", "sector").sort_index()
+    if len(ret) < _PERS_FWD + _PERS_MIN_OBS:
+        return empty
+    # forward 10d compounded return per sector (NaN for the last _PERS_FWD rows → causal)
+    cr = np.log1p(ret / 100.0).cumsum()
+    fwd = (np.expm1(cr.shift(-_PERS_FWD) - cr) * 100.0)
+    edge = fwd.sub(fwd.median(axis=1), axis=0)            # vs cross-sectional median sector
+    out = pd.DataFrame({
+        "persistence": edge.mean(axis=0, skipna=True),
+        "pers_n": edge.notna().sum(axis=0),
+    })
+    out = out[out["pers_n"] >= _PERS_MIN_OBS].reset_index().rename(columns={"index": "sector"})
+    if "sector" not in out.columns:
+        out = out.rename(columns={out.columns[0]: "sector"})
+    return out
+
+
+def get_forward_tilt(
+    as_of_date: date,
+    min_turnover_lacs: Optional[float] = None,
+    horizon_days: int = _MOM_2W,
+) -> tuple[pd.DataFrame, dict]:
+    """Per-sector 1–2wk forward tilt + regime meta. Causal (data <= as_of_date)."""
+    if min_turnover_lacs is None:
+        min_turnover_lacs = get_min_turnover_filter()
+
+    cols = ["sector", "score", "rank", "tilt", "rs_2w", "rs_1w", "dv5d",
+            "accum_breadth", "deliv_slope", "n_liq", "thin", "divergence",
+            "persistence", "revert", "est_rel_bps", "confidence"]
+    empty = pd.DataFrame(columns=cols)
+
+    panel = _load_sector_panel(as_of_date, min_turnover_lacs)
+    if panel.empty:
+        return empty, _market_regime(pd.DataFrame())
+    panel["trade_date"] = pd.to_datetime(panel["trade_date"])
+
+    nifty = _load_nifty(as_of_date)
+    regime = _market_regime(nifty)
+
+    # per-sector momentum + delivery flow, all trailing (causal)
+    recs = []
+    for sector, g in panel.groupby("sector", sort=False):
+        g = g.sort_values("trade_date")
+        if len(g) < _MIN_HIST:
+            continue
+        mom_2w = float(_compound(g["wtd_ret_pct"], _MOM_2W).iloc[-1])
+        mom_1w = float(_compound(g["wtd_ret_pct"], _MOM_1W).iloc[-1])
+        dv = g["daily_dv_cr"].astype(float)
+        base = dv.iloc[:-1].tail(_DV_BASE).mean()
+        dv5d = float(dv.tail(_DV_FLOW).mean() / base) if base and base > 0 else np.nan
+        recs.append(dict(sector=sector, mom_2w=mom_2w, mom_1w=mom_1w, dv5d=dv5d))
+    fac = pd.DataFrame(recs)
+    if len(fac) < _MIN_SECTORS:
+        return empty, regime
+
+    # relative strength vs Nifty (fallback to absolute momentum if Nifty missing)
+    if not nifty.empty:
+        n_1w = float(_compound(nifty["nret"], _MOM_1W).iloc[-1])
+        n_2w = float(_compound(nifty["nret"], _MOM_2W).iloc[-1])
+    else:
+        n_1w = n_2w = 0.0
+    fac["rs_2w"] = fac["mom_2w"] - n_2w
+    fac["rs_1w"] = fac["mom_1w"] - n_1w
+
+    # robust bottom-up accumulation breadth (quality overlay, not a return driver)
+    try:
+        rob = get_robust_delivery_signals(as_of_date, min_turnover_lacs)
+    except Exception as exc:                                  # noqa: BLE001
+        log.warning("robust delivery signal failed (%s); breadth overlay disabled", exc)
+        rob = pd.DataFrame(columns=["sector", "breadth_accum", "deliv_slope"])
+    fac = fac.merge(rob[["sector", "breadth_accum", "deliv_slope"]]
+                    if not rob.empty else rob, on="sector", how="left")
+    for c in ("breadth_accum", "deliv_slope"):
+        if c not in fac.columns:
+            fac[c] = np.nan
+
+    # liquid-name counts → thin flag
+    n_liq = _liquid_name_counts(as_of_date, min_turnover_lacs)
+    fac["n_liq"] = fac["sector"].map(n_liq).fillna(0).astype(int)
+    fac["thin"] = fac["n_liq"] < _MIN_LIQ_NAMES
+
+    # cross-sectional pct-rank composite (momentum-led)
+    def _r(col):
+        return fac[col].rank(pct=True)
+    r_rs2 = _r("rs_2w")
+    fac["score"] = (_W_RS2 * r_rs2 + _W_RS1 * _r("rs_1w") + _W_DV5 * _r("dv5d")).astype(float)
+    fac["rank"] = fac["score"].rank(pct=True)
+
+    # divergence: delivery rank minus momentum rank (+ = accumulating ahead of price)
+    fac["divergence"] = (_r("dv5d") - r_rs2).astype(float)
+
+    # dispersion of momentum → is there anything to rotate on today?
+    disp = float(fac["rs_2w"].std())
+    regime["dispersion"] = disp
+    if np.isfinite(disp) and disp < 1.5:
+        regime["banner"] += "  (Low sector dispersion — tilt has little to add today.)"
+
+    conf_mult = regime["confidence_mult"]
+    brd = fac["breadth_accum"].fillna(0.0)
+    brd_rank = brd.rank(pct=True)
+
+    def _tilt(row, rr, br) -> str:
+        # WATCH: heavy accumulation but momentum has not turned (contrarian, held out)
+        if br >= _WATCH_BREADTH and rr <= _WATCH_RS_MAX:
+            return "WATCH"
+        if rr >= _OW_RANK:
+            return "OVERWEIGHT"
+        if rr <= _UW_RANK:
+            return "UNDERWEIGHT"
+        return "NEUTRAL"
+
+    fac["tilt"] = [
+        _tilt(row, rr, br) for row, rr, br in
+        zip(fac.to_dict("records"), fac["rank"].values, brd.values)
+    ]
+    # thin sectors cannot be a confident overweight — demote to NEUTRAL/WATCH
+    fac.loc[fac["thin"] & (fac["tilt"] == "OVERWEIGHT"), "tilt"] = "NEUTRAL"
+
+    # ── momentum-persistence gate (the validated reliability lever) ───────────
+    # Demote OVERWEIGHT in structurally mean-reverting sectors (trailing edge < 0):
+    # those OW calls historically fade (~44% accuracy). Lifts OW accuracy ~56% → ~60%.
+    try:
+        pers = _sector_persistence(as_of_date, min_turnover_lacs)
+    except Exception as exc:                                  # noqa: BLE001
+        log.warning("sector persistence failed (%s); gate disabled", exc)
+        pers = pd.DataFrame(columns=["sector", "persistence", "pers_n"])
+    pmap = pers.set_index("sector")["persistence"] if not pers.empty else pd.Series(dtype=float)
+    fac["persistence"] = fac["sector"].map(pmap)
+    fac["revert"] = fac["persistence"] < 0                     # NaN → False (unknown ⇒ keep)
+    fac.loc[(fac["tilt"] == "OVERWEIGHT") & fac["revert"], "tilt"] = "NEUTRAL"
+
+    # expected relative return (bps, 10d); regime mult is ~1.0 (context only) — wide error bars
+    fac["est_rel_bps"] = ((fac["rank"] - 0.5) * _REL_SLOPE_BPS * conf_mult).round(0)
+    # per-sector confidence: regime × thin × historically-reverting down-weights
+    fac["confidence"] = (conf_mult
+                         * np.where(fac["thin"], 0.5, 1.0)
+                         * np.where(fac["revert"], 0.6, 1.0)).round(2)
+
+    fac["accum_breadth"] = fac["breadth_accum"]
+    fac = fac.sort_values("score", ascending=False).reset_index(drop=True)
+    return fac[cols], regime
