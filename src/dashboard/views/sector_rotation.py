@@ -39,7 +39,7 @@ from src.dashboard.cache.queries import (
     cached_forward_tilt,
     cached_sector_defensive,
 )
-from src.analytics.price_action import PA_CLASSES
+from src.analytics.price_action import PA_CLASSES, BRK_STATES, MTF_ALIGN
 from src.dashboard.constants import NEGATIVE_COLOR, POSITIVE_COLOR, PLOT_BG, PAPER_BG, GRID_COLOR
 from src.dashboard.components.charts import hex_to_rgba as _hex_to_rgba  # deduped helper
 
@@ -838,7 +838,8 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                     and "symbol" in price_action.columns):
                 _pa_keep = [c for c in ["symbol", "pa_class", "pa_gappy", "pa_high_vol",
                                         "efficiency_ratio", "avg_body_pct", "long_wick_freq",
-                                        "gap_freq", "atr_pct"]
+                                        "gap_freq", "atr_pct",
+                                        "mtf_align", "breakout", "w_trend", "range_pos"]
                             if c in price_action.columns]
                 stocks = stocks.merge(price_action[_pa_keep], on="symbol", how="left")
 
@@ -999,7 +1000,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                 )
 
             display_cols = ["symbol", "company_name", "industry", "ltp", "conviction",
-                            "pa_class", "efficiency_ratio",
+                            "pa_class", "breakout", "mtf_align", "efficiency_ratio",
                             "near_fut_label", "next_fut_label", "far_fut_label",
                             "near_opt_label", "next_opt_label", "far_opt_label",
                             "wtd_deliv_per", "deliv_vs_100d_pct", "avg_deliv_per_100d",
@@ -1047,13 +1048,17 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
             # without a computed character (too little history) are dropped only
             # when a class filter is active — they cannot be verified.
             if pa_filter and "pa_class" in shown.columns:
-                _pa_cls, _pa_hg, _pa_hv = pa_filter
+                _pa_cls, _pa_hg, _pa_hv, _pa_setup, _pa_align = pa_filter
                 if _pa_cls:
                     shown = shown[shown["pa_class"].isin(_pa_cls)]
                 if _pa_hg and "pa_gappy" in shown.columns:
                     shown = shown[~shown["pa_gappy"].fillna(False).astype(bool)]
                 if _pa_hv and "pa_high_vol" in shown.columns:
                     shown = shown[~shown["pa_high_vol"].fillna(False).astype(bool)]
+                if _pa_setup and "breakout" in shown.columns:
+                    shown = shown[shown["breakout"].isin(_pa_setup)]
+                if _pa_align and "mtf_align" in shown.columns:
+                    shown = shown[shown["mtf_align"].isin(_pa_align)]
 
             # ── F&O universe filter — keep only NSE F&O underlyings ─────────────
             # _fno_symbols is the set of stocks with futures/options for this date.
@@ -1112,7 +1117,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                     _fno_part = "F&O " + _sep.join(_tags) + _oi_tag
 
             n_hidden = len(stocks) - len(shown)
-            _pa_active = pa_filter and (pa_filter[0] or pa_filter[1] or pa_filter[2])
+            _pa_active = pa_filter and any(pa_filter[:5])
             if n_hidden or _fno_part or _fno_only_active or _pa_active:
                 filter_parts = [f"Wtd Deliv % > {deliv_threshold:.0f}%"]
                 if _pa_active:
@@ -1123,6 +1128,10 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                         _pp.append("no gappy")
                     if pa_filter[2]:
                         _pp.append("no high-vol")
+                    if len(pa_filter) > 3 and pa_filter[3]:
+                        _pp.append(" / ".join(pa_filter[3]))
+                    if len(pa_filter) > 4 and pa_filter[4]:
+                        _pp.append(" / ".join(pa_filter[4]))
                     filter_parts.append("Price action: " + ", ".join(_pp))
                 if _fno_only_active:
                     filter_parts.append("F&O stocks only")
@@ -1179,6 +1188,25 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                              "🔀 Choppy / Whipsaw = big bars, no net progress (stop-hunt RISK)\n"
                              "😴 Quiet Range   = small bars, coiling (await a breakout)\n\n"
                              "Filter by character with the 'Price Action character' control above."),
+                    "breakout":      _htc(
+                        "Setup", width="small",
+                        help="Daily × Weekly breakout state (validated on 371 days):\n"
+                             "🚀 Breakout = close >1% over the 20d high FROM a tight base — "
+                             "the one validated edge (+1.9%/10d rel, t=3.2, holds both halves)\n"
+                             "↗ Break (extended) = broke out with no prior coil (weaker)\n"
+                             "💥 Breakdown-bounce = broke the 20d low, but such names BOUNCE "
+                             "here — a reversal watch, NOT a short\n"
+                             "🧊 Coiling = tight base, no break yet (breakout watchlist)\n\n"
+                             "Filter with the '🚀 Multi-timeframe setup' control above."),
+                    "mtf_align":     _htc(
+                        "D×W", width="small",
+                        help="Daily direction × Weekly (EMA20/50) trend — a momentum-quality "
+                             "gate. A daily up-move continues mainly when the weekly agrees "
+                             "(52.8% vs 46.6% win when it doesn't):\n"
+                             "✅ Confirmed Up = daily-up + weekly-up (aligned)\n"
+                             "⚠️ False Pop = daily-up but weekly-DOWN → the pop tends to fade\n"
+                             "🔵 Pullback = daily-down inside a weekly uptrend (dip)\n"
+                             "🔻 Down-trend = both lower (aligned down)"),
                     "efficiency_ratio": _hnc(
                         "Trend Eff", format="%.2f",
                         help="Kaufman Efficiency Ratio over 60 days = |net price change| ÷ sum of "
@@ -2743,13 +2771,47 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             help="Drop stocks whose average daily range is in the top quartile "
                  "(ATR% ≥ 4.5) — outsized intraday swings.",
         )
+    # ── Multi-timeframe (Daily × Weekly) setup filter ──────────────────────────
+    # Validated walk-forward (scripts/backtest_mtf_price_action.py): the daily pop is
+    # a weak FADE alone; what pays is a breakout FROM a tight base (+1.86%/10d,
+    # t=3.2, MC p=0.996) and daily/weekly ALIGNMENT (52.8% vs 46.6% win when weekly
+    # agrees). These filters surface exactly those setups.
+    _scol1, _scol2 = st.columns([1, 1])
+    with _scol1:
+        pa_setups = st.multiselect(
+            "🚀 Multi-timeframe setup — filters the per-stock lists below",
+            list(BRK_STATES[:-1]), default=[], key="rotation_stock_pa_setup",
+            help=(
+                "Daily × Weekly price-action state (validated on 371 days). Empty = no filter.\n\n"
+                "• 🚀 Breakout — close >1% over the 20d high FROM a tight base → the ONE "
+                "validated edge (+1.9%/10d rel, t=3.2, holds both halves)\n"
+                "• ↗ Break (extended) — broke out with no prior coil → weaker follow-through\n"
+                "• 💥 Breakdown-bounce — broke the 20d low, but such names BOUNCE here → "
+                "watch for a reversal, NOT a short\n"
+                "• 🧊 Coiling — tight base, no break yet → the breakout watchlist"
+            ),
+        )
+    with _scol2:
+        pa_aligns = st.multiselect(
+            "🧭 Daily×Weekly alignment",
+            list(MTF_ALIGN), default=[], key="rotation_stock_pa_align",
+            help=(
+                "Momentum-quality gate. A daily up-move only tends to continue when the "
+                "WEEKLY trend agrees.\n\n"
+                "• ✅ Confirmed Up — daily-up + weekly-up (aligned, best win-rate)\n"
+                "• ⚠️ False Pop — daily-up but weekly-DOWN → the daily move tends to fade\n"
+                "• 🔵 Pullback — daily-down inside a weekly uptrend (dip)\n"
+                "• 🔻 Down-trend — both lower (aligned down)\n\nEmpty = no filter."
+            ),
+        )
     try:
         _pa_df = cached_price_action(selected_date, 60, min_turnover)
     except Exception as _pe:
         import logging as _log
         _log.getLogger(__name__).warning("price_action failed (non-fatal): %s", _pe)
         _pa_df = pd.DataFrame()
-    pa_filter = (tuple(pa_classes), bool(pa_hide_gappy), bool(pa_hide_hivol))
+    pa_filter = (tuple(pa_classes), bool(pa_hide_gappy), bool(pa_hide_hivol),
+                 tuple(pa_setups), tuple(pa_aligns))
 
     if _n_thin:
         st.caption(

@@ -25,9 +25,27 @@ Four characters (A × B) + flags:
     😴 Quiet Range     — low ER, small bars, coiling            (await breakout)
   flags: ⚡ Gappy (gap-heavy) · 🔥 High-Vol (ATR top quartile)
 
+MULTI-TIMEFRAME overlay (Daily × Weekly) — VALIDATED walk-forward on the full 371-day
+panel (scripts/backtest_mtf_price_action.py; relative-to-universe forward returns, causal):
+
+  A. Daily direction ALONE is mildly CONTRARIAN at the 1–2wk stock horizon (IC −0.03,
+     t≈−2.6) — a raw daily pop is a weak fade, not a buy. What persists is trend
+     EFFICIENCY (Kaufman ER, IC +0.023 t≈3.0): clean movers continue, direction doesn't.
+  B. WEEKLY AGREEMENT is a momentum-quality gate. Among daily-up names, weekly-up win
+     52.8% fwd-10d vs weekly-DOWN 46.6% — the daily pop is "false" when the weekly
+     structure disagrees. mtf_align encodes the 4 quadrants (D-dir × weekly EMA20/50).
+  C. BREAKOUT-from-consolidation is the standout edge: close breaks the 20d Donchian
+     high by >1% out of a prior tight (cross-sectional bottom-third ATR) base →
+     +1.86%/10d relative, t=+3.2 over 61 dates, MC p=0.996, STABLE both halves
+     (H1 +2.5%/60% win, H2 +1.4%/55%). Weekly-up alignment sharpens it further.
+  D. DOWN-breakdowns do NOT follow through — they bounce (fwd +0.9%/10d, win 54%);
+     flagged as bounce-watch, never a short. Support/resistance PROXIMITY = no edge
+     (IC≈0) — carried as context only, never as a call.
+
 Public entry point:
   get_price_action(as_of_date, lookback_days=60, min_turnover_lacs) -> DataFrame,
-  one row per liquid stock with the raw metrics, the class, and the risk flags.
+  one row per liquid stock with the raw metrics, the class, the risk flags, and the
+  multi-timeframe columns (mtf_align, breakout, w_trend, range_pos).
 """
 from __future__ import annotations
 
@@ -67,6 +85,30 @@ CHOPPY         = "🔀 Choppy / Whipsaw"
 QUIET_RANGE    = "😴 Quiet Range"
 PA_CLASSES     = (CLEAN_TREND, VOLATILE_TREND, CHOPPY, QUIET_RANGE)
 
+# ── Multi-timeframe (Daily × Weekly) parameters (validated — see module docstring) ──
+_D_MOM_WIN   = 10       # daily direction window (trading days)
+_W_MOM_WIN   = 50       # ~10-week trend window; also the Donchian range-position window
+_DON_WIN     = 20       # breakout Donchian window
+_BRK_MARGIN  = 0.01     # close must clear the prior 20d high/low by ≥1%
+_CONSOL_PCTL = 0.33     # ATR bottom-third (cross-sectional) = a tight base
+_NEAR_EDGE   = 0.20     # within 20% of the range extreme = near support/resistance
+
+# MTF alignment labels (Daily direction × Weekly EMA20/50 structure) — stable strings.
+MTF_CONFIRM_UP = "✅ Confirmed Up"     # daily-up + weekly-up  (aligned, best win-rate)
+MTF_FALSE_POP  = "⚠️ False Pop"        # daily-up + weekly-DOWN (fade — daily lies here)
+MTF_PULLBACK   = "🔵 Pullback"         # daily-down + weekly-up (dip inside an uptrend)
+MTF_DOWN_ALGN  = "🔻 Down-trend"       # daily-down + weekly-down (aligned lower)
+MTF_NEUTRAL    = "• Neutral"           # no clear direction on one leg
+MTF_ALIGN      = (MTF_CONFIRM_UP, MTF_FALSE_POP, MTF_PULLBACK, MTF_DOWN_ALGN, MTF_NEUTRAL)
+
+# Breakout state labels — stable strings.
+BRK_BREAKOUT   = "🚀 Breakout"         # close >1% over 20d high FROM a tight base (the edge)
+BRK_EXTENDED   = "↗ Break (extended)"  # broke out but no prior consolidation (weaker)
+BRK_BOUNCE     = "💥 Breakdown-bounce"  # broke 20d low — tends to bounce, NOT a short
+BRK_COILING    = "🧊 Coiling"          # tight base, no break yet (watch for the trigger)
+BRK_NONE       = "—"
+BRK_STATES     = (BRK_BREAKOUT, BRK_EXTENDED, BRK_BOUNCE, BRK_COILING, BRK_NONE)
+
 
 def get_price_action(
     as_of_date: date,
@@ -77,8 +119,11 @@ def get_price_action(
     if min_turnover_lacs is None:
         min_turnover_lacs = get_min_turnover_filter()
 
-    # ~2× the window in calendar days to guarantee `lookback_days` trading bars.
-    cal_span = int(lookback_days * 2 + 20)
+    # ~2× the window in calendar days to guarantee the trading bars we need. The MTF
+    # overlay needs ~_W_MOM_WIN+_DON_WIN bars for weekly trend + a prior Donchian base,
+    # so fetch for whichever window is longer.
+    mtf_bars = _W_MOM_WIN + _DON_WIN + 5
+    cal_span = int(max(lookback_days, mtf_bars) * 2 + 20)
     P = query_dataframe(
         """
         WITH liq AS (
@@ -104,6 +149,8 @@ def get_price_action(
             "large_body_freq", "long_wick_freq", "gap_freq", "efficiency_ratio",
             "atr_pct", "wick_bias", "net_ret_pct", "n_days",
             "pa_class", "pa_gappy", "pa_high_vol",
+            "mtf_align", "breakout", "w_trend", "range_pos",
+            "atr20_pct", "_brk_up", "_brk_dn",
         ])
 
     P["trade_date"] = pd.to_datetime(P["trade_date"]).dt.date
@@ -111,8 +158,9 @@ def get_price_action(
     rows = []
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", category=RuntimeWarning)
-        for sym, g in P.groupby("symbol", sort=False):
-            g = g.sort_values("trade_date").tail(lookback_days)
+        for sym, g_full in P.groupby("symbol", sort=False):
+            g_full = g_full.sort_values("trade_date")
+            g = g_full.tail(lookback_days)             # character = recent window
             if len(g) < _MIN_DAYS:
                 continue
             o = g["o"].to_numpy(float); h = g["h"].to_numpy(float)
@@ -122,6 +170,9 @@ def get_price_action(
             good = rng > 0
             if good.sum() < _MIN_GOOD_RANGE:
                 continue
+
+            # ── Multi-timeframe overlay (uses the fuller series g_full) ──────────
+            mtf = _mtf_fields(g_full)
 
             body = np.abs(c - o)
             upper = h - np.maximum(o, c)
@@ -150,6 +201,7 @@ def get_price_action(
                 "wick_bias":          float(np.nanmean(lo) - np.nanmean(up)),  # + demand / − supply
                 "net_ret_pct":        net,
                 "n_days":             int(len(g)),
+                **mtf,
             })
 
     df = pd.DataFrame(rows)
@@ -173,4 +225,90 @@ def get_price_action(
     df["pa_class"]    = df.apply(_classify, axis=1)
     df["pa_gappy"]    = df["gap_freq"] >= _GAPPY_FREQ
     df["pa_high_vol"] = df["atr_pct"]  >= _HIVOL_ATR
+
+    # ── Breakout classification — consolidation tightness is CROSS-SECTIONAL ──────
+    # A base is "tight" only relative to the day's universe (matches the validation:
+    # bottom-third ATR20). A breakout FROM a tight base is the validated edge; a
+    # break with no base is weaker; a broken low tends to bounce (never a short).
+    tight = df["atr20_pct"] <= df["atr20_pct"].quantile(_CONSOL_PCTL)
+
+    def _breakout(r, is_tight: bool) -> str:
+        if r["_brk_up"]:
+            return BRK_BREAKOUT if is_tight else BRK_EXTENDED
+        if r["_brk_dn"]:
+            return BRK_BOUNCE
+        return BRK_COILING if is_tight else BRK_NONE
+
+    df["breakout"] = [
+        _breakout(r, bool(t)) for r, (_, t) in zip(
+            df.to_dict("records"), tight.items())
+    ]
+    df = df.drop(columns=["_brk_up", "_brk_dn"])
     return df.reset_index(drop=True)
+
+
+def _mtf_fields(g_full: pd.DataFrame) -> dict:
+    """Daily × Weekly overlay for one stock from its fuller OHLC series.
+
+    Returns the alignment class, weekly-trend label, breakout RAW flags (final
+    breakout label is set cross-sectionally by the caller), range position, and the
+    20d ATR% used for the cross-sectional consolidation cut. All info is ≤ as_of
+    (the last row is the as-of bar) — no lookahead.
+    """
+    c = g_full["c"].to_numpy(float)
+    h = g_full["h"].to_numpy(float)
+    l = g_full["l"].to_numpy(float)
+    n = len(c)
+
+    # Daily direction (mildly contrarian ALONE — used only as the alignment leg).
+    d_dir = 0
+    if n > _D_MOM_WIN and c[-1 - _D_MOM_WIN] > 0:
+        d_ret = c[-1] / c[-1 - _D_MOM_WIN] - 1.0
+        d_dir = 1 if d_ret > 0 else (-1 if d_ret < 0 else 0)
+
+    # Weekly structure via EMA20/EMA50 of daily close (the "real picture" leg).
+    s = pd.Series(c)
+    ema_s = s.ewm(span=20, adjust=False).mean().iloc[-1]
+    ema_l = s.ewm(span=50, adjust=False).mean().iloc[-1]
+    w_dir = 1 if ema_s > ema_l else (-1 if ema_s < ema_l else 0)
+    w_trend = "↑ up" if w_dir > 0 else ("↓ down" if w_dir < 0 else "→ flat")
+
+    if d_dir > 0 and w_dir > 0:
+        align = MTF_CONFIRM_UP
+    elif d_dir > 0 and w_dir < 0:
+        align = MTF_FALSE_POP
+    elif d_dir < 0 and w_dir > 0:
+        align = MTF_PULLBACK
+    elif d_dir < 0 and w_dir < 0:
+        align = MTF_DOWN_ALGN
+    else:
+        align = MTF_NEUTRAL
+
+    # Breakout raw flags — close clears the PRIOR 20d Donchian (excl. today) by ≥1%.
+    brk_up = brk_dn = False
+    if n > _DON_WIN:
+        prior_hi = float(np.max(h[-1 - _DON_WIN:-1]))
+        prior_lo = float(np.min(l[-1 - _DON_WIN:-1]))
+        brk_up = c[-1] > prior_hi * (1.0 + _BRK_MARGIN)
+        brk_dn = c[-1] < prior_lo * (1.0 - _BRK_MARGIN)
+
+    # Range position over the weekly window (0 = at support, 1 = at resistance) —
+    # CONTEXT only (no forward edge), shown to locate the bar, not to trade it.
+    win = min(_W_MOM_WIN, n)
+    rp_hi = float(np.max(h[-win:])); rp_lo = float(np.min(l[-win:]))
+    range_pos = float((c[-1] - rp_lo) / (rp_hi - rp_lo)) if rp_hi > rp_lo else 0.5
+
+    # 20d ATR% for the cross-sectional consolidation cut.
+    w20 = min(_DON_WIN, n)
+    rng = h[-w20:] - l[-w20:]
+    cc = c[-w20:]
+    atr20_pct = float(np.nanmean(np.where(cc > 0, rng / cc * 100, np.nan)))
+
+    return {
+        "mtf_align": align,
+        "w_trend":   w_trend,
+        "range_pos": range_pos,
+        "atr20_pct": atr20_pct,
+        "_brk_up":   bool(brk_up),
+        "_brk_dn":   bool(brk_dn),
+    }
