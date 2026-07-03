@@ -35,12 +35,24 @@ panel (scripts/backtest_mtf_price_action.py; relative-to-universe forward return
      52.8% fwd-10d vs weekly-DOWN 46.6% — the daily pop is "false" when the weekly
      structure disagrees. mtf_align encodes the 4 quadrants (D-dir × weekly EMA20/50).
   C. BREAKOUT-from-consolidation is the standout edge: close breaks the 20d Donchian
-     high by >1% out of a prior tight (cross-sectional bottom-third ATR) base →
-     +1.86%/10d relative, t=+3.2 over 61 dates, MC p=0.996, STABLE both halves
-     (H1 +2.5%/60% win, H2 +1.4%/55%). Weekly-up alignment sharpens it further.
-  D. DOWN-breakdowns do NOT follow through — they bounce (fwd +0.9%/10d, win 54%);
-     flagged as bounce-watch, never a short. Support/resistance PROXIMITY = no edge
-     (IC≈0) — carried as context only, never as a call.
+     high by >1% out of a prior tight (cross-sectional bottom-third ATR) base. On the
+     BROAD DCM universe (small+mid+large) this is strong and NOT an overlap artifact —
+     NON-overlapping (step=horizon) it is +3.99%/10d relative, t=+5.85, win 62% (n=28
+     clean periods); the consolidation filter is ESSENTIAL (plain breakout t≈1.9,
+     win<50%). Weekly-up alignment sharpens it.
+     CAVEATS (4yr OOS audit, 211-name F&O daily 2022–2026, scripts/audit_mtf_price_action_oos.py):
+       • UNIVERSE-DEPENDENT — a broad / small-mid-cap effect. On LARGE-CAPS ONLY it is
+         weak (t≈1.4); big-cap breakouts are more efficiently priced.
+       • BULL-CONCENTRATED — BULL win ~58%, CHOP ~43%, BEAR too thin to fire. Breakouts
+         fail outside an uptrend; the DCM window is all-bull so in-sample flatters it.
+         Expect decay in chop/bear (same regime risk as the sector-momentum edge).
+       • Cost-sensitive on large-caps (~0.3% round-trip eats ~40% there); the broad
+         universe (+3.99%/10d) has ample cushion.
+  D. DOWN-breakdowns do NOT follow through — they bounce (OOS fwd −0.4%/10d, t−0.7,
+     win 54% UP); flagged as bounce-watch, never a short (validated out-of-window).
+     Support/resistance PROXIMITY = no edge (IC≈0) — context only, never a call.
+     The ALIGNMENT gate is the most robust piece — the weekly-up vs weekly-down win
+     spread holds OUT-OF-WINDOW on the independent 4yr F&O panel (+4.0pp OOS).
 
 Public entry point:
   get_price_action(as_of_date, lookback_days=60, min_turnover_lacs) -> DataFrame,

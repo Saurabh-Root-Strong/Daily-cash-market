@@ -2772,22 +2772,27 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                  "(ATR% ≥ 4.5) — outsized intraday swings.",
         )
     # ── Multi-timeframe (Daily × Weekly) setup filter ──────────────────────────
-    # Validated walk-forward (scripts/backtest_mtf_price_action.py): the daily pop is
-    # a weak FADE alone; what pays is a breakout FROM a tight base (+1.86%/10d,
-    # t=3.2, MC p=0.996) and daily/weekly ALIGNMENT (52.8% vs 46.6% win when weekly
-    # agrees). These filters surface exactly those setups.
+    # Validated (scripts/backtest_mtf_price_action.py + 4yr OOS audit
+    # scripts/audit_mtf_price_action_oos.py): on the BROAD universe a breakout FROM a
+    # tight base is strong and NOT an overlap artifact (non-overlapping +3.99%/10d,
+    # t=5.85, win 62%); the daily pop alone is a weak fade, rescued by weekly ALIGNMENT
+    # (spread holds +4pp OUT-OF-WINDOW). CAVEATS: broad/small-mid-cap effect (weak on
+    # large-caps), BULL-concentrated (fails in chop/bear). Honest, not a per-pick oracle.
     _scol1, _scol2 = st.columns([1, 1])
     with _scol1:
         pa_setups = st.multiselect(
             "🚀 Multi-timeframe setup — filters the per-stock lists below",
             list(BRK_STATES[:-1]), default=[], key="rotation_stock_pa_setup",
             help=(
-                "Daily × Weekly price-action state (validated on 371 days). Empty = no filter.\n\n"
+                "Daily × Weekly price-action state (validated on the broad universe + a "
+                "4-yr out-of-window audit). Empty = no filter.\n\n"
                 "• 🚀 Breakout — close >1% over the 20d high FROM a tight base → the ONE "
-                "validated edge (+1.9%/10d rel, t=3.2, holds both halves)\n"
+                "validated edge (broad-universe +3.99%/10d rel, non-overlapping t=5.85, "
+                "win 62%). CAVEAT: a small/mid-cap + BULL-tape effect — weak on large-caps "
+                "and in chop/bear.\n"
                 "• ↗ Break (extended) — broke out with no prior coil → weaker follow-through\n"
                 "• 💥 Breakdown-bounce — broke the 20d low, but such names BOUNCE here → "
-                "watch for a reversal, NOT a short\n"
+                "watch for a reversal, NOT a short (validated out-of-window)\n"
                 "• 🧊 Coiling — tight base, no break yet → the breakout watchlist"
             ),
         )
