@@ -2809,6 +2809,35 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 "• 🔻 Down-trend — both lower (aligned down)\n\nEmpty = no filter."
             ),
         )
+    # ── Live regime gate on the breakout edge ──────────────────────────────────
+    # The 4yr OOS audit showed the breakout edge is BULL-CONCENTRATED (win ~58% in
+    # bull vs ~43% in chop, dead in bear). Rather than bury that in a tooltip, state
+    # it against TODAY'S regime so a 🚀 is trusted only in the tape where it works.
+    _rg_label = str(regime.get("regime", "—")) if isinstance(regime, dict) else "—"
+    _rg_up = _rg_label in ("BULL", "CAUTIOUS BULL")
+    _rg_mid = _rg_label == "SIDEWAYS"
+    if _rg_up:
+        _bo_state, _bo_col, _bo_msg = (
+            "ACTIVE", "#26a69a",
+            f"Nifty regime **{_rg_label}** — the breakout edge's home tape "
+            "(backtest win ~58% in bull). Trust the 🚀 setups here.")
+    elif _rg_mid:
+        _bo_state, _bo_col, _bo_msg = (
+            "MUTED", "#ff9100",
+            f"Nifty regime **{_rg_label}** — breakouts are weak in chop "
+            "(backtest win ~43%). Treat 🚀 as a watchlist, not a trigger.")
+    else:
+        _bo_state, _bo_col, _bo_msg = (
+            "OFF", "#ef5350",
+            f"Nifty regime **{_rg_label}** — breakouts fail outside an uptrend "
+            "(too few even fire in bear). Stand aside on 🚀 until the tape turns.")
+    st.markdown(
+        f"<div style='background:rgba(120,120,120,0.10);border-left:3px solid {_bo_col};"
+        f"padding:5px 10px;border-radius:0 4px 4px 0;margin:2px 0 8px;font-size:12px'>"
+        f"🚀 <b>Breakout edge: <span style='color:{_bo_col}'>{_bo_state}</span></b> — {_bo_msg}"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
     try:
         _pa_df = cached_price_action(selected_date, 60, min_turnover)
     except Exception as _pe:
