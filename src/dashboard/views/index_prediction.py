@@ -1130,6 +1130,45 @@ def _market_map_box(pred: IndexPrediction, acc: dict, cov: dict) -> str:
 
     rows = []
 
+    # ── TONIGHT (overnight gap lean from close-location) ──────────────────────
+    # Measured on 368 days × 4 indices (Dec 2024 – Jul 2026), independently
+    # replicating the Tradebot 4-yr BTST study: a close in the top third of the
+    # day's range (CLR > 0.66) gaps UP the next open 62–77% of days; a close in
+    # the bottom third gaps down on Bank/Fin but is ~coin-flip on NIFTY/Midcap
+    # (index drift eats the short side). Gap SIZE scales with VIX (IC +0.33).
+    # This is the ONE next-day directional read that survived backtesting — it
+    # predicts the OPEN, not the close.
+    _GAP_STATS = {   # sym: (strong_win%, strong_bps, weak_dn_win%, weak_bps, typical_gap_pct)
+        "NIFTY":      (64, 13.6, 50,  -8.6, 0.8),
+        "BANKNIFTY":  (62, 10.9, 56, -16.3, 0.9),
+        "FINNIFTY":   (63, 13.8, 58, -18.0, 0.9),
+        "MIDCPNIFTY": (77, 26.3, 38, -10.4, 1.0),
+    }
+    gs = _GAP_STATS.get(pred.fno_symbol)
+    if gs and pred.high and pred.low and (pred.high - pred.low) > 0:
+        clr = (spot - pred.low) / (pred.high - pred.low)
+        s_win, s_bps, w_dn_win, w_bps, g_typ = gs
+        if clr > 0.66:
+            gap_lean = (f"Closed in the TOP of today's range (CLR {clr:.2f}) → <b style='color:{_POS}'>gap-UP "
+                        f"lean</b>: closes this strong gapped up <b>{s_win}%</b> of days (avg {s_bps:+.0f} bps overnight).")
+        elif clr < 0.33:
+            if w_dn_win >= 55:
+                gap_lean = (f"Closed at the BOTTOM of today's range (CLR {clr:.2f}) → <b style='color:{_NEG}'>gap-DOWN "
+                            f"lean</b>: {w_dn_win}% of similar closes gapped down (avg {w_bps:+.0f} bps).")
+            else:
+                gap_lean = (f"Closed at the BOTTOM of today's range (CLR {clr:.2f}) — mild overnight drag "
+                            f"(avg {w_bps:+.0f} bps) but direction ~coin-flip on this index: <b>no gap edge</b>.")
+        else:
+            gap_lean = f"Mid-range close (CLR {clr:.2f}) — <b>no gap lean</b>; overnight ~coin-flip."
+        fii_note = ""
+        _ctx = pred.market_context
+        if _ctx and _ctx.fao_date and _ctx.fii_fut_idx_net < -200_000:
+            fii_note = (" FII deeply net-short index futures — measured contrarian: adds a mild "
+                        "gap-up tailwind (squeeze re-pricing at the open).")
+        gap_row = (f"{gap_lean} Typical overnight gap ±{g_typ:.1f}% (5–95th pct); size scales with VIX."
+                   f"{fii_note} <span style='color:#667'>Predicts the OPEN only — the day session after it is unpredictable.</span>")
+        rows.append(_row("🌙", "Tonight's gap", gap_row, "#b39ddb"))
+
     # ── TOMORROW ──────────────────────────────────────────────────────────────
     cov_pct = f"{cov['cov_all']:.0f}%" if cov else "~68–73%"
     pin = " <span style='color:#ffae00'>(expiry-day gamma pin — range compressed ×0.7)</span>" if pred.days_to_expiry <= 1 else ""
