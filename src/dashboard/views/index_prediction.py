@@ -1104,6 +1104,109 @@ def _thin_chain_banner(pred: IndexPrediction) -> str:
     )
 
 
+def _market_map_box(pred: IndexPrediction, acc: dict, cov: dict) -> str:
+    """One-glance plain-language plan: tomorrow / this week / this month.
+
+    Design rule (from the product-reliability backtest on 1,560 logged predictions):
+    LEAD with the calibrated zone products — 1σ range 72.8% coverage, sideways band
+    33.6% vs ~31% theory, weekly settle band ~68% — and state plainly that the point
+    products (direction arrow 45% hit, point target skill −5.6% vs no-change, max-pain
+    pull 47.6%) do NOT predict. Every number here is a measured product; nothing on
+    this block implies precision the data doesn't support.
+    """
+    if pred.range_low is None or pred.range_high is None or not pred.spot_close:
+        return ""
+    spot  = pred.spot_close
+    band  = pred.sideways_band_pts or 0
+    lo, hi = pred.range_low, pred.range_high
+    em    = pred.expected_move_pts or 0
+
+    # ── row builder (single-line strings only — indented HTML breaks CommonMark) ──
+    def _row(icon: str, title: str, body: str, color: str = "#ccc") -> str:
+        return (f"<div style='display:flex;gap:10px;padding:7px 0;border-bottom:1px solid #222'>"
+                f"<div style='flex:0 0 118px;color:{color};font-weight:700;font-size:0.78em;"
+                f"text-transform:uppercase;letter-spacing:0.5px;padding-top:1px'>{icon} {title}</div>"
+                f"<div style='flex:1;color:#ccc;font-size:0.86em;line-height:1.55'>{body}</div></div>")
+
+    rows = []
+
+    # ── TOMORROW ──────────────────────────────────────────────────────────────
+    cov_pct = f"{cov['cov_all']:.0f}%" if cov else "~68–73%"
+    pin = " <span style='color:#ffae00'>(expiry-day gamma pin — range compressed ×0.7)</span>" if pred.days_to_expiry <= 1 else ""
+    tomorrow = (
+        f"Closes <b style='color:#fff'>{lo:,.0f} – {hi:,.0f}</b> about <b>{cov_pct}</b> of the time{pin}. "
+        f"Inside <b style='color:#fff'>±{band:,.0f} pts</b> ({spot-band:,.0f}–{spot+band:,.0f}) = noise — "
+        f"~1 day in 3 ends there, <b>no trade has edge inside it</b>."
+    )
+    rows.append(_row("📍", "Tomorrow", tomorrow, "#40c4ff"))
+
+    # ── IF THE RANGE BREAKS ───────────────────────────────────────────────────
+    if pred.breakout_up_start is not None and pred.breakout_dn_end is not None:
+        breaks = (
+            f"Above <b style='color:{_POS}'>{pred.breakout_up_start:,.0f}</b> → next zone "
+            f"{pred.breakout_up_start:,.0f}–{pred.breakout_up_end:,.0f}. "
+            f"Below <b style='color:{_NEG}'>{pred.breakout_dn_end:,.0f}</b> → "
+            f"{pred.breakout_dn_start:,.0f}–{pred.breakout_dn_end:,.0f}. "
+            f"Measured: breaks <b>continue mildly</b> (close above the band → next day up 58%, +11 bps avg) "
+            f"— <b>do not fade a break</b>; most overshoots stay shallow (median 0.4σ ≈ {0.4*em:,.0f} pts)."
+        )
+        rows.append(_row("⚡", "If it breaks", breaks, "#ffd600"))
+
+    # ── THIS WEEK (to expiry) ─────────────────────────────────────────────────
+    if pred.wk_range_low is not None and pred.wk_expiry is not None:
+        wk = (
+            f"Settles <b style='color:#fff'>{pred.wk_range_low:,.0f} – {pred.wk_range_high:,.0f}</b> by "
+            f"{pred.wk_expiry:%d %b} (~68% of expiries) — but price pokes OUTSIDE intraday in ~60% of weeks: "
+            f"a settle zone, <b>not a stop level</b>."
+        )
+        rows.append(_row("📆", f"This week ({pred.wk_dte_cal}d)", wk, "#40c4ff"))
+
+    # ── THIS MONTH ────────────────────────────────────────────────────────────
+    if pred.mn_range_low is not None and pred.mn_expiry is not None:
+        mn = (
+            f"Typical travel <b style='color:#fff'>{pred.mn_range_low:,.0f} – {pred.mn_range_high:,.0f}</b> by "
+            f"{pred.mn_expiry:%d %b}. Runs tight (settles inside only ~57–61%, small sample) — "
+            f"read as a typical-move band, not a boundary."
+        )
+        rows.append(_row("🗓️", f"This month ({pred.mn_dte_cal}d)", mn, "#ffb74d"))
+
+    # ── DIRECTION — the honest line ───────────────────────────────────────────
+    _cs   = pred.composite_score or 0
+    lean  = "bullish" if _cs > 1 else ("bearish" if _cs < -1 else "neutral")
+    sh    = f"{acc['sign_hit']:.0f}%" if acc else "—"
+    mp    = pred.levels.max_pain if pred.levels else None
+    mp_txt = (f" Max pain {mp:,.0f} ({mp-spot:+,.0f} pts) is where option writers sit — measured pull ~48% "
+              f"= coin-flip, <b>not a direction</b>.") if mp else ""
+    direction = (
+        f"No tradeable direction. Engine lean is <b>{lean}</b> ({_cs:+.1f}) but its measured next-day hit-rate is "
+        f"<b style='color:#ff9100'>{sh}</b> — at/below coin-flip. Use the zones above for positioning; "
+        f"treat every exact point level as noise.{mp_txt}"
+    )
+    rows.append(_row("🎯", "Direction?", direction, "#ff9100"))
+
+    # ── HOW TO USE ────────────────────────────────────────────────────────────
+    thin = (" ⚠ Options-chain reads on this index are thin — trust only the volatility zones."
+            if not getattr(pred, "opt_chain_liquid", True) else "")
+    play = (
+        f"Size risk to the zone edges, not to a forecast: structures that profit from staying inside "
+        f"{lo:,.0f}–{hi:,.0f} have the measured odds ({cov_pct}); directional bets do not. "
+        f"A CLOSE beyond the band is new information — reassess, don't fade.{thin}"
+    )
+    rows.append(_row("🧭", "How to use", play, "#69f0ae"))
+
+    body = "".join(rows)
+    return (
+        f"<div style='background:#10151c;border:1px solid #2a4a5a;border-radius:10px;"
+        f"padding:12px 16px;margin-bottom:12px'>"
+        f"<div style='display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px'>"
+        f"<span style='color:#40c4ff;font-weight:700;font-size:0.95em'>🗺️ MARKET MAP — {pred.display_name}</span>"
+        f"<span style='color:#667;font-size:0.72em'>every number = a measured product · from EOD {spot:,.0f} "
+        f"({pred.as_of_date:%d %b})</span></div>"
+        f"{body}"
+        f"</div>"
+    )
+
+
 def _render_verdict(pred: IndexPrediction) -> None:
     dir_color  = pred.direction_color
     conf_color = _CONF_COLOR.get(pred.confidence, "#78909C")
@@ -1120,6 +1223,11 @@ def _render_verdict(pred: IndexPrediction) -> None:
     # as actionable next to a verdict that has not earned it.
     if _acc and _acc["sign_hit"] < 48:
         conf_color = "#ff5252" if _acc["sign_hit"] < 44 else "#ffae00"
+    # The Market Map leads the tab: the calibrated zone products in plain language,
+    # with the point products explicitly demoted. The engine-detail panel follows.
+    _map = _market_map_box(pred, _acc, _cov)
+    if _map:
+        st.markdown(_map, unsafe_allow_html=True)
     # Built by concatenation (no indented triple-quoted template): an optional
     # box returning "" must never leave a whitespace-only line, otherwise
     # CommonMark ends the HTML block early and renders the rest as a code block.
@@ -1825,6 +1933,14 @@ def render(selected_date: date) -> None:
 
     with st.expander("📖 How to read this page", expanded=False):
         st.markdown("""
+**🗺️ Market Map (top of the Verdict tab — start here)** — the one-glance plan, built ONLY from
+products whose accuracy is measured on the live prediction log:
+- **Tomorrow** — the ~68% close zone (measured ~73%) and the ±0.4σ noise band (no edge inside it)
+- **If it breaks** — the next zone; measured: breaks mildly CONTINUE (58% follow-through), never fade a break
+- **This week / this month** — settle-by-expiry zones from the option chain (weekly ~68% validated; monthly runs tight)
+- **Direction?** — the honest line: the engine's next-day arrow has measured hit-rate at/below coin-flip,
+  max pain has no measured pull (~48%) — every exact point level is noise; the zones are the product
+
 **Prediction Cards (top row)** — one card per index (Nifty 50, Bank Nifty, Fin Nifty, Midcap Nifty).
 - **Direction badge** (🟢 UP / 🔴 DOWN / 🟡 SIDEWAYS) — tomorrow's expected move from the index-F&O signal engine (live signal count shown on each card)
 - **Bull/Bear Meter (0–100)** — intuitive conviction scale replacing the raw ±20 score:
@@ -1841,8 +1957,9 @@ def render(selected_date: date) -> None:
     (validated coverage on the live prediction_log: NIFTY ~72% / others 63–70%; a 75% target failed OOS,
     so the band is an honest ~1σ, not 75%). Computed from realized 20-day volatility blended with India VIX
     (forward-looking implied vol), per-index vol-calibrated. Bank Nifty / Midcap ranges are naturally wider.
-  - **Directional Target** — where the engine expects the close, skewed within the range by conviction
-    (composite score). Strong bull → upper end / above; neutral → middle; strong bear → lower end / below.
+  - **Directional Target / Lean** — where the composite would skew the close. MEASURED: the point target
+    predicts tomorrow's close WORSE than assuming "no change" (skill −5.6%, p=0.001) — shown greyed as a
+    lean for context only; the range is the product, never the point.
   - **Sideways Band** — the data-driven ± threshold (40% of the 1σ move). If the predicted move stays
     inside this band → range-bound. Beyond it → genuine directional bias. (Replaces a fixed ±40 pts
     with a volatility-scaled band — wider on high-VIX days, tighter on calm days.)
