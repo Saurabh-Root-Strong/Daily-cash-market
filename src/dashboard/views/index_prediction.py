@@ -1105,144 +1105,153 @@ def _thin_chain_banner(pred: IndexPrediction) -> str:
 
 
 def _market_map_box(pred: IndexPrediction, acc: dict, cov: dict) -> str:
-    """One-glance plain-language plan: tomorrow / this week / this month.
+    """One-glance visual plan: a price LADDER (tomorrow / week / month zones on one
+    axis) plus <=4 short plan lines.
 
-    Design rule (from the product-reliability backtest on 1,560 logged predictions):
-    LEAD with the calibrated zone products — 1σ range 72.8% coverage, sideways band
-    33.6% vs ~31% theory, weekly settle band ~68% — and state plainly that the point
-    products (direction arrow 45% hit, point target skill −5.6% vs no-change, max-pain
-    pull 47.6%) do NOT predict. Every number here is a measured product; nothing on
-    this block implies precision the data doesn't support.
+    Design rule, third iteration: v1 didn't exist (zones buried under noise
+    products), v2 was prose (stats embedded in sentences -> reading burden).
+    A trader reads GEOMETRY: aligned bars on a common price axis show
+    tomorrow/week/month containment at a glance; the numbers appear as ticks,
+    and ALL methodology/stats live in the detail expander. Every zone is a
+    measured product (range 70-76% coverage in every index-year 2022-26;
+    CLR>0.66 gap-up 66-81% positive every year; upside breaks continue 58-63%,
+    downside breaks coin-flip; arrow/point levels measured as noise).
     """
     if pred.range_low is None or pred.range_high is None or not pred.spot_close:
         return ""
-    spot  = pred.spot_close
-    band  = pred.sideways_band_pts or 0
+    spot = pred.spot_close
+    band = pred.sideways_band_pts or 0
     lo, hi = pred.range_low, pred.range_high
-    em    = pred.expected_move_pts or 0
 
-    # ── row builder (single-line strings only — indented HTML breaks CommonMark) ──
-    def _row(icon: str, title: str, body: str, color: str = "#ccc") -> str:
-        return (f"<div style='display:flex;gap:10px;padding:7px 0;border-bottom:1px solid #222'>"
-                f"<div style='flex:0 0 118px;color:{color};font-weight:700;font-size:0.78em;"
-                f"text-transform:uppercase;letter-spacing:0.5px;padding-top:1px'>{icon} {title}</div>"
-                f"<div style='flex:1;color:#ccc;font-size:0.86em;line-height:1.55'>{body}</div></div>")
+    # ── common price axis across all bars ────────────────────────────────────
+    cands = [lo, hi, spot,
+             pred.breakout_dn_start, pred.breakout_up_end,
+             pred.wk_range_low, pred.wk_range_high,
+             pred.mn_range_low, pred.mn_range_high]
+    cands = [c for c in cands if c]
+    ax_lo, ax_hi = min(cands), max(cands)
+    pad = (ax_hi - ax_lo) * 0.015 or 1.0
+    ax_lo, ax_hi = ax_lo - pad, ax_hi + pad
 
-    rows = []
+    def _pos(p: float) -> float:
+        return max(0.0, min(100.0, (p - ax_lo) / (ax_hi - ax_lo) * 100.0))
 
-    # ── TONIGHT (overnight gap lean from close-location) ──────────────────────
-    # Measured over 4 YEARS (May 2022 – Jul 2026, ~950 days/index, positive EVERY
-    # year incl. the 2022 bear): a close in the top third of the day's range
-    # (CLR > 0.66) gaps UP the next open — the only gap read that is stable.
-    # A WEAK close has NO reliable gap-down edge over 4 years (down-win 36–52%;
-    # the 2026 window briefly showed one on Bank/Fin — regime artifact, not
-    # structure; index drift eats the short side). Gap SIZE scales with VIX
-    # (IC +0.33). Predicts the OPEN, not the close.
-    _GAP_STATS = {   # sym: (strong_win%, strong_bps, weak_avg_bps, typical_gap_pct) — 4yr
-        "NIFTY":      (70, 16.0, -1.7, 0.8),
-        "BANKNIFTY":  (66, 15.9, -6.6, 0.9),
-        "FINNIFTY":   (66, 16.5, -8.7, 0.9),
-        "MIDCPNIFTY": (81, 27.8, +2.8, 1.0),
-    }
+    def _seg(a: float, b: float, color: str, tip: str) -> str:
+        l, w = _pos(a), max(0.3, _pos(b) - _pos(a))
+        return (f"<div title='{tip}' style='position:absolute;left:{l:.2f}%;width:{w:.2f}%;"
+                f"top:0;bottom:0;background:{color}'></div>")
+
+    def _tick(p: float, color: str = "#fff", w: int = 2) -> str:
+        return (f"<div style='position:absolute;left:{_pos(p):.2f}%;top:-2px;bottom:-2px;"
+                f"width:{w}px;background:{color};transform:translateX(-50%)'></div>")
+
+    def _lbl(p: float, txt: str, color: str = "#8aa", above: bool = False) -> str:
+        vert = "bottom:100%;padding-bottom:2px" if above else "top:100%;padding-top:2px"
+        return (f"<div style='position:absolute;left:{_pos(p):.2f}%;{vert};"
+                f"transform:translateX(-50%);font-size:0.66em;color:{color};white-space:nowrap'>{txt}</div>")
+
+    def _bar(label: str, label_color: str, inner: str, h: int = 22, mt: int = 18, mb: int = 16) -> str:
+        return (f"<div style='display:flex;align-items:center;gap:10px;margin:{mt}px 0 {mb}px'>"
+                f"<div style='flex:0 0 96px;text-align:right;color:{label_color};font-size:0.72em;"
+                f"font-weight:700;text-transform:uppercase;letter-spacing:0.5px'>{label}</div>"
+                f"<div style='flex:1;position:relative;height:{h}px;background:#151a20;"
+                f"border-radius:4px'>{inner}</div></div>")
+
+    bars = []
+
+    # ── TOMORROW bar: extensions | 1σ range | no-trade core ──────────────────
+    t_parts = []
+    if pred.breakout_dn_start:
+        t_parts.append(_seg(pred.breakout_dn_start, lo, "#3a2020",
+                            "downside extension — measured: coin-flip, no follow-through"))
+    t_parts.append(_seg(lo, spot - band, "#1c3a4d", "~68% close zone (measured 70-76% every year)"))
+    t_parts.append(_seg(spot - band, spot + band, "#3d4450",
+                        "no-trade band — 1 day in 3 ends here, no edge inside"))
+    t_parts.append(_seg(spot + band, hi, "#1c3a4d", "~68% close zone"))
+    if pred.breakout_up_end:
+        t_parts.append(_seg(hi, pred.breakout_up_end, "#1d3a26",
+                            "upside extension — breaks continue 58-63%, don't fade"))
+    t_parts.append(_tick(spot, "#ffffff", 2))
+    t_parts.append(_lbl(spot, f"<b style='color:#fff'>{spot:,.0f}</b>", above=True))
+    t_parts.append(_lbl(lo, f"{lo:,.0f}", "#7fb3d1"))
+    t_parts.append(_lbl(hi, f"{hi:,.0f}", "#7fb3d1"))
+    if pred.breakout_dn_start:
+        t_parts.append(_lbl(pred.breakout_dn_start, f"{pred.breakout_dn_start:,.0f}", "#b36b6b"))
+    if pred.breakout_up_end:
+        t_parts.append(_lbl(pred.breakout_up_end, f"{pred.breakout_up_end:,.0f}", "#6bb37f"))
+    if pred.breakout_up_start:
+        t_parts.append(_tick(pred.breakout_up_start, "#69f0ae", 1))
+        t_parts.append(_lbl(pred.breakout_up_start, f"break&gt;{pred.breakout_up_start:,.0f}", "#69f0ae", above=True))
+    if pred.breakout_dn_end:
+        t_parts.append(_tick(pred.breakout_dn_end, "#ff5252", 1))
+        t_parts.append(_lbl(pred.breakout_dn_end, f"break&lt;{pred.breakout_dn_end:,.0f}", "#ff5252", above=True))
+    bars.append(_bar("Tomorrow", "#40c4ff", "".join(t_parts), h=24, mt=22))
+
+    # ── WEEK bar ──────────────────────────────────────────────────────────────
+    if pred.wk_range_low is not None and pred.wk_range_high is not None:
+        w_parts = [_seg(pred.wk_range_low, pred.wk_range_high, "#173a4d",
+                        "settle-by-expiry zone (~68% of expiries); intraday pokes outside in ~60% of weeks")]
+        w_parts.append(_tick(spot, "#ffffff", 2))
+        w_parts.append(_lbl(pred.wk_range_low, f"{pred.wk_range_low:,.0f}", "#7fb3d1"))
+        w_parts.append(_lbl(pred.wk_range_high, f"{pred.wk_range_high:,.0f}", "#7fb3d1"))
+        wk_lbl = f"Week → {pred.wk_expiry:%d %b}" if pred.wk_expiry else "Week"
+        bars.append(_bar(wk_lbl, "#40c4ff", "".join(w_parts), h=14, mt=6))
+
+    # ── MONTH bar (NIFTY only) ────────────────────────────────────────────────
+    if pred.mn_range_low is not None and pred.mn_range_high is not None:
+        m_parts = [_seg(pred.mn_range_low, pred.mn_range_high, "#4a3a1e",
+                        "typical travel to the monthly expiry (runs tight ~57-61%, small sample)")]
+        m_parts.append(_tick(spot, "#ffffff", 2))
+        m_parts.append(_lbl(pred.mn_range_low, f"{pred.mn_range_low:,.0f}", "#c9a86b"))
+        m_parts.append(_lbl(pred.mn_range_high, f"{pred.mn_range_high:,.0f}", "#c9a86b"))
+        mn_lbl = f"Month → {pred.mn_expiry:%d %b}" if pred.mn_expiry else "Month"
+        bars.append(_bar(mn_lbl, "#ffb74d", "".join(m_parts), h=14, mt=6))
+
+    # ── plan lines (max 4, short) ─────────────────────────────────────────────
+    _GAP_STATS = {"NIFTY": (70, 16.0, 0.8), "BANKNIFTY": (66, 15.9, 0.9),
+                  "FINNIFTY": (66, 16.5, 0.9), "MIDCPNIFTY": (81, 27.8, 1.0)}
+    plan = []
     gs = _GAP_STATS.get(pred.fno_symbol)
     if gs and pred.high and pred.low and (pred.high - pred.low) > 0:
         clr = (spot - pred.low) / (pred.high - pred.low)
-        s_win, s_bps, w_bps, g_typ = gs
+        s_win, s_bps, g_typ = gs
         if clr > 0.66:
-            gap_lean = (f"Closed in the TOP of today's range (CLR {clr:.2f}) → <b style='color:{_POS}'>gap-UP "
-                        f"lean</b>: closes this strong gapped up <b>{s_win}%</b> of days over 4 years "
-                        f"(avg {s_bps:+.0f} bps overnight, positive every year 2022–26).")
+            gap_chip = (f"<b style='color:{_POS}'>gap-UP lean</b> — strong close; {s_win}% gapped up "
+                        f"(4 yrs, positive every year)")
         elif clr < 0.33:
-            gap_lean = (f"Closed at the BOTTOM of today's range (CLR {clr:.2f}) — mild overnight drag only "
-                        f"(4-yr avg {w_bps:+.0f} bps): <b>no reliable gap-down edge</b>; the short side is "
-                        f"eaten by index drift.")
+            gap_chip = "<b style='color:#aaa'>no gap edge</b> — weak close (short side has no 4-yr edge)"
         else:
-            gap_lean = f"Mid-range close (CLR {clr:.2f}) — <b>no gap lean</b>; overnight ~coin-flip."
-        fii_note = ""
+            gap_chip = "<b style='color:#aaa'>no gap lean</b> — mid-range close"
+        fii_tail = ""
         _ctx = pred.market_context
         if _ctx and _ctx.fao_date and _ctx.fii_fut_idx_net < -200_000:
-            fii_note = (" FII deeply net-short index futures — measured contrarian: adds a mild "
-                        "gap-up tailwind (squeeze re-pricing at the open).")
-        gap_row = (f"{gap_lean} Typical overnight gap ±{g_typ:.1f}% (5–95th pct); size scales with VIX."
-                   f"{fii_note} <span style='color:#667'>Predicts the OPEN only — the day session after it is unpredictable.</span>")
-        rows.append(_row("🌙", "Tonight's gap", gap_row, "#b39ddb"))
+            fii_tail = " · FII deep short = mild gap-up tailwind"
+        plan.append(("🌙", f"Tonight: {gap_chip} · typical gap ±{g_typ:.1f}%{fii_tail}"))
+    plan.append(("🧭", f"Plan: no trade inside <b style='color:#ccc'>{spot-band:,.0f}–{spot+band:,.0f}</b> · "
+                       f"upside break may run (58–63%) · downside break / weak close = <b>stand aside</b>, coin-flip"))
+    _sh = f"{acc['sign_hit']:.0f}%" if acc else "sub-50%"
+    _mp_txt = f" (incl. max pain {pred.levels.max_pain:,.0f})" if (pred.levels and pred.levels.max_pain) else ""
+    plan.append(("🎯", f"Direction: <b>none tradeable</b> (arrow measured {_sh}) — exact point levels{_mp_txt} = noise"))
+    if not getattr(pred, "opt_chain_liquid", True):
+        plan.append(("⚠️", "Thin options chain — trust only the volatility zones on this index"))
+    plan_html = "".join(
+        f"<div style='display:flex;gap:8px;padding:3px 0;color:#bbb;font-size:0.84em'>"
+        f"<span style='flex:0 0 20px;text-align:center'>{ic}</span><span>{tx}</span></div>"
+        for ic, tx in plan)
 
-    # ── TOMORROW ──────────────────────────────────────────────────────────────
-    cov_pct = f"{cov['cov_all']:.0f}%" if cov else "~68–73%"
-    pin = " <span style='color:#ffae00'>(expiry-day gamma pin — range compressed ×0.7)</span>" if pred.days_to_expiry <= 1 else ""
-    tomorrow = (
-        f"Closes <b style='color:#fff'>{lo:,.0f} – {hi:,.0f}</b> about <b>{cov_pct}</b> of the time{pin}. "
-        f"Inside <b style='color:#fff'>±{band:,.0f} pts</b> ({spot-band:,.0f}–{spot+band:,.0f}) = noise — "
-        f"~1 day in 3 ends there, <b>no trade has edge inside it</b>."
-    )
-    rows.append(_row("📍", "Tomorrow", tomorrow, "#40c4ff"))
-
-    # ── IF THE RANGE BREAKS ───────────────────────────────────────────────────
-    if pred.breakout_up_start is not None and pred.breakout_dn_end is not None:
-        breaks = (
-            f"Above <b style='color:{_POS}'>{pred.breakout_up_start:,.0f}</b> → next zone "
-            f"{pred.breakout_up_start:,.0f}–{pred.breakout_up_end:,.0f}. "
-            f"Below <b style='color:{_NEG}'>{pred.breakout_dn_end:,.0f}</b> → "
-            f"{pred.breakout_dn_start:,.0f}–{pred.breakout_dn_end:,.0f}. "
-            f"Measured over 4 yrs: <b>UPSIDE breaks continue</b> (next day up 58–63%, +7 to +13 bps) — don't "
-            f"fade them; <b>DOWNSIDE breaks are ~coin-flip</b> (no follow-through, no fade edge either). "
-            f"Most overshoots stay shallow (median 0.4σ ≈ {0.4*em:,.0f} pts)."
-        )
-        rows.append(_row("⚡", "If it breaks", breaks, "#ffd600"))
-
-    # ── THIS WEEK (to expiry) ─────────────────────────────────────────────────
-    if pred.wk_range_low is not None and pred.wk_expiry is not None:
-        wk = (
-            f"Settles <b style='color:#fff'>{pred.wk_range_low:,.0f} – {pred.wk_range_high:,.0f}</b> by "
-            f"{pred.wk_expiry:%d %b} (~68% of expiries) — but price pokes OUTSIDE intraday in ~60% of weeks: "
-            f"a settle zone, <b>not a stop level</b>."
-        )
-        rows.append(_row("📆", f"This week ({pred.wk_dte_cal}d)", wk, "#40c4ff"))
-
-    # ── THIS MONTH ────────────────────────────────────────────────────────────
-    if pred.mn_range_low is not None and pred.mn_expiry is not None:
-        mn = (
-            f"Typical travel <b style='color:#fff'>{pred.mn_range_low:,.0f} – {pred.mn_range_high:,.0f}</b> by "
-            f"{pred.mn_expiry:%d %b}. Runs tight (settles inside only ~57–61%, small sample) — "
-            f"read as a typical-move band, not a boundary."
-        )
-        rows.append(_row("🗓️", f"This month ({pred.mn_dte_cal}d)", mn, "#ffb74d"))
-
-    # ── DIRECTION — the honest line ───────────────────────────────────────────
-    _cs   = pred.composite_score or 0
-    lean  = "bullish" if _cs > 1 else ("bearish" if _cs < -1 else "neutral")
-    sh    = f"{acc['sign_hit']:.0f}%" if acc else "—"
-    mp    = pred.levels.max_pain if pred.levels else None
-    mp_txt = (f" Max pain {mp:,.0f} ({mp-spot:+,.0f} pts) is where option writers sit — measured pull ~48% "
-              f"= coin-flip, <b>not a direction</b>.") if mp else ""
-    direction = (
-        f"No tradeable direction. Engine lean is <b>{lean}</b> ({_cs:+.1f}) but its measured next-day hit-rate is "
-        f"<b style='color:#ff9100'>{sh}</b> — at/below coin-flip. Use the zones above for positioning; "
-        f"treat every exact point level as noise.{mp_txt}"
-    )
-    rows.append(_row("🎯", "Direction?", direction, "#ff9100"))
-
-    # ── HOW TO USE ────────────────────────────────────────────────────────────
-    thin = (" ⚠ Options-chain reads on this index are thin — trust only the volatility zones."
-            if not getattr(pred, "opt_chain_liquid", True) else "")
-    play = (
-        f"Size risk to the zone edges, not to a forecast: structures that profit from staying inside "
-        f"{lo:,.0f}–{hi:,.0f} have the measured odds ({cov_pct}); directional bets do not. "
-        f"A CLOSE beyond the band is new information — reassess, don't fade.{thin}"
-    )
-    rows.append(_row("🧭", "How to use", play, "#69f0ae"))
-
-    body = "".join(rows)
+    cov_pct = f"{cov['cov_all']:.0f}%" if cov else "70–76%"
     return (
         f"<div style='background:#10151c;border:1px solid #2a4a5a;border-radius:10px;"
-        f"padding:12px 16px;margin-bottom:12px'>"
-        f"<div style='display:flex;justify-content:space-between;align-items:baseline;margin-bottom:4px'>"
+        f"padding:12px 16px 8px;margin-bottom:12px'>"
+        f"<div style='display:flex;justify-content:space-between;align-items:baseline'>"
         f"<span style='color:#40c4ff;font-weight:700;font-size:0.95em'>🗺️ MARKET MAP — {pred.display_name}</span>"
-        f"<span style='color:#667;font-size:0.72em'>every number = a measured product · from EOD {spot:,.0f} "
-        f"({pred.as_of_date:%d %b})</span></div>"
-        f"{body}"
+        f"<span style='color:#667;font-size:0.72em'>from EOD {spot:,.0f} ({pred.as_of_date:%d %b}) · "
+        f"blue zone holds the close {cov_pct} of days · grey = no-trade</span></div>"
+        f"{''.join(bars)}"
+        f"<div style='border-top:1px solid #223;margin-top:4px;padding-top:6px'>{plan_html}</div>"
         f"</div>"
     )
+
 
 
 def _render_verdict(pred: IndexPrediction) -> None:
