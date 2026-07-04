@@ -823,6 +823,24 @@ def _render_key_levels(pred: IndexPrediction) -> None:
             </div>""", unsafe_allow_html=True,
         )
 
+    # ── Measured level strength (distance-controlled audit, Jul 2026) ────────
+    # A level only "matters" if price reacts to it MORE than to a random point at
+    # the same distance. Rejection-above-baseline, 4yr price levels + 390d OI levels:
+    # pivots +6.1pp (n=1029) · put wall +6.0 · max pain touch +4-5 · round majors
+    # +3-4 · prev-day high +3.6 · prev-day LOW +0.8 (nothing). All are FRICTION
+    # (~45-52% reject on touch — breaks still happen half the time).
+    st.markdown(
+        "<div style='background:#141a14;border-left:3px solid #8bc34a;border-radius:0 6px 6px 0;"
+        "padding:7px 11px;margin-top:10px;font-size:0.8em;color:#bfcdb2'>"
+        "<b style='color:#8bc34a'>⚖ Which levels actually matter (measured):</b> "
+        "multi-touch price pivots <b>+6pp</b> above a same-distance random point · put wall <b>+6pp</b> · "
+        "max pain as a touch-level <b>+4–5pp</b> (friction only — it has NO pull) · big round numbers "
+        "<b>+3–4pp</b> · yesterday's high <b>+3.6pp</b> · yesterday's LOW <b>~0</b> (not a real level). "
+        "Even the best levels reject only ~half of touches — use them to PLACE entries/exits and stack "
+        "confluence (🤝), never as bare fade signals.</div>",
+        unsafe_allow_html=True,
+    )
+
     # ── Nifty 50 multi-expiry panel ───────────────────────────────────────────
     if pred.fno_symbol == "NIFTY" and pred.monthly_expiry is not None:
         st.markdown("---")
