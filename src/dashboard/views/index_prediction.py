@@ -146,11 +146,14 @@ def _expected_move_box(pred: "IndexPrediction", no_edge: bool = False) -> str:
         if mp:
             mp_pts   = mp - spot
             mp_arrow = "↓" if mp_pts < 0 else ("↑" if mp_pts > 0 else "↔")
-            pull     = ("pull strengthens into expiry" if (dte is not None and dte <= 2)
-                        else "weak pull — gravity, not a pin")
-            tgt_label = "Magnet (OI gravity)"
+            # Measured on prediction_log (1,453 days × 4 idx): next-day move toward max
+            # pain only 47.6% (coin-flip), and 42.9% with DTE ≤ 2 (mildly ANTI-pull near
+            # expiry). Max pain is a writer-positioning REFERENCE level, not a target —
+            # never imply a directional pull the data contradicts.
+            tgt_label = "Max Pain (reference)"
             tgt_value = f"<span style='color:{_NEU}'>{mp_arrow} {mp:,.0f}</span>"
-            tgt_sub   = f"{mp_pts:+,.0f} pts · max pain · {pull}"
+            tgt_sub   = (f"{mp_pts:+,.0f} pts · writer positioning level — measured: "
+                         f"NO next-day pull (~48%, coin-flip)")
         else:
             tgt_label = "Directional Target"
             tgt_value = f"<span style='color:{_NEU}'>— none</span>"
@@ -172,13 +175,13 @@ def _expected_move_box(pred: "IndexPrediction", no_edge: bool = False) -> str:
         lean  = "bullish" if _cs > 1 else ("bearish" if _cs < -1 else "flat")
         mp_dir = ""
         if mp:
-            mp_dir = " (pulling down)" if (mp - spot) < 0 else (" (pulling up)" if (mp - spot) > 0 else "")
+            mp_dir = " (below spot)" if (mp - spot) < 0 else (" (above spot)" if (mp - spot) > 0 else "")
         magnitude_verdict = (
             f"<span style='color:{_NEU}'>Range-bound → expect a <b>SWING inside the ±{band:,.0f} pt band</b> "
             f"(up-then-down or down-then-up), not a trend. The mild <b>{lean} lean</b> is only a slight tilt "
-            f"and the <b>magnet</b>{mp_dir} is OI gravity — <b>different axes, not a contradiction</b>; the "
-            f"directional target is <b>0</b>. Trade the band edges; a close beyond ±{band:,.0f} pts flips to "
-            f"the breakout scenarios below.</span>"
+            f"and <b>max pain</b>{mp_dir} is a writer-positioning reference with <b>no measured next-day pull</b> "
+            f"— <b>different axes, not a contradiction</b>; the directional target is <b>0</b>. Trade the band "
+            f"edges; a close beyond ±{band:,.0f} pts flips to the breakout scenarios below.</span>"
         )
     else:
         dir_word = "upside" if tmv > 0 else "downside"
