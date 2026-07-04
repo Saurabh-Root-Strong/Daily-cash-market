@@ -39,7 +39,7 @@ from src.dashboard.cache.queries import (
     cached_forward_tilt,
     cached_sector_defensive,
 )
-from src.analytics.price_action import PA_CLASSES, BRK_STATES, MTF_ALIGN
+from src.analytics.price_action import BRK_STATES, MTF_ALIGN
 from src.dashboard.constants import NEGATIVE_COLOR, POSITIVE_COLOR, PLOT_BG, PAPER_BG, GRID_COLOR
 from src.dashboard.components.charts import hex_to_rgba as _hex_to_rgba  # deduped helper
 
@@ -1043,22 +1043,26 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                     (shown["ltp"] <= max_price)
                 ]
 
-            # ── Price-action character filter ────────────────────────────────
-            # pa_filter = (selected_classes, hide_gappy, hide_high_vol). Stocks
-            # without a computed character (too little history) are dropped only
-            # when a class filter is active — they cannot be verified.
+            # ── Price-action filter ──────────────────────────────────────────
+            # pa_filter = (selected_setups, selected_aligns, hide_risky). Only the
+            # backtest-validated axes filter (setup + alignment); hide_risky is a
+            # single veto dropping gappy OR high-vol names (the two flags overlap
+            # heavily, Cramér's V 0.48 — scripts/audit_rotation_filters.py). The
+            # pa_class character is context-only (a column), no longer a filter —
+            # audited zero incremental selection value on top of these axes.
             if pa_filter and "pa_class" in shown.columns:
-                _pa_cls, _pa_hg, _pa_hv, _pa_setup, _pa_align = pa_filter
-                if _pa_cls:
-                    shown = shown[shown["pa_class"].isin(_pa_cls)]
-                if _pa_hg and "pa_gappy" in shown.columns:
-                    shown = shown[~shown["pa_gappy"].fillna(False).astype(bool)]
-                if _pa_hv and "pa_high_vol" in shown.columns:
-                    shown = shown[~shown["pa_high_vol"].fillna(False).astype(bool)]
+                _pa_setup, _pa_align, _pa_risky = pa_filter
                 if _pa_setup and "breakout" in shown.columns:
                     shown = shown[shown["breakout"].isin(_pa_setup)]
                 if _pa_align and "mtf_align" in shown.columns:
                     shown = shown[shown["mtf_align"].isin(_pa_align)]
+                if _pa_risky:
+                    _risk = pd.Series(False, index=shown.index)
+                    if "pa_gappy" in shown.columns:
+                        _risk |= shown["pa_gappy"].fillna(False).astype(bool)
+                    if "pa_high_vol" in shown.columns:
+                        _risk |= shown["pa_high_vol"].fillna(False).astype(bool)
+                    shown = shown[~_risk]
 
             # ── F&O universe filter — keep only NSE F&O underlyings ─────────────
             # _fno_symbols is the set of stocks with futures/options for this date.
@@ -1117,7 +1121,7 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                     _fno_part = "F&O " + _sep.join(_tags) + _oi_tag
 
             n_hidden = len(stocks) - len(shown)
-            _pa_active = pa_filter and any(pa_filter[:5])
+            _pa_active = pa_filter and any(pa_filter)
             if n_hidden or _fno_part or _fno_only_active or _pa_active:
                 filter_parts = [f"Wtd Deliv % > {deliv_threshold:.0f}%"]
                 if _pa_active:
@@ -1125,13 +1129,9 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                     if pa_filter[0]:
                         _pp.append(" / ".join(pa_filter[0]))
                     if pa_filter[1]:
-                        _pp.append("no gappy")
+                        _pp.append(" / ".join(pa_filter[1]))
                     if pa_filter[2]:
-                        _pp.append("no high-vol")
-                    if len(pa_filter) > 3 and pa_filter[3]:
-                        _pp.append(" / ".join(pa_filter[3]))
-                    if len(pa_filter) > 4 and pa_filter[4]:
-                        _pp.append(" / ".join(pa_filter[4]))
+                        _pp.append("no gappy / high-vol")
                     filter_parts.append("Price action: " + ", ".join(_pp))
                 if _fno_only_active:
                     filter_parts.append("F&O stocks only")
@@ -2736,49 +2736,20 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
 
     fno_filter = fno_filter or None
 
-    # ── Price-Action character filter ─────────────────────────────────────────
-    # Per-stock candle-anatomy + trend-efficiency classifier over the last 60
-    # trading days. Trend efficiency (Kaufman ER) and candle shape are near-
-    # INDEPENDENT in this market, so this is an axis the delivery/RS signals do
-    # NOT capture: it tells you whether a name is a clean directional trend, a
-    # whippy trend, a big-bar whipsaw (stop-hunt risk) or a quiet coil.
-    _pcol1, _pcol2, _pcol3 = st.columns([2, 1, 1])
-    with _pcol1:
-        pa_classes = st.multiselect(
-            "Price Action character — filters the per-stock lists below",
-            list(PA_CLASSES), default=[], key="rotation_stock_pa_class",
-            help=(
-                "Keep only stocks with the chosen 60-day price-action character in the "
-                "drill-down lists. Two independent axes — trend efficiency (net move ÷ "
-                "path length) × bar conviction (body vs wick):\n\n"
-                "• 📈 Clean Trend — high efficiency, decisive bodies, contained vol → "
-                "the most tradable directional names\n"
-                "• 🌊 Volatile Trend — trends but with a wide/whippy path → wider stops\n"
-                "• 🔀 Choppy / Whipsaw — big bars, no net progress → stop-hunt RISK\n"
-                "• 😴 Quiet Range — small bars, coiling → await a breakout\n\n"
-                "Empty = no filter."
-            ),
-        )
-    with _pcol2:
-        pa_hide_gappy = st.checkbox(
-            "⚡ Hide gappy", value=False, key="rotation_stock_pa_gappy",
-            help="Drop stocks that gap (open >1% from prior close) on ≥35% of days — "
-                 "high overnight / event risk.",
-        )
-    with _pcol3:
-        pa_hide_hivol = st.checkbox(
-            "🔥 Hide high-vol", value=False, key="rotation_stock_pa_hivol",
-            help="Drop stocks whose average daily range is in the top quartile "
-                 "(ATR% ≥ 4.5) — outsized intraday swings.",
-        )
-    # ── Multi-timeframe (Daily × Weekly) setup filter ──────────────────────────
-    # Validated (scripts/backtest_mtf_price_action.py + 4yr OOS audit
-    # scripts/audit_mtf_price_action_oos.py): on the BROAD universe a breakout FROM a
-    # tight base is strong and NOT an overlap artifact (non-overlapping +3.99%/10d,
-    # t=5.85, win 62%); the daily pop alone is a weak fade, rescued by weekly ALIGNMENT
-    # (spread holds +4pp OUT-OF-WINDOW). CAVEATS: broad/small-mid-cap effect (weak on
-    # large-caps), BULL-concentrated (fails in chop/bear). Honest, not a per-pick oracle.
-    _scol1, _scol2 = st.columns([1, 1])
+    # ── Price-action filters — only the backtest-validated axes ────────────────
+    # Filter audit (scripts/audit_rotation_filters.py, 124.5k stock-week obs, walk-
+    # forward): of the five original controls only TWO carry forward edge —
+    #   • 🚀 setup (breakout-from-tight-base +1.55%/10d rel, basket t=3.0; also
+    #     backtest_mtf_price_action.py non-overlapping t=5.85 + 4yr OOS audit)
+    #   • 🧭 D×W alignment (ConfirmUp win 53.2% vs FalsePop 46.7%, holds OOS +4pp)
+    # The PA-character multiselect was REMOVED as a filter: within ConfirmUp, Clean
+    # +0.82% vs Quiet +0.83%/10d — zero incremental selection value (it remains a
+    # context COLUMN in the lists). ⚡ gappy and 🔥 high-vol overlap heavily
+    # (Cramér's V 0.48) and are risk vetoes, not selectors (each strongly predicts
+    # its own forward risk: gap-freq 44.7% vs 18.7%, fwd vol 47% vs 31%) — merged
+    # into ONE "hide risky" checkbox. CAVEATS unchanged: breakout edge is broad/
+    # small-mid-cap + BULL-concentrated (regime gate below).
+    _scol1, _scol2, _scol3 = st.columns([2, 2, 1])
     with _scol1:
         pa_setups = st.multiselect(
             "🚀 Multi-timeframe setup — filters the per-stock lists below",
@@ -2808,6 +2779,16 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 "• 🔵 Pullback — daily-down inside a weekly uptrend (dip)\n"
                 "• 🔻 Down-trend — both lower (aligned down)\n\nEmpty = no filter."
             ),
+        )
+    with _scol3:
+        pa_hide_risky = st.checkbox(
+            "🛡️ Hide risky", value=False, key="rotation_stock_pa_risky",
+            help="Drop ⚡ gappy (opens >1% from prior close on ≥35% of days — "
+                 "overnight/event risk) and 🔥 high-vol (avg daily range top "
+                 "quartile, ATR% ≥ 4.5) names. The two flags catch largely the "
+                 "same stocks (audit: Cramér's V 0.48) and each strongly predicts "
+                 "its own FORWARD risk, so they act as one veto. Risk filter, not "
+                 "a return signal.",
         )
     # ── Live regime gate on the breakout edge ──────────────────────────────────
     # The 4yr OOS audit showed the breakout edge is BULL-CONCENTRATED (win ~58% in
@@ -2844,8 +2825,7 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         import logging as _log
         _log.getLogger(__name__).warning("price_action failed (non-fatal): %s", _pe)
         _pa_df = pd.DataFrame()
-    pa_filter = (tuple(pa_classes), bool(pa_hide_gappy), bool(pa_hide_hivol),
-                 tuple(pa_setups), tuple(pa_aligns))
+    pa_filter = (tuple(pa_setups), tuple(pa_aligns), bool(pa_hide_risky))
 
     if _n_thin:
         st.caption(
