@@ -235,10 +235,11 @@ class IndexKeyLevels:
     call_oi_at_top: int = 0
     put_oi_at_top: int = 0
     # Fresh-writing walls: strike with the largest POSITIVE 1-day chg_in_oi above/
-    # below spot. Level-basis shootout (Jul 2026, distance-controlled, 390d×4idx):
-    # fresh put writing rejects +10.1pp above chance — the strongest single-basis
-    # level measured, beating the total-OI wall (+6.0) — writers defend TODAY's
-    # positions harder than stale ones. Fresh call wall +5.9pp.
+    # below spot — TODAY's most-written strikes. Placebo-tested (Jul 2026): their
+    # +10pp/+6pp weak-form rejection is generic near-money STRIKE PINNING (an
+    # adjacent plain strike measures the same; strict 0.15%-margin rejection is
+    # NEGATIVE — closes park ON the strike rather than bounce). Display them as
+    # today's battleground / settle magnets, never as defended walls.
     fresh_call_strike: Optional[float] = None
     fresh_put_strike: Optional[float] = None
 

@@ -832,11 +832,13 @@ def _render_key_levels(pred: IndexPrediction) -> None:
     st.markdown(
         "<div style='background:#141a14;border-left:3px solid #8bc34a;border-radius:0 6px 6px 0;"
         "padding:7px 11px;margin-top:10px;font-size:0.8em;color:#bfcdb2'>"
-        "<b style='color:#8bc34a'>⚖ Which levels actually matter (measured, distance-controlled):</b> "
-        "<b>#1: FRESH PUT WALL (todays new put writing, +10.1pp) and 🤝 confluence — a pivot WITH a call "
-        "wall on it (+10pp, current regime)</b>. Level BASIS shootout: fresh writing (change-in-OI) beats "
-        "stale total OI (+10.1 vs +6.0 support / +5.9 vs +4.7 resistance); volume walls +4.5; futures "
-        "cost-basis dead as resistance. A naked pivot has decayed to ~0 in 2026 (was +6–7pp in 2023–24) — "
+        "<b style='color:#8bc34a'>⚖ Which levels actually matter (measured, distance-controlled, placebo-tested):</b> "
+        "<b>#1: 🤝 confluence — a pivot WITH a call wall on it (+10pp, current regime; needs fresh-year "
+        "revalidation)</b>. RETRACTED after the placebo test: the fresh-writing (change-in-OI) wall's +10pp is "
+        "generic near-money <b>STRIKE PINNING</b> — an adjacent plain strike measures the same, and strict "
+        "rejection (0.15% margin) is NEGATIVE: closes <b>park ON strikes</b>, they do not bounce. So fCW/fPW "
+        "mark todays battleground / settle magnets, not defended walls. Futures cost-basis: dead as resistance. "
+        "A naked pivot has decayed to ~0 in 2026 (was +6–7pp in 2023–24) — "
         "writers now make the level, not the chart alone. Overhead only: the same confluence on the "
         "SUPPORT side adds ~nothing (down moves don't respect structure — yesterday's low is dead too). "
         "A level tested <b>5+ times gets WEAKER</b> (−3pp — each test absorbs the defenders). "
@@ -1290,14 +1292,17 @@ def _market_map_box(pred: IndexPrediction, acc: dict, cov: dict) -> str:
     fp = lv.fresh_put_strike if (lv and chain_ok) else None
     if fc and fc != cw:
         lv_items.append((fc, f"fCW {fc:,.0f}", "#ffab40",
-                         "FRESH CALL WALL — the strike where the most NEW call writing happened today "
-                         "(change in OI, not stale totals). Measured +5.9pp rejection — todays writers "
-                         "defend todays positions.", True))
+                         "TODAYS MOST-WRITTEN CALL STRIKE (change in OI). Honest read after the placebo "
+                         "test: the +6pp rejection here is STRIKE PINNING — an adjacent plain strike "
+                         "measures the same, so fresh writing adds no extra defense. Marks todays "
+                         "battleground, weak-form only: closes PARK at strikes, they do not bounce.", True))
     if fp and fp != pw:
         lv_items.append((fp, f"fPW {fp:,.0f}", "#00e5cc",
-                         "FRESH PUT WALL — the strike with the most NEW put writing today. The strongest "
-                         "single-basis level measured (+10.1pp rejection) and the ONE exception to the "
-                         "floors-are-weak rule: writers defend money committed TODAY.", False))
+                         "TODAYS MOST-WRITTEN PUT STRIKE (change in OI). Placebo-tested: the +10pp weak-form "
+                         "rejection is generic near-money STRIKE PINNING — the adjacent plain strike shows "
+                         "the same, and strict rejection (0.15 pct margin) is NEGATIVE: the close tends to "
+                         "PARK ON the strike, not bounce off it. Use as a pin/settle magnet zone, "
+                         "not a defended floor.", False))
     if mp:
         lv_items.append((mp, f"MP {mp:,.0f}", "#9e9e9e",
                          "MAX PAIN — the strike where option writers lose least. It does NOT pull price "
