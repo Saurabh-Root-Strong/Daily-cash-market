@@ -1270,19 +1270,21 @@ def _market_map_box(pred: IndexPrediction, acc: dict, cov: dict) -> str:
         else:
             lv_items.append((ps, f"P {ps:,.0f} ({ps_t}t)", "#b39ddb",
                              f"Price pivot support ({ps_t} touches). Measured: support levels barely beat chance "
-                             f"(down moves don't respect structure — yesterday's low is dead too). Reference only.", False))
-    if cw and not conf_res:
+                             f"(down moves do not respect structure — the previous low is dead too). Reference only.", False))
+    # Suppress the standalone wall tick only when the confluence is with THAT wall —
+    # a pivot on the SECOND wall must not hide the primary wall, which is a distinct level.
+    if cw and not _near(pr, cw):
         lv_items.append((cw, f"CW {cw:,.0f}", "#ff8a65",
                          "CALL WALL — biggest call-writer position above spot. Mild friction on touch (+5pp). "
                          "If it ever lines up with a pivot (🤝) it becomes the strongest level here.", True))
-    if pw and not conf_sup:
+    if pw and not _near(ps, pw):
         lv_items.append((pw, f"PW {pw:,.0f}", "#4db6ac",
                          "PUT WALL — biggest put-writer position below spot. Mild friction on touch (+6pp), "
                          "but remember: floors are weaker than ceilings in every audit.", False))
     if mp:
         lv_items.append((mp, f"MP {mp:,.0f}", "#9e9e9e",
-                         "MAX PAIN — writers' least-loss strike. It does NOT pull price (measured ~48%, coin-flip); "
-                         "it is mild friction only when price actually touches it.", False))
+                         "MAX PAIN — the strike where option writers lose least. It does NOT pull price "
+                         "(measured ~48%, coin-flip); it is mild friction only when price actually touches it.", False))
     lv_items = [x for x in lv_items if ax_lo <= x[0] <= ax_hi]
     if lv_items:
         k_parts = []
