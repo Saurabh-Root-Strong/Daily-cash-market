@@ -1223,35 +1223,36 @@ def _render_verdict(pred: IndexPrediction) -> None:
     # as actionable next to a verdict that has not earned it.
     if _acc and _acc["sign_hit"] < 48:
         conf_color = "#ff5252" if _acc["sign_hit"] < 44 else "#ffae00"
-    # The Market Map leads the tab: the calibrated zone products in plain language,
-    # with the point products explicitly demoted. The engine-detail panel follows.
+    # ── Layer 1: the Market Map — the ONLY place the zone numbers appear ──────
+    # One fact, one home. Rendering the zones here AND in the legacy boxes below
+    # made every number appear twice and re-created the exact confusion the map
+    # was built to remove; the construction detail now lives in a collapsed
+    # expander instead of repeating on the open page.
     _map = _market_map_box(pred, _acc, _cov)
     if _map:
         st.markdown(_map, unsafe_allow_html=True)
+
+    # ── Layer 2: slim engine-context strip (regime read — not a trade signal) ──
     # Built by concatenation (no indented triple-quoted template): an optional
     # box returning "" must never leave a whitespace-only line, otherwise
     # CommonMark ends the HTML block early and renders the rest as a code block.
     html = (
         f"<div style='background:#1e1e1e;border:1px solid {dir_color};"
-        f"border-radius:10px;padding:16px 20px;margin-bottom:12px'>"
-        f"<div style='display:flex;align-items:center;gap:12px;margin-bottom:10px'>"
+        f"border-radius:10px;padding:12px 16px;margin-bottom:12px'>"
+        f"<div style='display:flex;align-items:center;gap:12px'>"
         f"<div style='background:{dir_color};color:#000;font-weight:700;"
-        f"font-size:1.1em;padding:6px 16px;border-radius:8px'>{dir_emoji} {pred.direction}</div>"
-        f"<div style='color:{conf_color};font-weight:600'>{_confidence_phrase(pred)}</div>"
-        f"<div style='margin-left:auto;font-size:0.82em;text-align:right'>"
+        f"font-size:1.0em;padding:5px 14px;border-radius:8px'>{dir_emoji} {pred.direction}</div>"
+        f"<div style='color:{conf_color};font-weight:600;font-size:0.9em'>{_confidence_phrase(pred)}</div>"
+        f"<div style='margin-left:auto;font-size:0.80em;text-align:right'>"
         f"{_meter_html(pred.composite_score, show_raw=True)}"
         f"<div style='color:#666;font-size:0.85em;margin-top:2px'>"
-        f"{len(pred.signals)} signals &nbsp;|&nbsp; 0=Max Bear · 50=Neutral · 100=Max Bull</div>"
+        f"{len(pred.signals)} signals &nbsp;|&nbsp; regime read — context, not a trade signal</div>"
         f"</div>"
         f"</div>"
-        f"<div style='color:#ddd;font-size:0.9em;margin-bottom:10px'>{pred.headline}</div>"
+        f"<div style='color:#bbb;font-size:0.86em;margin-top:8px'>{pred.headline}</div>"
         f"{_thin_chain_banner(pred)}"
-        f"{_measured_trust_box(_acc, pred.display_name, _cov)}"
         f"{_verdict_meter_note(pred)}"
-        f"{_expected_move_box(pred, no_edge=bool(_acc and _acc['sign_hit'] < 48))}"
-        f"{_range_cards(pred)}"
-        f"{_breakout_extension_box(pred)}"
-        f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.82em'>"
+        f"<div style='display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:0.8em;margin-top:8px'>"
         f"<div>"
         f"<div style='color:#69f0ae;font-weight:600;margin-bottom:2px'>Key Driver</div>"
         f"<div style='color:#aaa'>{pred.key_driver}</div>"
@@ -1264,6 +1265,21 @@ def _render_verdict(pred: IndexPrediction) -> None:
         f"</div>"
     )
     st.markdown(html, unsafe_allow_html=True)
+
+    # ── Layer 3: zone-construction detail — collapsed, no duplication on the page ──
+    with st.expander("🔬 How the zones are built — track record, straddle/σ basis, walls, breakout logic"):
+        _trust = _measured_trust_box(_acc, pred.display_name, _cov)
+        if _trust:
+            st.markdown(_trust, unsafe_allow_html=True)
+        _em_box = _expected_move_box(pred, no_edge=bool(_acc and _acc["sign_hit"] < 48))
+        if _em_box:
+            st.markdown(_em_box, unsafe_allow_html=True)
+        _rc = _range_cards(pred)
+        if _rc:
+            st.markdown(_rc, unsafe_allow_html=True)
+        _bo = _breakout_extension_box(pred)
+        if _bo:
+            st.markdown(_bo, unsafe_allow_html=True)
 
 
 # ── Market Context tab ────────────────────────────────────────────────────────
