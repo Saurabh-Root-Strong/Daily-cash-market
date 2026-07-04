@@ -443,6 +443,19 @@ def _render_card(pred: IndexPrediction) -> None:
             f"</div>"
         )
 
+    # Thin-chain badges precomputed as single-line strings: the card template is an
+    # indented triple-quoted HTML block, and an inline conditional that evaluates to ""
+    # on its own line leaves a whitespace-only line — CommonMark then terminates the
+    # HTML block and renders the rest of the card as a literal code block.
+    _chain_ok = getattr(pred, "opt_chain_liquid", True)
+    _pcr_thin_badge = ("" if _chain_ok else
+                       ' <span style="color:#ffae00;font-size:0.85em" title="Near-expiry chain '
+                       'below liquidity floor — PCR is noise, excluded from signals">⚠ thin</span>')
+    _levels_thin_badge = ("" if _chain_ok else
+                          '<span style="color:#ffae00" title="Near-expiry chain below liquidity '
+                          'floor — walls/max pain are noise, excluded from signals and ranges"> '
+                          '⚠ thin chain</span>')
+
     st.markdown(
         f"""
         <div style="
@@ -469,7 +482,7 @@ def _render_card(pred: IndexPrediction) -> None:
                 {_meter_html(pred.composite_score, show_raw=True)}
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:0.8em;color:#aaa">
-                <div>PCR <b style="color:{'#fff' if getattr(pred, 'opt_chain_liquid', True) else '#997a3d'}">{_fmt(pred.pcr) if pred.pcr else '—'}</b>{'' if getattr(pred, 'opt_chain_liquid', True) else ' <span style="color:#ffae00;font-size:0.85em" title="Near-expiry chain below liquidity floor — PCR is noise, excluded from signals">⚠ thin</span>'}</div>
+                <div>PCR <b style="color:{'#fff' if _chain_ok else '#997a3d'}">{_fmt(pred.pcr) if pred.pcr else '—'}</b>{_pcr_thin_badge}</div>
                 <div>DTE <b style="color:#fff">{pred.days_to_expiry}d</b></div>
                 <div>Carry <b style="color:#fff">{_fmt(pred.carry_pct_ann, 1, '% ann') if pred.carry_pct_ann is not None else '—'}</b></div>
                 <div>VIX <b style="color:{vix_color}">{vix_str}{vix_trend}</b></div>
@@ -480,8 +493,7 @@ def _render_card(pred: IndexPrediction) -> None:
                 &nbsp;|&nbsp;
                 MP: <b style="color:#FFD600">{_fmt(pred.levels.max_pain, 0) if pred.levels.max_pain else '—'}</b>
                 &nbsp;|&nbsp;
-                R: <b style="color:#ff5252">{_fmt(pred.levels.top_call_strike, 0) if pred.levels.top_call_strike else '—'}</b>
-                {'' if getattr(pred, 'opt_chain_liquid', True) else '<span style="color:#ffae00" title="Near-expiry chain below liquidity floor — walls/max pain are noise, excluded from signals and ranges"> ⚠ thin chain</span>'}
+                R: <b style="color:#ff5252">{_fmt(pred.levels.top_call_strike, 0) if pred.levels.top_call_strike else '—'}</b>{_levels_thin_badge}
             </div>
             {_card_move_line(pred)}
             {regime_html}
