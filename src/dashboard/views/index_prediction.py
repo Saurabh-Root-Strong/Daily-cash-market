@@ -1163,14 +1163,26 @@ def _market_map_box(pred: IndexPrediction, acc: dict, cov: dict) -> str:
     t_parts = []
     if pred.breakout_dn_start:
         t_parts.append(_seg(pred.breakout_dn_start, lo, "#3a2020",
-                            "downside extension — measured: coin-flip, no follow-through"))
-    t_parts.append(_seg(lo, spot - band, "#1c3a4d", "~68% close zone (measured 70-76% every year)"))
+                            "RED ZONE (down extension): price only gets here on a real downside break. "
+                            "History: next day after such a break is a coin-flip — do NOT chase the fall, "
+                            "do NOT buy the dip. Just stand aside."))
+    t_parts.append(_seg(lo, spot - band, "#1c3a4d",
+                        "BLUE ZONE (down side): a normal red day usually ENDS somewhere in here. "
+                        "Careful: unlike the up side, down-days spread out evenly — 1 in 3 blows "
+                        "past the blue edge. Respect the down side more."))
     t_parts.append(_seg(spot - band, spot + band, "#3d4450",
-                        "no-trade band — 1 day in 3 ends here, no edge inside"))
-    t_parts.append(_seg(spot + band, hi, "#1c3a4d", "~68% close zone"))
+                        "GREY = UNDECIDED ZONE. Price crosses this band during the day almost EVERY day — "
+                        "touching it means NOTHING. Only the closing price matters. About 1 day in 3 "
+                        "CLOSES in here = flat day, no money was made by anyone."))
+    t_parts.append(_seg(spot + band, hi, "#1c3a4d",
+                        "BLUE ZONE (up side): a normal green day usually ENDS in here — most often "
+                        "NEAR the blue edge (about half of up-days park just below it; option sellers "
+                        "defend that line). The blue edges hold the close ~72% of ALL days."))
     if pred.breakout_up_end:
         t_parts.append(_seg(hi, pred.breakout_up_end, "#1d3a26",
-                            "upside extension — breaks continue 58-63%, don't fade"))
+                            "GREEN ZONE (up extension): price only gets here on a real upside break. "
+                            "History: after a CLOSE above the green tick, the NEXT day continues up "
+                            "58-63% of the time — okay to ride it, never fade it."))
     t_parts.append(_tick(spot, "#ffffff", 2))
     t_parts.append(_lbl(spot, f"<b style='color:#fff'>{spot:,.0f}</b>", above=True))
     t_parts.append(_lbl(lo, f"{lo:,.0f}", "#7fb3d1"))
@@ -1180,17 +1192,27 @@ def _market_map_box(pred: IndexPrediction, acc: dict, cov: dict) -> str:
     if pred.breakout_up_end:
         t_parts.append(_lbl(pred.breakout_up_end, f"{pred.breakout_up_end:,.0f}", "#6bb37f"))
     if pred.breakout_up_start:
-        t_parts.append(_tick(pred.breakout_up_start, "#69f0ae", 1))
+        t_parts.append(f"<div title='UPSIDE BREAK TICK: only a CLOSE above this line is a real break "
+                       f"(intraday pokes above do not count). After it: next day up 58-63% — can ride, never fade.' "
+                       f"style='position:absolute;left:{_pos(pred.breakout_up_start):.2f}%;top:-2px;bottom:-2px;"
+                       f"width:5px;background:transparent;transform:translateX(-50%);cursor:help'>"
+                       f"<div style='width:1px;height:100%;margin:0 auto;background:#69f0ae'></div></div>")
         t_parts.append(_lbl(pred.breakout_up_start, f"break&gt;{pred.breakout_up_start:,.0f}", "#69f0ae", above=True))
     if pred.breakout_dn_end:
-        t_parts.append(_tick(pred.breakout_dn_end, "#ff5252", 1))
+        t_parts.append(f"<div title='DOWNSIDE BREAK TICK: only a CLOSE below this line is a real break. "
+                       f"After it: next day is a coin-flip — no chase, no dip-buy, stand aside.' "
+                       f"style='position:absolute;left:{_pos(pred.breakout_dn_end):.2f}%;top:-2px;bottom:-2px;"
+                       f"width:5px;background:transparent;transform:translateX(-50%);cursor:help'>"
+                       f"<div style='width:1px;height:100%;margin:0 auto;background:#ff5252'></div></div>")
         t_parts.append(_lbl(pred.breakout_dn_end, f"break&lt;{pred.breakout_dn_end:,.0f}", "#ff5252", above=True))
     bars.append(_bar("Tomorrow", "#40c4ff", "".join(t_parts), h=24, mt=22))
 
     # ── WEEK bar ──────────────────────────────────────────────────────────────
     if pred.wk_range_low is not None and pred.wk_range_high is not None:
         w_parts = [_seg(pred.wk_range_low, pred.wk_range_high, "#173a4d",
-                        "settle-by-expiry zone (~68% of expiries); intraday pokes outside in ~60% of weeks")]
+                        "WEEK ZONE: where the market SETTLES by this expiry ~68% of the time. "
+                        "Warning: during the week price pokes OUTSIDE this zone in ~60% of weeks — "
+                        "it is a landing zone, never an intraday stoploss level.")]
         w_parts.append(_tick(spot, "#ffffff", 2))
         w_parts.append(_lbl(pred.wk_range_low, f"{pred.wk_range_low:,.0f}", "#7fb3d1"))
         w_parts.append(_lbl(pred.wk_range_high, f"{pred.wk_range_high:,.0f}", "#7fb3d1"))
@@ -1200,7 +1222,9 @@ def _market_map_box(pred: IndexPrediction, acc: dict, cov: dict) -> str:
     # ── MONTH bar (NIFTY only) ────────────────────────────────────────────────
     if pred.mn_range_low is not None and pred.mn_range_high is not None:
         m_parts = [_seg(pred.mn_range_low, pred.mn_range_high, "#4a3a1e",
-                        "typical travel to the monthly expiry (runs tight ~57-61%, small sample)")]
+                        "MONTH ZONE: how far price TYPICALLY travels by the monthly expiry. "
+                        "It holds only ~57-61% of the time (still a small sample) — treat it as "
+                        "a typical journey, not a wall.")]
         m_parts.append(_tick(spot, "#ffffff", 2))
         m_parts.append(_lbl(pred.mn_range_low, f"{pred.mn_range_low:,.0f}", "#c9a86b"))
         m_parts.append(_lbl(pred.mn_range_high, f"{pred.mn_range_high:,.0f}", "#c9a86b"))
@@ -1246,9 +1270,21 @@ def _market_map_box(pred: IndexPrediction, acc: dict, cov: dict) -> str:
         f"<div style='background:#10151c;border:1px solid #2a4a5a;border-radius:10px;"
         f"padding:12px 16px 8px;margin-bottom:12px'>"
         f"<div style='display:flex;justify-content:space-between;align-items:baseline'>"
-        f"<span style='color:#40c4ff;font-weight:700;font-size:0.95em'>🗺️ MARKET MAP — {pred.display_name}</span>"
+        f"<span style='color:#40c4ff;font-weight:700;font-size:0.95em'>🗺️ MARKET MAP — {pred.display_name}"
+        f"<span title='HOW TO READ THIS (hover any zone for its own note):&#10;"
+        f"&#10;1. GREY = undecided. Crossed intraday almost every day — touching it means nothing. "
+        f"Only the CLOSE matters. 1 in 3 days closes here (flat day).&#10;"
+        f"&#10;2. BLUE = normal day. A directional day usually ENDS in the blue — up-days park NEAR the "
+        f"upper blue edge; the blue edges hold the close ~72% of all days.&#10;"
+        f"&#10;3. GREEN/RED ticks = the only real signals. A CLOSE past the green tick: next day continues up "
+        f"58-63% (can ride). A CLOSE past the red tick: coin-flip (stand aside).&#10;"
+        f"&#10;4. WEEK/MONTH bars = landing zones by expiry, not intraday stop levels.&#10;"
+        f"&#10;Direction arrows, targets and max pain are NOT here because they measured as noise.' "
+        f"style='display:inline-flex;align-items:center;justify-content:center;width:15px;height:15px;"
+        f"border-radius:50%;background:#2a2a2a;border:1px solid #555;color:#888;font-size:10px;"
+        f"font-weight:700;margin-left:7px;cursor:help;vertical-align:middle'>?</span></span>"
         f"<span style='color:#667;font-size:0.72em'>from EOD {spot:,.0f} ({pred.as_of_date:%d %b}) · "
-        f"blue zone holds the close {cov_pct} of days · grey = no-trade</span></div>"
+        f"blue holds the close {cov_pct} of days · grey = undecided · hover zones for help</span></div>"
         f"{''.join(bars)}"
         f"<div style='border-top:1px solid #223;margin-top:4px;padding-top:6px'>{plan_html}</div>"
         f"</div>"
