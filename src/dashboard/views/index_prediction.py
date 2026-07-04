@@ -1229,6 +1229,73 @@ def _market_map_box(pred: IndexPrediction, acc: dict, cov: dict) -> str:
         t_parts.append(_lbl(pred.breakout_dn_end, f"break&lt;{pred.breakout_dn_end:,.0f}", "#ff5252", above=True))
     bars.append(_bar("Tomorrow", "#40c4ff", "".join(t_parts), h=24, mt=22))
 
+    # ── KEY LEVELS bar — the measured levels, evidence-ranked ─────────────────
+    # Level-strength audit (distance-controlled, 3 rounds): pivot 🤝 wall
+    # confluence = +10pp rejection (the only level still working in the current
+    # regime); naked pivots decayed to ~0 in 2026; walls/max-pain = mild
+    # friction; everything is placement, nothing is a fade signal. The map now
+    # shows them ON the price axis instead of hiding them in another tab.
+    lv = pred.levels
+    chain_ok = getattr(pred, "opt_chain_liquid", True)
+    lv_items = []   # (price, kind, label, color, tooltip, above)
+    cw = lv.top_call_strike if (lv and chain_ok) else None
+    pw = lv.top_put_strike if (lv and chain_ok) else None
+    mp = lv.max_pain if (lv and chain_ok) else None
+    pr, pr_t = pred.sr_resistance, pred.sr_resistance_touches
+    ps, ps_t = pred.sr_support, pred.sr_support_touches
+
+    def _near(a, b):
+        return a and b and abs(a - b) / b * 100 <= 0.6
+    # confluence: pivot ON a wall = the strongest level on the page
+    conf_res = _near(pr, cw) or _near(pr, lv.second_call_strike if lv and chain_ok else None)
+    conf_sup = _near(ps, pw) or _near(ps, lv.second_put_strike if lv and chain_ok else None)
+    if pr:
+        if conf_res:
+            lv_items.append((pr, f"🤝 {pr:,.0f}", "#ffd54f",
+                             f"CONFLUENCE RESISTANCE (strongest level on the page): a {pr_t}-touch price pivot "
+                             f"WITH the call wall on the same line. Measured: rejects +10pp above chance in the "
+                             f"current regime — best short-strike / exit placement. Still not a fade signal: "
+                             f"if a CLOSE gets through, it continues 61%.", True))
+        else:
+            lv_items.append((pr, f"P {pr:,.0f} ({pr_t}t)", "#b39ddb",
+                             f"Price pivot resistance ({pr_t} touches). Honest note: a pivot WITHOUT a wall on it "
+                             f"has decayed to ~no edge in 2026 — treat as weak reference unless a wall joins it. "
+                             f"5+ touches makes it MORE likely to break, not less.", True))
+    if ps:
+        if conf_sup:
+            lv_items.append((ps, f"🤝 {ps:,.0f}", "#ffd54f",
+                             f"CONFLUENCE SUPPORT: {ps_t}-touch pivot + put wall on one line. Warning: measured "
+                             f"support-side confluence adds ~nothing — structure works OVERHEAD only. "
+                             f"Never trust a floor.", False))
+        else:
+            lv_items.append((ps, f"P {ps:,.0f} ({ps_t}t)", "#b39ddb",
+                             f"Price pivot support ({ps_t} touches). Measured: support levels barely beat chance "
+                             f"(down moves don't respect structure — yesterday's low is dead too). Reference only.", False))
+    if cw and not conf_res:
+        lv_items.append((cw, f"CW {cw:,.0f}", "#ff8a65",
+                         "CALL WALL — biggest call-writer position above spot. Mild friction on touch (+5pp). "
+                         "If it ever lines up with a pivot (🤝) it becomes the strongest level here.", True))
+    if pw and not conf_sup:
+        lv_items.append((pw, f"PW {pw:,.0f}", "#4db6ac",
+                         "PUT WALL — biggest put-writer position below spot. Mild friction on touch (+6pp), "
+                         "but remember: floors are weaker than ceilings in every audit.", False))
+    if mp:
+        lv_items.append((mp, f"MP {mp:,.0f}", "#9e9e9e",
+                         "MAX PAIN — writers' least-loss strike. It does NOT pull price (measured ~48%, coin-flip); "
+                         "it is mild friction only when price actually touches it.", False))
+    lv_items = [x for x in lv_items if ax_lo <= x[0] <= ax_hi]
+    if lv_items:
+        k_parts = []
+        for price, label, color, tip, above in lv_items:
+            wpx = 3 if label.startswith("🤝") else 1
+            k_parts.append(f"<div title='{tip}' style='position:absolute;left:{_pos(price):.2f}%;"
+                           f"top:-2px;bottom:-2px;width:7px;background:transparent;"
+                           f"transform:translateX(-50%);cursor:help'>"
+                           f"<div style='width:{wpx}px;height:100%;margin:0 auto;background:{color}'></div></div>")
+            k_parts.append(_lbl(price, label, color, above=above))
+        k_parts.append(_tick(spot, "#ffffff", 2))
+        bars.append(_bar("Key levels", "#ffd54f", "".join(k_parts), h=14, mt=20, mb=18))
+
     # ── WEEK bar ──────────────────────────────────────────────────────────────
     if pred.wk_range_low is not None and pred.wk_range_high is not None:
         w_parts = [_seg(pred.wk_range_low, pred.wk_range_high, "#173a4d",
