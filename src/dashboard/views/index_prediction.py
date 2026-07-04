@@ -832,12 +832,16 @@ def _render_key_levels(pred: IndexPrediction) -> None:
     st.markdown(
         "<div style='background:#141a14;border-left:3px solid #8bc34a;border-radius:0 6px 6px 0;"
         "padding:7px 11px;margin-top:10px;font-size:0.8em;color:#bfcdb2'>"
-        "<b style='color:#8bc34a'>⚖ Which levels actually matter (measured):</b> "
-        "multi-touch price pivots <b>+6pp</b> above a same-distance random point · put wall <b>+6pp</b> · "
-        "max pain as a touch-level <b>+4–5pp</b> (friction only — it has NO pull) · big round numbers "
-        "<b>+3–4pp</b> · yesterday's high <b>+3.6pp</b> · yesterday's LOW <b>~0</b> (not a real level). "
-        "Even the best levels reject only ~half of touches — use them to PLACE entries/exits and stack "
-        "confluence (🤝), never as bare fade signals.</div>",
+        "<b style='color:#8bc34a'>⚖ Which levels actually matter (measured, distance-controlled):</b> "
+        "<b>#1 by far: 🤝 confluence — a pivot WITH a call wall on it rejects +10pp above chance "
+        "(current regime)</b>; a naked pivot has decayed to ~0 in 2026 (was +6–7pp in 2023–24) — "
+        "writers now make the level, not the chart alone. Overhead only: the same confluence on the "
+        "SUPPORT side adds ~nothing (down moves don't respect structure — yesterday's low is dead too). "
+        "A level tested <b>5+ times gets WEAKER</b> (−3pp — each test absorbs the defenders). "
+        "Max pain / round numbers / yesterday's high: mild friction (+3–5pp). "
+        "And none of this is a fade signal: after a rejection the next day still drifts UP (+7 bps) — "
+        "levels are for <b>placement</b> (entries, exits, short strikes), while a <b>break that CLOSES "
+        "through resistance continues 61%</b>.</div>",
         unsafe_allow_html=True,
     )
 
