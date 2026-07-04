@@ -1131,33 +1131,31 @@ def _market_map_box(pred: IndexPrediction, acc: dict, cov: dict) -> str:
     rows = []
 
     # ── TONIGHT (overnight gap lean from close-location) ──────────────────────
-    # Measured on 368 days × 4 indices (Dec 2024 – Jul 2026), independently
-    # replicating the Tradebot 4-yr BTST study: a close in the top third of the
-    # day's range (CLR > 0.66) gaps UP the next open 62–77% of days; a close in
-    # the bottom third gaps down on Bank/Fin but is ~coin-flip on NIFTY/Midcap
-    # (index drift eats the short side). Gap SIZE scales with VIX (IC +0.33).
-    # This is the ONE next-day directional read that survived backtesting — it
-    # predicts the OPEN, not the close.
-    _GAP_STATS = {   # sym: (strong_win%, strong_bps, weak_dn_win%, weak_bps, typical_gap_pct)
-        "NIFTY":      (64, 13.6, 50,  -8.6, 0.8),
-        "BANKNIFTY":  (62, 10.9, 56, -16.3, 0.9),
-        "FINNIFTY":   (63, 13.8, 58, -18.0, 0.9),
-        "MIDCPNIFTY": (77, 26.3, 38, -10.4, 1.0),
+    # Measured over 4 YEARS (May 2022 – Jul 2026, ~950 days/index, positive EVERY
+    # year incl. the 2022 bear): a close in the top third of the day's range
+    # (CLR > 0.66) gaps UP the next open — the only gap read that is stable.
+    # A WEAK close has NO reliable gap-down edge over 4 years (down-win 36–52%;
+    # the 2026 window briefly showed one on Bank/Fin — regime artifact, not
+    # structure; index drift eats the short side). Gap SIZE scales with VIX
+    # (IC +0.33). Predicts the OPEN, not the close.
+    _GAP_STATS = {   # sym: (strong_win%, strong_bps, weak_avg_bps, typical_gap_pct) — 4yr
+        "NIFTY":      (70, 16.0, -1.7, 0.8),
+        "BANKNIFTY":  (66, 15.9, -6.6, 0.9),
+        "FINNIFTY":   (66, 16.5, -8.7, 0.9),
+        "MIDCPNIFTY": (81, 27.8, +2.8, 1.0),
     }
     gs = _GAP_STATS.get(pred.fno_symbol)
     if gs and pred.high and pred.low and (pred.high - pred.low) > 0:
         clr = (spot - pred.low) / (pred.high - pred.low)
-        s_win, s_bps, w_dn_win, w_bps, g_typ = gs
+        s_win, s_bps, w_bps, g_typ = gs
         if clr > 0.66:
             gap_lean = (f"Closed in the TOP of today's range (CLR {clr:.2f}) → <b style='color:{_POS}'>gap-UP "
-                        f"lean</b>: closes this strong gapped up <b>{s_win}%</b> of days (avg {s_bps:+.0f} bps overnight).")
+                        f"lean</b>: closes this strong gapped up <b>{s_win}%</b> of days over 4 years "
+                        f"(avg {s_bps:+.0f} bps overnight, positive every year 2022–26).")
         elif clr < 0.33:
-            if w_dn_win >= 55:
-                gap_lean = (f"Closed at the BOTTOM of today's range (CLR {clr:.2f}) → <b style='color:{_NEG}'>gap-DOWN "
-                            f"lean</b>: {w_dn_win}% of similar closes gapped down (avg {w_bps:+.0f} bps).")
-            else:
-                gap_lean = (f"Closed at the BOTTOM of today's range (CLR {clr:.2f}) — mild overnight drag "
-                            f"(avg {w_bps:+.0f} bps) but direction ~coin-flip on this index: <b>no gap edge</b>.")
+            gap_lean = (f"Closed at the BOTTOM of today's range (CLR {clr:.2f}) — mild overnight drag only "
+                        f"(4-yr avg {w_bps:+.0f} bps): <b>no reliable gap-down edge</b>; the short side is "
+                        f"eaten by index drift.")
         else:
             gap_lean = f"Mid-range close (CLR {clr:.2f}) — <b>no gap lean</b>; overnight ~coin-flip."
         fii_note = ""
@@ -1186,8 +1184,9 @@ def _market_map_box(pred: IndexPrediction, acc: dict, cov: dict) -> str:
             f"{pred.breakout_up_start:,.0f}–{pred.breakout_up_end:,.0f}. "
             f"Below <b style='color:{_NEG}'>{pred.breakout_dn_end:,.0f}</b> → "
             f"{pred.breakout_dn_start:,.0f}–{pred.breakout_dn_end:,.0f}. "
-            f"Measured: breaks <b>continue mildly</b> (close above the band → next day up 58%, +11 bps avg) "
-            f"— <b>do not fade a break</b>; most overshoots stay shallow (median 0.4σ ≈ {0.4*em:,.0f} pts)."
+            f"Measured over 4 yrs: <b>UPSIDE breaks continue</b> (next day up 58–63%, +7 to +13 bps) — don't "
+            f"fade them; <b>DOWNSIDE breaks are ~coin-flip</b> (no follow-through, no fade edge either). "
+            f"Most overshoots stay shallow (median 0.4σ ≈ {0.4*em:,.0f} pts)."
         )
         rows.append(_row("⚡", "If it breaks", breaks, "#ffd600"))
 
