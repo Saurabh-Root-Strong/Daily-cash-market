@@ -1227,8 +1227,10 @@ def _market_map_box(pred: IndexPrediction, acc: dict, cov: dict) -> str:
         if _ctx and _ctx.fao_date and _ctx.fii_fut_idx_net < -200_000:
             fii_tail = " · FII deep short = mild gap-up tailwind"
         plan.append(("🌙", f"Tonight: {gap_chip} · typical gap ±{g_typ:.1f}%{fii_tail}"))
-    plan.append(("🧭", f"Plan: no trade inside <b style='color:#ccc'>{spot-band:,.0f}–{spot+band:,.0f}</b> · "
-                       f"upside break may run (58–63%) · downside break / weak close = <b>stand aside</b>, coin-flip"))
+    plan.append(("🧭", f"Plan: grey band <b style='color:#ccc'>{spot-band:,.0f}–{spot+band:,.0f}</b> is about the "
+                       f"<b>CLOSE</b> — intraday it is crossed ~every day (not a trigger). Directional days typically "
+                       f"travel toward the blue edges, which hold ~72% of closes. Tradeable event = a <b>CLOSE beyond "
+                       f"a break tick</b> only: upside may run (58–63%) · downside = <b>stand aside</b>, coin-flip"))
     _sh = f"{acc['sign_hit']:.0f}%" if acc else "sub-50%"
     _mp_txt = f" (incl. max pain {pred.levels.max_pain:,.0f})" if (pred.levels and pred.levels.max_pain) else ""
     plan.append(("🎯", f"Direction: <b>none tradeable</b> (arrow measured {_sh}) — exact point levels{_mp_txt} = noise"))
