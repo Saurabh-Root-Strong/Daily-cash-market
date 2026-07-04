@@ -39,7 +39,7 @@ from src.dashboard.cache.queries import (
     cached_forward_tilt,
     cached_sector_defensive,
 )
-from src.analytics.price_action import BRK_STATES, MTF_ALIGN
+from src.analytics.price_action import BRK_BREAKOUT, BRK_STATES, MTF_ALIGN
 from src.dashboard.constants import NEGATIVE_COLOR, POSITIVE_COLOR, PLOT_BG, PAPER_BG, GRID_COLOR
 from src.dashboard.components.charts import hex_to_rgba as _hex_to_rgba  # deduped helper
 
@@ -1044,18 +1044,24 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                 ]
 
             # ── Price-action filter ──────────────────────────────────────────
-            # pa_filter = (selected_setups, selected_aligns, hide_risky). Only the
-            # backtest-validated axes filter (setup + alignment); hide_risky is a
-            # single veto dropping gappy OR high-vol names (the two flags overlap
-            # heavily, Cramér's V 0.48 — scripts/audit_rotation_filters.py). The
-            # pa_class character is context-only (a column), no longer a filter —
-            # audited zero incremental selection value on top of these axes.
+            # pa_filter = (selected_setups, selected_aligns, hide_risky, efficient).
+            # Only backtest-validated axes filter (audits: audit_rotation_filters.py
+            # + _v2.py, dual-panel walk-forward): setup + alignment (edges),
+            # efficient = ER>=0.25 trend-efficiency gate (the one piece of the old
+            # pa_class filter that survived — robust both panels/halves/all regimes,
+            # per-date L/S spread t 3.2 DCM / 5.1 4yr-OOS at 20d), and hide_risky =
+            # single veto dropping gappy OR high-vol names (flags overlap, V 0.48;
+            # valid risk vetoes, not return selectors). Candle-anatomy part of
+            # pa_class stays context-only (a column) — zero selection value.
             if pa_filter and "pa_class" in shown.columns:
-                _pa_setup, _pa_align, _pa_risky = pa_filter
+                _pa_setup, _pa_align, _pa_risky, _pa_eff = pa_filter
                 if _pa_setup and "breakout" in shown.columns:
                     shown = shown[shown["breakout"].isin(_pa_setup)]
                 if _pa_align and "mtf_align" in shown.columns:
                     shown = shown[shown["mtf_align"].isin(_pa_align)]
+                if _pa_eff and "efficiency_ratio" in shown.columns:
+                    shown = shown[pd.to_numeric(shown["efficiency_ratio"],
+                                                errors="coerce") >= 0.25]
                 if _pa_risky:
                     _risk = pd.Series(False, index=shown.index)
                     if "pa_gappy" in shown.columns:
@@ -1132,6 +1138,8 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                         _pp.append(" / ".join(pa_filter[1]))
                     if pa_filter[2]:
                         _pp.append("no gappy / high-vol")
+                    if pa_filter[3]:
+                        _pp.append("efficient movers (ER≥0.25)")
                     filter_parts.append("Price action: " + ", ".join(_pp))
                 if _fno_only_active:
                     filter_parts.append("F&O stocks only")
@@ -2737,19 +2745,28 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
     fno_filter = fno_filter or None
 
     # ── Price-action filters — only the backtest-validated axes ────────────────
-    # Filter audit (scripts/audit_rotation_filters.py, 124.5k stock-week obs, walk-
-    # forward): of the five original controls only TWO carry forward edge —
-    #   • 🚀 setup (breakout-from-tight-base +1.55%/10d rel, basket t=3.0; also
-    #     backtest_mtf_price_action.py non-overlapping t=5.85 + 4yr OOS audit)
-    #   • 🧭 D×W alignment (ConfirmUp win 53.2% vs FalsePop 46.7%, holds OOS +4pp)
-    # The PA-character multiselect was REMOVED as a filter: within ConfirmUp, Clean
-    # +0.82% vs Quiet +0.83%/10d — zero incremental selection value (it remains a
-    # context COLUMN in the lists). ⚡ gappy and 🔥 high-vol overlap heavily
-    # (Cramér's V 0.48) and are risk vetoes, not selectors (each strongly predicts
-    # its own forward risk: gap-freq 44.7% vs 18.7%, fwd vol 47% vs 31%) — merged
-    # into ONE "hide risky" checkbox. CAVEATS unchanged: breakout edge is broad/
-    # small-mid-cap + BULL-concentrated (regime gate below).
-    _scol1, _scol2, _scol3 = st.columns([2, 2, 1])
+    # Filter audits (scripts/audit_rotation_filters.py + audit_rotation_filters_v2.py:
+    # dual-panel walk-forward — DCM broad 372d/118.9k obs + Tradebot 4yr F&O OOS
+    # 1018d/38k obs — horizons 5/10/15/20d, non-overlapping t, event-time decay,
+    # regime/universe splits, MC null, net-of-cost, interactions):
+    #   • 🚀 setup — the breakout edge BUILDS over 2-3 weeks on the broad universe:
+    #     +1.5%/10d → +3.9%/20d rel (MC p 0.98/1.00, net of 0.3% cost +3.6%/20d),
+    #     decay curve peaks ~day 18-20 (no fade). BUT dead/negative on large-cap
+    #     F&O (4yr OOS f20 −1.0%, t −2.2 on the largest tercile) and NEGATIVE in
+    #     BEAR (f10 −1.6%, win 27%) — the regime gate below is load-bearing.
+    #   • 🧭 alignment — ConfirmUp plateaus ~day 13-15 (+1.4%/15d, robust both
+    #     panels); FalsePop = dead money the full 20d (fade confirmed); spread is
+    #     strongest in CHOP (+1.0..1.3pp), inverts only in thin BEAR samples.
+    #   • 📈 efficient movers (ER≥0.25 = old Clean∪Volatile) — the ONE piece of the
+    #     removed pa_class filter that survived at the 2-3wk horizon: per-date L/S
+    #     spread +0.62pp/20d t=3.2 (DCM) and +1.03pp t=5.1 (4yr OOS), positive in
+    #     BOTH halves and ALL THREE regimes, stacks on ConfirmUp (win 58.9%).
+    #     Candle-anatomy half of pa_class stays context-only (zero value).
+    #   • 🛡️ hide risky — gappy/high-vol merged (V 0.48). On breakout names the
+    #     veto keeps the median trade (+1.3% vs +1.0%) but cuts the RIGHT tail
+    #     (p90 +12% vs +41%) — risk control, costs mean return; warned below when
+    #     stacked with 🚀.
+    _scol1, _scol2, _scol3, _scol4 = st.columns([2, 2, 1, 1])
     with _scol1:
         pa_setups = st.multiselect(
             "🚀 Multi-timeframe setup — filters the per-stock lists below",
@@ -2758,9 +2775,11 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
                 "Daily × Weekly price-action state (validated on the broad universe + a "
                 "4-yr out-of-window audit). Empty = no filter.\n\n"
                 "• 🚀 Breakout — close >1% over the 20d high FROM a tight base → the ONE "
-                "validated edge (broad-universe +3.99%/10d rel, non-overlapping t=5.85, "
-                "win 62%). CAVEAT: a small/mid-cap + BULL-tape effect — weak on large-caps "
-                "and in chop/bear.\n"
+                "validated edge, and it BUILDS over 2-3 weeks: +1.5%/10d → +3.9%/20d rel "
+                "on the broad universe (peaks ~day 18-20, net of cost +3.6%/20d, MC "
+                "p≈1.00). CAVEAT: broad/small-mid-cap effect — dead-to-NEGATIVE on "
+                "large-cap F&O names, and NEGATIVE in a bear tape (f10 −1.6%, win 27%) — "
+                "obey the regime line below.\n"
                 "• ↗ Break (extended) — broke out with no prior coil → weaker follow-through\n"
                 "• 💥 Breakdown-bounce — broke the 20d low, but such names BOUNCE here → "
                 "watch for a reversal, NOT a short (validated out-of-window)\n"
@@ -2774,21 +2793,41 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             help=(
                 "Momentum-quality gate. A daily up-move only tends to continue when the "
                 "WEEKLY trend agrees.\n\n"
-                "• ✅ Confirmed Up — daily-up + weekly-up (aligned, best win-rate)\n"
-                "• ⚠️ False Pop — daily-up but weekly-DOWN → the daily move tends to fade\n"
+                "• ✅ Confirmed Up — daily-up + weekly-up (best win-rate; edge accrues to "
+                "~day 13-15 then plateaus — a 2-3wk hold captures it)\n"
+                "• ⚠️ False Pop — daily-up but weekly-DOWN → dead money for the full 20d "
+                "ahead (audited both panels) — an avoid, not a short\n"
                 "• 🔵 Pullback — daily-down inside a weekly uptrend (dip)\n"
                 "• 🔻 Down-trend — both lower (aligned down)\n\nEmpty = no filter."
             ),
         )
     with _scol3:
+        pa_efficient = st.checkbox(
+            "📈 Efficient", value=False, key="rotation_stock_pa_eff",
+            help="Keep only EFFICIENT movers — Kaufman ER ≥ 0.25 over 60d (net move ÷ "
+                 "path length; the old 📈 Clean + 🌊 Volatile Trend classes). The one "
+                 "trend-quality gate that survived the dual-panel audit at the 2-3wk "
+                 "horizon: +0.6pp/20d over the rest on the broad universe (t 3.2) and "
+                 "+1.0pp (t 5.1) on 4yr of F&O history — positive in both halves and "
+                 "in bull, chop AND bear. Clean movers keep moving; direction alone "
+                 "doesn't.",
+        )
+    with _scol4:
         pa_hide_risky = st.checkbox(
             "🛡️ Hide risky", value=False, key="rotation_stock_pa_risky",
             help="Drop ⚡ gappy (opens >1% from prior close on ≥35% of days — "
                  "overnight/event risk) and 🔥 high-vol (avg daily range top "
                  "quartile, ATR% ≥ 4.5) names. The two flags catch largely the "
                  "same stocks (audit: Cramér's V 0.48) and each strongly predicts "
-                 "its own FORWARD risk, so they act as one veto. Risk filter, not "
-                 "a return signal.",
+                 "its own FORWARD risk, so they act as one veto. Risk filter, not a "
+                 "return signal: on 🚀 breakout names it keeps the median trade but "
+                 "cuts the big right-tail winners (p90 +12% vs +41%/20d).",
+        )
+    if pa_hide_risky and BRK_BREAKOUT in (pa_setups or []):
+        st.caption(
+            "⚠️ 🛡️ + 🚀 stacked: the risky veto keeps the median breakout (+1.3% vs "
+            "+1.0%/20d) but drops the lottery tail (p90 +12% vs +41%). Fine for risk "
+            "control — just know the biggest winners live in the names it hides."
         )
     # ── Live regime gate on the breakout edge ──────────────────────────────────
     # The 4yr OOS audit showed the breakout edge is BULL-CONCENTRATED (win ~58% in
@@ -2810,8 +2849,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
     else:
         _bo_state, _bo_col, _bo_msg = (
             "OFF", "#ef5350",
-            f"Nifty regime **{_rg_label}** — breakouts fail outside an uptrend "
-            "(too few even fire in bear). Stand aside on 🚀 until the tape turns.")
+            f"Nifty regime **{_rg_label}** — breakouts go NEGATIVE in a bear tape "
+            "(audit: −1.6%/10d rel, win 27%). Stand aside on 🚀 until the tape turns.")
     st.markdown(
         f"<div style='background:rgba(120,120,120,0.10);border-left:3px solid {_bo_col};"
         f"padding:5px 10px;border-radius:0 4px 4px 0;margin:2px 0 8px;font-size:12px'>"
@@ -2825,7 +2864,8 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
         import logging as _log
         _log.getLogger(__name__).warning("price_action failed (non-fatal): %s", _pe)
         _pa_df = pd.DataFrame()
-    pa_filter = (tuple(pa_setups), tuple(pa_aligns), bool(pa_hide_risky))
+    pa_filter = (tuple(pa_setups), tuple(pa_aligns), bool(pa_hide_risky),
+                 bool(pa_efficient))
 
     if _n_thin:
         st.caption(
