@@ -344,8 +344,10 @@ class MarketContext:
     nifty_pct_chg: Optional[float] = None
 
     # ── Constituent-level data (Signals 17c/d/e): NIFTY, BANKNIFTY, FINNIFTY ─
-    # Maps fno_symbol → _ConstituentStats. Populated for all three in
-    # _build_market_context() via _compute_constituent_stats().
+    # Maps fno_symbol → _ConstituentStats. NO LONGER populated: signals 17c/d/e
+    # were pruned from the composite and nothing renders them, so the 9 heavy
+    # constituent queries are skipped in _build_market_context(). Field kept
+    # (empty dict) for compatibility / future re-validation.
     constituent_stats: dict = field(default_factory=dict)
 
 
@@ -389,6 +391,11 @@ class IndexPrediction:
     data_available: bool = True
     note: str = ""
     market_context: Optional[MarketContext] = None
+
+    # False when the near-expiry chain fails the liquidity gate (_OPT_OI_MIN /
+    # _OPT_CONC_MAX): PCR / max-pain / walls are then displayed with a ⚠ thin-chain
+    # marker and excluded from breakout / expected-move structure inputs.
+    opt_chain_liquid: bool = True
 
     # ── Statistical Regime Detection (signals 21-23) ──────────────────────────
     regime: Optional[object] = None    # RegimeResult
@@ -534,6 +541,41 @@ def get_engine_accuracy(min_n: int = 20, fno_symbol: Optional[str] = None) -> di
         "sign_hit": round(sign_hit, 0), "ic": round(ic, 3),
         "since": str(df["trade_date"].min())[:10], "until": str(df["trade_date"].max())[:10],
     }
+
+
+def get_range_coverage(fno_symbol: Optional[str] = None, min_n: int = 30) -> dict:
+    """
+    Measured 1σ-band coverage from prediction_log: how often the next close
+    actually landed inside [range_low, range_high]. Self-updating — published
+    beside the "~68%" claim so the copy can never silently drift from reality
+    (the band was tuned on a wider-vol sample; in a calm regime it over-covers).
+
+    Returns {} when too little history. Otherwise: n, cov_all (%), n_90d,
+    cov_90d (%) — pooled, or per-index when fno_symbol is given.
+    """
+    try:
+        sql = ("SELECT trade_date, spot_close, actual_return, range_low, range_high "
+               "FROM prediction_log WHERE outcome_filled AND actual_return IS NOT NULL "
+               "AND range_low IS NOT NULL AND range_high IS NOT NULL AND spot_close IS NOT NULL")
+        params: list = []
+        if fno_symbol:
+            sql += " AND fno_symbol = ?"
+            params.append(fno_symbol)
+        df = query_dataframe(sql, params)
+    except Exception:
+        return {}
+    if df is None or df.empty or len(df) < min_n:
+        return {}
+    close_next = df["spot_close"].astype(float) * (1 + df["actual_return"].astype(float) / 100.0)
+    inside = (close_next >= df["range_low"].astype(float)) & (close_next <= df["range_high"].astype(float))
+    out = {"symbol": fno_symbol or "ALL", "n": int(len(df)),
+           "cov_all": round(float(inside.mean() * 100), 1)}
+    cutoff = pd.to_datetime(df["trade_date"]).max() - pd.Timedelta(days=90)
+    recent = inside[pd.to_datetime(df["trade_date"]) >= cutoff]
+    if len(recent) >= 20:
+        out["n_90d"] = int(len(recent))
+        out["cov_90d"] = round(float(recent.mean() * 100), 1)
+    return out
 
 
 def get_index_prediction_for(
@@ -1064,9 +1106,13 @@ def _build_market_context(trade_date: date) -> MarketContext:
     if not _n50idx.empty and pd.notna(_n50idx["pct_chg"].iloc[0]):
         ctx.nifty_pct_chg = float(_n50idx["pct_chg"].iloc[0])
 
-    # ── Constituent-level data (Signals 17c/d/e) ──────────────────────────────
-    for _csym, _csyms in _CONSTITUENT_SYMBOLS.items():
-        ctx.constituent_stats[_csym] = _compute_constituent_stats(_csyms, trade_date)
+    # ── Constituent-level data (Signals 17c/d/e) — NOT computed ──────────────
+    # Signals 17c/d/e were pruned from the composite (single-stock F&O dilutes
+    # the index read; see the prune note in _compute_prediction) and nothing
+    # renders them, so the 9 heavy constituent queries (3 baskets × 3 sources)
+    # that dominated this context's ~7s cold build are skipped entirely.
+    # ctx.constituent_stats stays an empty dict; _compute_constituent_stats and
+    # the _sig_constituent_* functions are kept for a future re-validation.
 
     # ── Sector breadth + rotation ─────────────────────────────────────────────
     sec_df = _load_sector_indices(trade_date)
@@ -1129,7 +1175,7 @@ def _build_snapshot(
     snap_date: date, idx_hist: pd.DataFrame, fno_df: pd.DataFrame,
     near_expiry: Optional[date], spot_close: Optional[float],
     futures_price: Optional[float], carry_pts: Optional[float],
-    carry_pct_ann: Optional[float],
+    carry_pct_ann: Optional[float], fut_expiry: Optional[date] = None,
 ) -> DaySnapshot:
     pct_chg = high = low = None
     if not idx_hist.empty:
@@ -1143,9 +1189,14 @@ def _build_snapshot(
     fut_oi = call_oi = put_oi = volume = 0; pcr = None
     if not fno_df.empty:
         fr = fno_df[fno_df["instrument"] == "FUTIDX"]
-        if not fr.empty and near_expiry:
-            nr = fr[fr["expiry_date"] == near_expiry]
-            fut_oi = int(nr.iloc[0]["open_interest"]) if not nr.empty else 0
+        # Futures OI must be matched on the FUTURES expiry, not the options
+        # near-expiry. NIFTY options expire weekly (Tuesday) while its futures
+        # are monthly-only — filtering futures by the weekly options expiry
+        # matches nothing and silently reported 0 OI every non-monthly week.
+        _fexp = fut_expiry or near_expiry
+        if not fr.empty and _fexp:
+            nr = fr[fr["expiry_date"] == _fexp]
+            fut_oi = int(nr["open_interest"].sum()) if not nr.empty else 0
         if near_expiry:
             opt = fno_df[(fno_df["instrument"] == "OPTIDX") & (fno_df["expiry_date"] == near_expiry)]
             call_oi = int(opt[opt["option_type"] == "CE"]["open_interest"].sum())
@@ -1193,13 +1244,19 @@ def _sig_price_action(idx_hist: pd.DataFrame) -> Optional[IndexSignal]:
             ), emoji="🔄",
         )
     if z >= 3.0:
+        # Context-only (score 0): the measured Price-Action edge is the OVERSOLD
+        # mean-reversion read. Strong 3-day runs continue more often than they
+        # reverse, so a bearish vote here contradicted its own evidence — the
+        # extreme-run flag stays visible as a risk note but does not vote.
         return IndexSignal(
-            name="Extreme Overbought (Caution)", category="Price Action",
-            direction=-1, score=-1.0,
+            name="Extreme 3D Run — Stretch Flag (context)", category="Price Action",
+            direction=0, score=0.0,
             headline=f"Extreme Run +{cum_3d:.1f}% / 3D (z=+{z:.1f})",
             description=(
-                f"3-day gain {cum_3d:.1f}% statistically extreme. "
-                "Strong runs tend to continue more often than they reverse — mild caution only."
+                f"3-day gain {cum_3d:.1f}% statistically extreme (z=+{z:.1f}). "
+                "Strong runs tend to CONTINUE more often than they reverse, so this does "
+                "not vote bearish — it flags a stretched tape: size smaller, expect wider "
+                "swings. · 📊 Context only — no validated next-day reversal edge."
             ), emoji="⚠️",
         )
     return None
@@ -3990,12 +4047,13 @@ def _compute_prediction(
 
     # ── Snapshots ─────────────────────────────────────────────────────────────
     today_snap = _build_snapshot(trade_date, idx_hist, fno_today, near_expiry,
-                                 spot_close, futures_price, carry_pts, carry_pct_ann)
+                                 spot_close, futures_price, carry_pts, carry_pct_ann,
+                                 fut_expiry=fut_expiry)
     yesterday_snap = None
     if prev_fno_date and not fno_prev.empty:
         pr     = idx_hist[idx_hist["trade_date"] == prev_fno_date]
         pspot  = float(pr.iloc[0]["close_val"]) if not pr.empty and pd.notna(pr.iloc[0]["close_val"]) else None
-        pfut_p = pcarry = pcarry_ann = None; popt_exp = None
+        pfut_p = pcarry = pcarry_ann = None; popt_exp = None; pne = None
         # Use the same expiry_date > trade_date gate so yesterday_snap references the
         # same contract as today_snap — making the Today vs Yesterday comparison apples-to-apples.
         pfut   = fno_prev[
@@ -4017,7 +4075,8 @@ def _compute_prediction(
         ].sort_values("expiry_date")
         if not por.empty: popt_exp = _to_date(por.iloc[0]["expiry_date"])
         yesterday_snap = _build_snapshot(prev_fno_date, idx_hist, fno_prev, popt_exp,
-                                         pspot, pfut_p, pcarry, pcarry_ann)
+                                         pspot, pfut_p, pcarry, pcarry_ann,
+                                         fut_expiry=pne)
 
     # ═══════════════════════════════════════════════════════════════════════════
     # BUILD SIGNAL LIST
@@ -4230,9 +4289,13 @@ def _compute_prediction(
     )
 
     # ── Expected-Move Forecast (magnitude) ────────────────────────────────────
+    # Structural OI inputs (walls / max pain / PCR floor) are trusted only when the
+    # chain passed the liquidity gate — a thin chain's walls are noise (FinNifty:
+    # ~0.2M OI, half of it in a couple of strikes) and must not shape the ranges.
+    _struct_levels = levels if _opt_chain_liquid else IndexKeyLevels()
     em = _compute_expected_move(
         idx_hist, spot_close, market_ctx.vix_close, composite,
-        dte_options, levels, is_nifty=(fno_symbol == "NIFTY"),
+        dte_options, _struct_levels, is_nifty=(fno_symbol == "NIFTY"),
         gamma_ratio=gamma_ratio_val,
         cal_mult=_EM_CALIBRATION.get(fno_symbol, 1.0),
     )
@@ -4258,9 +4321,11 @@ def _compute_prediction(
             and em.get("expected_move_pts") is not None and spot_close):
         bo = _compute_breakout_extensions(
             spot_close, em["expected_move_pts"],
-            em["range_low"], em["range_high"], levels, composite,
-            fii_net=market_ctx.fii_fut_idx_net,
-            pcr=pcr,
+            em["range_low"], em["range_high"], _struct_levels, composite,
+            # Pooled FAO net is ~76% NIFTY: only amplify the squeeze leg on indices
+            # with a material FII futures share (same gate as the position signals).
+            fii_net=market_ctx.fii_fut_idx_net if _fii_participates else None,
+            pcr=pcr if _opt_chain_liquid else None,   # thin-chain PCR = noise, no floor logic
             carry_pct_ann=carry_pct_ann,
             dte=dte_options,
             volume_ratio=vol_ratio,
@@ -4308,6 +4373,7 @@ def _compute_prediction(
         composite_score=composite, headline=headline,
         key_driver=driver, key_risk=risk, signals=sigs,
         data_available=True, market_context=market_ctx,
+        opt_chain_liquid=_opt_chain_liquid,
         regime=regime, mem_signal=mem_signal,
         # Multi-expiry fields (Nifty 50 only)
         weekly_expiry=near_expiry  if fno_symbol == "NIFTY" else None,

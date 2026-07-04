@@ -469,7 +469,7 @@ def _render_card(pred: IndexPrediction) -> None:
                 {_meter_html(pred.composite_score, show_raw=True)}
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:0.8em;color:#aaa">
-                <div>PCR <b style="color:#fff">{_fmt(pred.pcr) if pred.pcr else '—'}</b></div>
+                <div>PCR <b style="color:{'#fff' if getattr(pred, 'opt_chain_liquid', True) else '#997a3d'}">{_fmt(pred.pcr) if pred.pcr else '—'}</b>{'' if getattr(pred, 'opt_chain_liquid', True) else ' <span style="color:#ffae00;font-size:0.85em" title="Near-expiry chain below liquidity floor — PCR is noise, excluded from signals">⚠ thin</span>'}</div>
                 <div>DTE <b style="color:#fff">{pred.days_to_expiry}d</b></div>
                 <div>Carry <b style="color:#fff">{_fmt(pred.carry_pct_ann, 1, '% ann') if pred.carry_pct_ann is not None else '—'}</b></div>
                 <div>VIX <b style="color:{vix_color}">{vix_str}{vix_trend}</b></div>
@@ -481,6 +481,7 @@ def _render_card(pred: IndexPrediction) -> None:
                 MP: <b style="color:#FFD600">{_fmt(pred.levels.max_pain, 0) if pred.levels.max_pain else '—'}</b>
                 &nbsp;|&nbsp;
                 R: <b style="color:#ff5252">{_fmt(pred.levels.top_call_strike, 0) if pred.levels.top_call_strike else '—'}</b>
+                {'' if getattr(pred, 'opt_chain_liquid', True) else '<span style="color:#ffae00" title="Near-expiry chain below liquidity floor — walls/max pain are noise, excluded from signals and ranges"> ⚠ thin chain</span>'}
             </div>
             {_card_move_line(pred)}
             {regime_html}
@@ -742,6 +743,13 @@ def _render_key_levels(pred: IndexPrediction) -> None:
     if not has_oi_levels and not has_price_sr:
         return
     _h("Key Levels", "Put Wall = strong support (where put sellers will defend the market). Call Wall = strong resistance (where call sellers will suppress rallies). Max Pain = level where option writers lose the least — markets magnetically move toward this as expiry nears, especially in the last 5 trading days.")
+    if not getattr(pred, "opt_chain_liquid", True):
+        st.warning(
+            "⚠ Thin options chain: near-expiry OI is below the engine's liquidity floor. "
+            "The put/call walls and max pain below are raw-data context — the engine excludes "
+            "them from signals and range structure because on this chain they are noise.",
+            icon="⚠️",
+        )
     c1, c2, c3 = st.columns(3)
     with c1:
         st.markdown(
@@ -1002,11 +1010,11 @@ def _verdict_meter_note(pred: IndexPrediction) -> str:
         is_expiry = (pred.days_to_expiry is not None and pred.days_to_expiry <= 1)
         reason = ("the expiry-day gamma pin" if is_expiry
                   else "a neutral-zone / mean-reversion override")
-        msg = (f"{arrow} Raw 23-signal read is <b>{label} ({meter}/100)</b>, but it's suppressed by "
+        msg = (f"{arrow} Raw multi-signal read is <b>{label} ({meter}/100)</b>, but it's suppressed by "
                f"{reason}. Treat it as the likely <b>break direction</b> ({lean}) if the range "
                f"fails — not today's base case.")
     else:
-        msg = (f"{arrow} The <b>{pred.direction}</b> verdict <b>overrides</b> the raw 23-signal "
+        msg = (f"{arrow} The <b>{pred.direction}</b> verdict <b>overrides</b> the raw multi-signal "
                f"score (<b>{label} {meter}/100</b>) — a mean-reversion / squeeze setup is countering "
                f"the trend signals. Lower conviction; use tight stops.")
 
@@ -1017,7 +1025,7 @@ def _verdict_meter_note(pred: IndexPrediction) -> str:
     )
 
 
-def _measured_trust_box(acc: dict, display_name: str) -> str:
+def _measured_trust_box(acc: dict, display_name: str, cov: Optional[dict] = None) -> str:
     """Per-index realized track record, rendered ON the verdict card so the
     displayed confidence can never read higher than the measured next-day
     hit-rate. Pooling hides the worst case (NIFTY ≈ 22%), so this is symbol-
@@ -1025,6 +1033,23 @@ def _measured_trust_box(acc: dict, display_name: str) -> str:
     if not acc:
         return ""
     sh, ic, n = acc["sign_hit"], acc["ic"], acc["n_dir"]
+    # Measured 1σ-band coverage (self-updating): keeps the "~68%" range claim
+    # honest — in a calm-vol regime the band over-covers, and saying so beats
+    # letting a hardcoded number drift from reality.
+    cov_line = ""
+    if cov:
+        c90 = f" · last 90d <b>{cov['cov_90d']:.0f}%</b> (n={cov['n_90d']})" if cov.get("cov_90d") else ""
+        note = ""
+        c_ref = cov.get("cov_90d", cov["cov_all"])
+        if c_ref >= 76:
+            note = " — band currently runs WIDE (calm-vol regime): honest but conservative."
+        elif c_ref <= 60:
+            note = " — band currently runs TIGHT: treat edges as soft."
+        cov_line = (
+            f"<div style='color:#9fb3c8;margin-top:3px'>Range band measured: next close landed "
+            f"inside the ±1σ range <b>{cov['cov_all']:.0f}%</b> of {cov['n']} days (target ~68%)"
+            f"{c90}{note}</div>"
+        )
     if sh >= 56:
         col, tag, msg = "#00c853", "has held an edge", \
             "the directional read has worked — still size with the range."
@@ -1040,7 +1065,27 @@ def _measured_trust_box(acc: dict, display_name: str) -> str:
         f"border-radius:0 6px 6px 0;padding:6px 10px;margin-bottom:10px;font-size:0.8em;color:#ddd'>"
         f"<b style='color:{col}'>⚖ Reality check — {display_name}:</b> measured next-day "
         f"directional hit-rate <b style='color:{col}'>{sh:.0f}%</b> (n={n}) · IC {ic:+.3f} — "
-        f"<b style='color:{col}'>{tag}</b>. {msg}</div>"
+        f"<b style='color:{col}'>{tag}</b>. {msg}{cov_line}</div>"
+    )
+
+
+def _thin_chain_banner(pred: IndexPrediction) -> str:
+    """Warn when the near-expiry options chain failed the engine's liquidity gate.
+
+    The engine already refuses to read PCR / max pain / walls from such a chain
+    (signals suppressed, structure excluded from ranges), but the raw numbers are
+    still printed on the card — without this banner a reader would trust e.g.
+    FinNifty's PCR from a ~0.2M-OI chain the engine itself calls noise."""
+    if getattr(pred, "opt_chain_liquid", True):
+        return ""
+    return (
+        "<div style='background:rgba(255,170,0,0.10);border-left:3px solid #ffae00;"
+        "border-radius:0 6px 6px 0;padding:6px 10px;margin-bottom:10px;"
+        "color:#e6c98a;font-size:0.8em;line-height:1.45'>"
+        "⚠ <b>Thin options chain</b> — near-expiry OI is below the liquidity floor, so "
+        "PCR, max pain and OI walls on this index are <b>statistical noise</b>: the engine "
+        "excludes them from signals and range structure; values shown are raw-data context only. "
+        "Trust the volatility range and futures/FII reads instead.</div>"
     )
 
 
@@ -1050,10 +1095,11 @@ def _render_verdict(pred: IndexPrediction) -> None:
     dir_emoji  = _DIR_EMOJI.get(pred.direction, "↔")
     # Per-index measured track record — gates how confident the card may LOOK.
     try:
-        from src.analytics.index_prediction import get_engine_accuracy
+        from src.analytics.index_prediction import get_engine_accuracy, get_range_coverage
         _acc = get_engine_accuracy(fno_symbol=pred.fno_symbol)
+        _cov = get_range_coverage(fno_symbol=pred.fno_symbol)
     except Exception:
-        _acc = {}
+        _acc, _cov = {}, {}
     # When the measured directional hit-rate is at/below a coin-flip, strip the
     # confidence colour to a warning hue so "MEDIUM/HIGH CONFIDENCE" can't masquerade
     # as actionable next to a verdict that has not earned it.
@@ -1076,7 +1122,8 @@ def _render_verdict(pred: IndexPrediction) -> None:
         f"</div>"
         f"</div>"
         f"<div style='color:#ddd;font-size:0.9em;margin-bottom:10px'>{pred.headline}</div>"
-        f"{_measured_trust_box(_acc, pred.display_name)}"
+        f"{_thin_chain_banner(pred)}"
+        f"{_measured_trust_box(_acc, pred.display_name, _cov)}"
         f"{_verdict_meter_note(pred)}"
         f"{_expected_move_box(pred, no_edge=bool(_acc and _acc['sign_hit'] < 48))}"
         f"{_range_cards(pred)}"
@@ -1150,7 +1197,7 @@ def _render_regime_panel(pred: IndexPrediction) -> None:
     c3.metric("Average H",   f"{r.memory_avg:.4f}",
               help="Mean of R/S and DFA — reduces estimation noise.")
     c4.metric("Signal Score", f"{r.memory_score:+.1f}",
-              help="Contributes to the 23-signal composite. +2=strong bullish persistence, -2=strong bearish persistence.")
+              help="Contributes to the multi-signal composite. +2=strong bullish persistence, -2=strong bearish persistence.")
 
     st.markdown(
         f"<div style='padding:12px 16px;border-left:4px solid {h_color};"
@@ -1229,7 +1276,7 @@ def _render_regime_panel(pred: IndexPrediction) -> None:
         h2.metric("State Prob",     f"{r.hmm_prob:.1%}",
                   help="Probability of the detected state. Higher = more confident regime ID.")
         h3.metric("HMM Score",      f"{r.hmm_score:+.2f}",
-                  help="p_Bull×3 − p_Bear×3. Range ≈ [−3, +3]. Contributes to 23-signal composite.")
+                  help="p_Bull×3 − p_Bear×3. Range ≈ [−3, +3]. Contributes to the multi-signal composite.")
         h4.metric("Data Window",    f"{min(r.data_points, 90)}D",
                   help="Number of trading days used to fit the HMM.")
 
@@ -1726,20 +1773,26 @@ def render(selected_date: date) -> None:
 
     # ── Honest track record (radical transparency) ────────────────────────────
     try:
-        from src.analytics.index_prediction import get_engine_accuracy
+        from src.analytics.index_prediction import get_engine_accuracy, get_range_coverage
         _acc = get_engine_accuracy()
+        _cov_all = get_range_coverage()
     except Exception:
-        _acc = {}
+        _acc, _cov_all = {}, {}
     if _acc:
         _sh = _acc["sign_hit"]; _ic = _acc["ic"]
         _edge = ("a real edge" if _sh >= 56 else "near coin-flip" if _sh >= 47 else "below coin-flip")
         _col = "#ff9100" if _sh < 56 else "#00c853"
+        _cov_txt = ""
+        if _cov_all:
+            _c90 = f" ({_cov_all['cov_90d']:.0f}% last 90d)" if _cov_all.get("cov_90d") else ""
+            _cov_txt = (f" The <b>range</b> is the trustworthy product: measured band coverage "
+                        f"<b style='color:#40c4ff'>{_cov_all['cov_all']:.0f}%</b>{_c90} vs ~68% target.")
         st.markdown(
             f"<div style='border-left:4px solid {_col};background:rgba(255,255,255,0.03);"
             f"padding:8px 12px;margin:4px 0;border-radius:0 6px 6px 0;font-size:12.5px'>"
             f"<b>📊 Live track record:</b> next-day directional hit-rate "
             f"<b style='color:{_col}'>{_sh:.0f}%</b> (n={_acc['n_dir']}, since {_acc['since']}) · "
-            f"composite→return IC {_ic:+.3f} — <b>{_edge}</b>. "
+            f"composite→return IC {_ic:+.3f} — <b>{_edge}</b>.{_cov_txt} "
             f"Treat this page as a <b>market-structure map</b> (FII positioning, OI walls, PCR, "
             f"vol regime, ranges), <b>not</b> a precise forecast. Next-day index direction is near-random; "
             f"use the verdict as one input, sized accordingly.</div>",
