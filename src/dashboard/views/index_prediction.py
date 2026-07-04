@@ -1288,8 +1288,10 @@ def _market_map_box(pred: IndexPrediction, acc: dict, cov: dict) -> str:
     # Fresh-writing walls (COI basis): the strongest measured single-basis level —
     # writers defending positions they wrote TODAY. Fresh put wall +10.1pp (the one
     # exception to "floors are weak"); fresh call wall +5.9pp.
-    fc = lv.fresh_call_strike if (lv and chain_ok) else None
-    fp = lv.fresh_put_strike if (lv and chain_ok) else None
+    # getattr-defensive: st.cache_data can serve IndexKeyLevels objects pickled
+    # BEFORE these fields existed (until the TTL expires after a deploy).
+    fc = getattr(lv, "fresh_call_strike", None) if (lv and chain_ok) else None
+    fp = getattr(lv, "fresh_put_strike", None) if (lv and chain_ok) else None
     if fc and fc != cw:
         lv_items.append((fc, f"fCW {fc:,.0f}", "#ffab40",
                          "TODAYS MOST-WRITTEN CALL STRIKE (change in OI). Honest read after the placebo "
