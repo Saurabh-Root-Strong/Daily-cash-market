@@ -234,6 +234,13 @@ class IndexKeyLevels:
     second_put_strike: Optional[float] = None
     call_oi_at_top: int = 0
     put_oi_at_top: int = 0
+    # Fresh-writing walls: strike with the largest POSITIVE 1-day chg_in_oi above/
+    # below spot. Level-basis shootout (Jul 2026, distance-controlled, 390d×4idx):
+    # fresh put writing rejects +10.1pp above chance — the strongest single-basis
+    # level measured, beating the total-OI wall (+6.0) — writers defend TODAY's
+    # positions harder than stale ones. Fresh call wall +5.9pp.
+    fresh_call_strike: Optional[float] = None
+    fresh_put_strike: Optional[float] = None
 
 
 @dataclass
@@ -1158,7 +1165,19 @@ def _compute_key_levels(opt_near: pd.DataFrame, spot_close: float) -> IndexKeyLe
     if np_.empty: np_ = puts
     tc = nc.nlargest(2); tp = np_.nlargest(2)
 
+    # Fresh-writing walls (max positive 1-day chg_in_oi above/below spot).
+    fresh_c = fresh_p = None
+    if "chg_in_oi" in opt_near.columns:
+        _fc = (opt_near[(opt_near["option_type"] == "CE") & (opt_near["strike_price"] > spot_close)]
+               .groupby("strike_price")["chg_in_oi"].sum())
+        _fp = (opt_near[(opt_near["option_type"] == "PE") & (opt_near["strike_price"] < spot_close)]
+               .groupby("strike_price")["chg_in_oi"].sum())
+        if len(_fc) and float(_fc.max()) > 0: fresh_c = float(_fc.idxmax())
+        if len(_fp) and float(_fp.max()) > 0: fresh_p = float(_fp.idxmax())
+
     return IndexKeyLevels(
+        fresh_call_strike=fresh_c,
+        fresh_put_strike=fresh_p,
         max_pain=round(max_pain, 0) if max_pain else None,
         top_call_strike   =float(tc.index[0]) if len(tc) >= 1 else None,
         top_put_strike    =float(tp.index[0]) if len(tp) >= 1 else None,

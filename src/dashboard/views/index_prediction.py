@@ -833,8 +833,10 @@ def _render_key_levels(pred: IndexPrediction) -> None:
         "<div style='background:#141a14;border-left:3px solid #8bc34a;border-radius:0 6px 6px 0;"
         "padding:7px 11px;margin-top:10px;font-size:0.8em;color:#bfcdb2'>"
         "<b style='color:#8bc34a'>⚖ Which levels actually matter (measured, distance-controlled):</b> "
-        "<b>#1 by far: 🤝 confluence — a pivot WITH a call wall on it rejects +10pp above chance "
-        "(current regime)</b>; a naked pivot has decayed to ~0 in 2026 (was +6–7pp in 2023–24) — "
+        "<b>#1: FRESH PUT WALL (todays new put writing, +10.1pp) and 🤝 confluence — a pivot WITH a call "
+        "wall on it (+10pp, current regime)</b>. Level BASIS shootout: fresh writing (change-in-OI) beats "
+        "stale total OI (+10.1 vs +6.0 support / +5.9 vs +4.7 resistance); volume walls +4.5; futures "
+        "cost-basis dead as resistance. A naked pivot has decayed to ~0 in 2026 (was +6–7pp in 2023–24) — "
         "writers now make the level, not the chart alone. Overhead only: the same confluence on the "
         "SUPPORT side adds ~nothing (down moves don't respect structure — yesterday's low is dead too). "
         "A level tested <b>5+ times gets WEAKER</b> (−3pp — each test absorbs the defenders). "
@@ -1281,6 +1283,21 @@ def _market_map_box(pred: IndexPrediction, acc: dict, cov: dict) -> str:
         lv_items.append((pw, f"PW {pw:,.0f}", "#4db6ac",
                          "PUT WALL — biggest put-writer position below spot. Mild friction on touch (+6pp), "
                          "but remember: floors are weaker than ceilings in every audit.", False))
+    # Fresh-writing walls (COI basis): the strongest measured single-basis level —
+    # writers defending positions they wrote TODAY. Fresh put wall +10.1pp (the one
+    # exception to "floors are weak"); fresh call wall +5.9pp.
+    fc = lv.fresh_call_strike if (lv and chain_ok) else None
+    fp = lv.fresh_put_strike if (lv and chain_ok) else None
+    if fc and fc != cw:
+        lv_items.append((fc, f"fCW {fc:,.0f}", "#ffab40",
+                         "FRESH CALL WALL — the strike where the most NEW call writing happened today "
+                         "(change in OI, not stale totals). Measured +5.9pp rejection — todays writers "
+                         "defend todays positions.", True))
+    if fp and fp != pw:
+        lv_items.append((fp, f"fPW {fp:,.0f}", "#00e5cc",
+                         "FRESH PUT WALL — the strike with the most NEW put writing today. The strongest "
+                         "single-basis level measured (+10.1pp rejection) and the ONE exception to the "
+                         "floors-are-weak rule: writers defend money committed TODAY.", False))
     if mp:
         lv_items.append((mp, f"MP {mp:,.0f}", "#9e9e9e",
                          "MAX PAIN — the strike where option writers lose least. It does NOT pull price "
