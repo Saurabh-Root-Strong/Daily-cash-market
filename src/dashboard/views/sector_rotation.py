@@ -2885,18 +2885,44 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             )
     # One-or-both decision guide — the two axes nest differently per setup cell, so the
     # right answer isn't uniform (audit: scripts/audit_setup_vs_alignment.py). Spell it out.
-    with st.expander("❓ Which should I pick? (simple guide)"):
+    with st.expander("❓ Which should I pick? (full simple guide)"):
         st.markdown(
-            "**Most of the time, use just ONE box.** Leave the other on “Choose options”.\n\n"
-            "| I want… | Pick this | Leave empty |\n"
+            "**Rule of thumb: most of the time, use just ONE box.** Leave the other on "
+            "“Choose options”. Below is what every choice means and whether to use it.\n\n"
+
+            "**① First box — 🚀 Setup** *(what just happened to the price)*\n\n"
+            "| Choice | In plain words | Use it? |\n"
             "|---|---|---|\n"
-            "| Strong stocks **breaking out now** | 🚀 Breakout &nbsp;*(1st box)* | 2nd box |\n"
-            "| Good **uptrend** stocks, not moving yet | ✅ Confirmed Up &nbsp;*(2nd box)* | 1st box |\n"
-            "| A **watchlist** — about to break out | 🧊 Coiling *(1st)* **+** ✅ Confirmed Up *(2nd)* | — |\n\n"
-            "**The one rule:** if the 1st box is 🚀 Breakout or ⚠️ False break, "
-            "**leave the 2nd box empty** — adding to it changes nothing.\n\n"
-            "Only use **both** boxes together when the 1st box is 🧊 Coiling, "
-            "↗ Break (extended), or 💥 Breakdown-bounce."
+            "| 🚀 **Breakout** | Jumped above its recent high after a quiet patch, and the bigger trend is up | ✅ **Best buys** — use alone |\n"
+            "| ⚠️ **False break** | Same jump, but the bigger trend is DOWN — usually a trap | ❌ **Avoid** — this is your skip list |\n"
+            "| ↗ **Break (extended)** | Broke higher, but was already running fast (no quiet patch first) — weaker | 🤔 Only with ✅ Confirmed Up |\n"
+            "| 💥 **Breakdown-bounce** | Fell below its recent low — tends to bounce back, so NOT a short | 👀 Watch only |\n"
+            "| 🧊 **Coiling** | Very quiet and tight, no jump yet — often just before a move | 👀 Watchlist — add ✅ Confirmed Up |\n\n"
+
+            "**② Second box — 🧭 Alignment** *(the background trend)*\n\n"
+            "| Choice | In plain words | Use it? |\n"
+            "|---|---|---|\n"
+            "| ✅ **Confirmed Up** | Up on the day AND up on the bigger trend — healthy uptrend | ✅ **Best background** |\n"
+            "| ⚠️ **False Pop** | Up on the day but the bigger trend is down — fake strength | ❌ Avoid |\n"
+            "| 🔵 **Pullback** | Down on the day but the bigger trend is still up — a dip | 🤔 Dip-buyers only |\n"
+            "| 🔻 **Down-trend** | Down on the day AND down on the bigger trend — weak | ❌ Avoid for buying |\n"
+            "| • **Neutral** | No clear direction | — Skip |\n\n"
+
+            "**③ Do I need BOTH boxes?** *(only matters if you picked something in box ①)*\n\n"
+            "| If box ① is… | Second box? |\n"
+            "|---|---|\n"
+            "| 🚀 Breakout | ❌ No — leave 2nd box empty (it changes nothing) |\n"
+            "| ⚠️ False break | ❌ No — leave 2nd box empty |\n"
+            "| ↗ Break (extended) | ✅ Yes — add ✅ Confirmed Up to keep the good ones |\n"
+            "| 💥 Breakdown-bounce | ➕ Optional — adds nothing tradable |\n"
+            "| 🧊 Coiling | ✅ Yes — add ✅ Confirmed Up (coils inside an uptrend) |\n\n"
+
+            "**④ Ready-made picks**\n"
+            "- **Best buys right now** → box ①: 🚀 Breakout *(nothing else)*\n"
+            "- **Solid uptrends not moving yet** → box ②: ✅ Confirmed Up *(nothing else)*\n"
+            "- **Watchlist, about to pop** → box ①: 🧊 Coiling  +  box ②: ✅ Confirmed Up\n"
+            "- **Dip-buys in an uptrend** → box ②: 🔵 Pullback *(nothing else)*\n"
+            "- **What to steer clear of** → ⚠️ False break (box ①) or ⚠️ False Pop (box ②)"
         )
     # ── Live regime gate on the breakout edge ──────────────────────────────────
     # The 4yr OOS audit showed the breakout edge is BULL-CONCENTRATED (win ~58% in
