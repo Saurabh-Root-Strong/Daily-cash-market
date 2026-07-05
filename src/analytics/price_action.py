@@ -39,7 +39,15 @@ panel (scripts/backtest_mtf_price_action.py; relative-to-universe forward return
      BROAD DCM universe (small+mid+large) this is strong and NOT an overlap artifact —
      NON-overlapping (step=horizon) it is +3.99%/10d relative, t=+5.85, win 62% (n=28
      clean periods); the consolidation filter is ESSENTIAL (plain breakout t≈1.9,
-     win<50%). Weekly-up alignment sharpens it.
+     win<50%). Weekly-up alignment sharpens it — and is now BUILT INTO the label:
+     a tight-base up-break is 🚀 Breakout only when the weekly trend agrees, else it
+     is split off as ⚠️ False break. The "daily break vs weekly downtrend" case
+     (textbook false breakout) is measured near-zero to negative — DCM broad
+     +0.5%/10d net win 48%, 4yr F&O OOS −0.6%/10d net win 41% (win 32% in bull
+     large-caps) — vs weekly-up break +1.5%/10d t3.0 net; SPREAD +1.0..+2.4pp/DCM
+     and +0.3..+0.8pp/F&O, positive every horizon both panels. TRUE weekly-candle
+     reads (close>10wSMA, HH-HL) agree on the sign but separate noisier than the
+     EMA proxy — do NOT switch. scripts/audit_breakout_weekly_gate.py.
      CAVEATS (4yr OOS audit, 211-name F&O daily 2022–2026, scripts/audit_mtf_price_action_oos.py):
        • UNIVERSE-DEPENDENT — a broad / small-mid-cap effect. On LARGE-CAPS ONLY it is
          weak (t≈1.4); big-cap breakouts are more efficiently priced.
@@ -144,12 +152,13 @@ MTF_NEUTRAL    = "• Neutral"           # no clear direction on one leg
 MTF_ALIGN      = (MTF_CONFIRM_UP, MTF_FALSE_POP, MTF_PULLBACK, MTF_DOWN_ALGN, MTF_NEUTRAL)
 
 # Breakout state labels — stable strings.
-BRK_BREAKOUT   = "🚀 Breakout"         # close >1% over 20d high FROM a tight base (the edge)
+BRK_BREAKOUT   = "🚀 Breakout"         # tight-base 20d-high break WITH weekly uptrend (the edge)
+BRK_FALSEBRK   = "⚠️ False break"      # tight-base 20d-high break AGAINST a weekly downtrend (trap)
 BRK_EXTENDED   = "↗ Break (extended)"  # broke out but no prior consolidation (weaker)
 BRK_BOUNCE     = "💥 Breakdown-bounce"  # broke 20d low — tends to bounce, NOT a short
 BRK_COILING    = "🧊 Coiling"          # tight base, no break yet (watch for the trigger)
 BRK_NONE       = "—"
-BRK_STATES     = (BRK_BREAKOUT, BRK_EXTENDED, BRK_BOUNCE, BRK_COILING, BRK_NONE)
+BRK_STATES     = (BRK_BREAKOUT, BRK_FALSEBRK, BRK_EXTENDED, BRK_BOUNCE, BRK_COILING, BRK_NONE)
 
 
 def get_price_action(
@@ -274,9 +283,18 @@ def get_price_action(
     # break with no base is weaker; a broken low tends to bounce (never a short).
     tight = df["atr20_pct"] <= df["atr20_pct"].quantile(_CONSOL_PCTL)
 
+    # A tight-base up-break is the validated edge ONLY when the weekly trend agrees.
+    # The same break AGAINST a weekly downtrend is a "false break": measured near-zero
+    # to negative on both panels (DCM broad +0.5%/10d net win 48%; 4yr F&O OOS −0.6%
+    # net win 41%, worst in BULL large-caps win 32%), vs weekly-up break +1.5%/10d
+    # t3.0 net. scripts/audit_breakout_weekly_gate.py. Splitting the label keeps the
+    # 🚀 filter honest instead of mixing the two halves. (Extended/bounce/coiling are
+    # left un-gated — the edge/false split only carries where the tight-base edge lives.)
     def _breakout(r, is_tight: bool) -> str:
         if r["_brk_up"]:
-            return BRK_BREAKOUT if is_tight else BRK_EXTENDED
+            if not is_tight:
+                return BRK_EXTENDED
+            return BRK_BREAKOUT if r["w_trend"] == "↑ up" else BRK_FALSEBRK
         if r["_brk_dn"]:
             return BRK_BOUNCE
         return BRK_COILING if is_tight else BRK_NONE
