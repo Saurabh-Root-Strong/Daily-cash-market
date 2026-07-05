@@ -39,7 +39,8 @@ from src.dashboard.cache.queries import (
     cached_forward_tilt,
     cached_sector_defensive,
 )
-from src.analytics.price_action import BRK_BREAKOUT, BRK_STATES, MTF_ALIGN
+from src.analytics.price_action import (BRK_BREAKOUT, BRK_FALSEBRK, BRK_STATES,
+                                        MTF_ALIGN, MTF_CONFIRM_UP, MTF_FALSE_POP)
 from src.dashboard.constants import NEGATIVE_COLOR, POSITIVE_COLOR, PLOT_BG, PAPER_BG, GRID_COLOR
 from src.dashboard.components.charts import hex_to_rgba as _hex_to_rgba  # deduped helper
 
@@ -2798,14 +2799,19 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             "🧭 Daily×Weekly alignment",
             list(MTF_ALIGN), default=[], key="rotation_stock_pa_align",
             help=(
-                "Momentum-quality gate. A daily up-move only tends to continue when the "
-                "WEEKLY trend agrees.\n\n"
+                "The always-on BACKDROP: every stock sits in one daily×weekly quadrant "
+                "(vs 🚀 Setup, which is a rare structural EVENT). A daily up-move only "
+                "tends to continue when the WEEKLY trend agrees.\n\n"
                 "• ✅ Confirmed Up — daily-up + weekly-up (best win-rate; edge accrues to "
                 "~day 13-15 then plateaus — a 2-3wk hold captures it)\n"
                 "• ⚠️ False Pop — daily-up but weekly-DOWN → dead money for the full 20d "
                 "ahead (audited both panels) — an avoid, not a short\n"
                 "• 🔵 Pullback — daily-down inside a weekly uptrend (dip)\n"
-                "• 🔻 Down-trend — both lower (aligned down)\n\nEmpty = no filter."
+                "• 🔻 Down-trend — both lower (aligned down)\n\n"
+                "OVERLAP: a 🚀 Breakout is ALWAYS ✅ Confirmed Up, and a ⚠️ False break is "
+                "ALWAYS ⚠️ False Pop (audit: 100% nested) — so those pairs don't stack. "
+                "Use this to select the broad grind names that have NO setup, or the "
+                "🔵/🔻 quadrants 🚀 doesn't cover. Empty = no filter."
             ),
         )
     with _scol3:
@@ -2835,6 +2841,22 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             "⚠️ 🛡️ + 🚀 stacked: the risky veto keeps the median breakout (+1.3% vs "
             "+1.0%/20d) but drops the lottery tail (p90 +12% vs +41%). Fine for risk "
             "control — just know the biggest winners live in the names it hides."
+        )
+    # Nested-pair guard — the setup axis (event) and alignment axis (state) share the
+    # weekly leg, so two cells are 100% nested (audit: scripts/audit_setup_vs_alignment.py,
+    # Cramér's V 0.14 overall = independent, but these pairs co-occur exactly). Stacking
+    # them narrows nothing; the 🚀 setup is already the sharper cut (a breakout adds
+    # +1.2pp/10d over a ConfirmUp grind, while ConfirmUp adds 0.0 over a breakout).
+    _nested = []
+    if BRK_BREAKOUT in (pa_setups or []) and MTF_CONFIRM_UP in (pa_aligns or []):
+        _nested.append("🚀 Breakout ⊆ ✅ Confirmed Up")
+    if BRK_FALSEBRK in (pa_setups or []) and MTF_FALSE_POP in (pa_aligns or []):
+        _nested.append("⚠️ False break ⊆ ⚠️ False Pop")
+    if _nested:
+        st.caption(
+            "ℹ️ Redundant stack: " + " · ".join(_nested) + " (100% nested). The 🧭 "
+            "alignment pick isn't narrowing the list — it's already implied by the 🚀 "
+            "setup. Drop it, or use 🧭 for the 🔵/🔻 quadrants or the no-setup grind names."
         )
     # ── Live regime gate on the breakout edge ──────────────────────────────────
     # The 4yr OOS audit showed the breakout edge is BULL-CONCENTRATED (win ~58% in
