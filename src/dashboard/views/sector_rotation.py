@@ -2885,23 +2885,18 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             )
     # One-or-both decision guide — the two axes nest differently per setup cell, so the
     # right answer isn't uniform (audit: scripts/audit_setup_vs_alignment.py). Spell it out.
-    with st.expander("❓ One dropdown or both? — how 🚀 Setup and 🧭 Alignment combine"):
+    with st.expander("❓ Which should I pick? (simple guide)"):
         st.markdown(
-            "**They answer different questions.** 🚀 Setup = a rare structural EVENT "
-            "(breakout / coil / bounce). 🧭 Alignment = the always-on daily×weekly STATE "
-            "(which quadrant every stock sits in). They only overlap at the break cells.\n\n"
-            "| If you pick in 🚀 Setup | Does 🧭 Alignment add anything? |\n"
-            "|---|---|\n"
-            "| 🚀 **Breakout** | **No** — every breakout is already ✅ Confirmed Up (100% nested). Pick one. |\n"
-            "| ⚠️ **False break** | **No** — every one is already ⚠️ False Pop (100% nested). Pick one. |\n"
-            "| ↗ **Break (extended)** | **Yes** — it lives in both ✅ ConfirmUp (+0.9%/10d) and ⚠️ FalsePop (−0.7%); alignment splits the good half. |\n"
-            "| 💥 **Breakdown-bounce** | **Yes** — splits 🔵 Pullback vs 🔻 Down-trend. |\n"
-            "| 🧊 **Coiling** | **Yes** — a coil sits in all 4 quadrants; ✅ ConfirmUp picks the pre-breakout ones. |\n\n"
-            "**Quick recipes**\n"
-            "- Clean breakout → **🚀 Breakout only** (best single pick; alignment is redundant here).\n"
-            "- Healthy uptrend names not yet breaking out → **✅ Confirmed Up only** (catches the grind names Setup calls “—”).\n"
-            "- Pre-breakout watchlist → **🧊 Coiling + ✅ Confirmed Up** (coils inside an uptrend).\n"
-            "- Never stack a nested pair (🚀+✅ or ⚠️+⚠️) — it narrows nothing."
+            "**Most of the time, use just ONE box.** Leave the other on “Choose options”.\n\n"
+            "| I want… | Pick this | Leave empty |\n"
+            "|---|---|---|\n"
+            "| Strong stocks **breaking out now** | 🚀 Breakout &nbsp;*(1st box)* | 2nd box |\n"
+            "| Good **uptrend** stocks, not moving yet | ✅ Confirmed Up &nbsp;*(2nd box)* | 1st box |\n"
+            "| A **watchlist** — about to break out | 🧊 Coiling *(1st)* **+** ✅ Confirmed Up *(2nd)* | — |\n\n"
+            "**The one rule:** if the 1st box is 🚀 Breakout or ⚠️ False break, "
+            "**leave the 2nd box empty** — adding to it changes nothing.\n\n"
+            "Only use **both** boxes together when the 1st box is 🧊 Coiling, "
+            "↗ Break (extended), or 💥 Breakdown-bounce."
         )
     # ── Live regime gate on the breakout edge ──────────────────────────────────
     # The 4yr OOS audit showed the breakout edge is BULL-CONCENTRATED (win ~58% in
