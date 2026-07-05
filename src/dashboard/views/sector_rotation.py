@@ -2922,7 +2922,18 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             "- **Solid uptrends not moving yet** → box ②: ✅ Confirmed Up *(nothing else)*\n"
             "- **Watchlist, about to pop** → box ①: 🧊 Coiling  +  box ②: ✅ Confirmed Up\n"
             "- **Dip-buys in an uptrend** → box ②: 🔵 Pullback *(nothing else)*\n"
-            "- **What to steer clear of** → ⚠️ False break (box ①) or ⚠️ False Pop (box ②)"
+            "- **What to steer clear of** → ⚠️ False break (box ①) or ⚠️ False Pop (box ②)\n\n"
+
+            "**⑤ Shorting / downtrends? — this tool has NO short signal**\n"
+            "None of these choices is a sell-short trigger. We tested every down/weak "
+            "state over 4 years and **none paid to short**:\n"
+            "- 🔻 **Down-trend** — actually drifts UP a little (oversold bounce), so shorting loses.\n"
+            "- 💥 **Breakdown-bounce** — a fresh low tends to BOUNCE, not keep falling.\n"
+            "- ⚠️ **False break** / ⚠️ **False Pop** — weak, but not reliably down enough to short.\n\n"
+            "So treat the down/weak choices as **“don’t buy / get out” flags, not short trades**: "
+            "🔻 Down-trend and ⚠️ False Pop = avoid buying; 💥 Breakdown = watch for a bounce; "
+            "⚠️ False break = a breakout to skip. To find weak names to EXIT or avoid, put "
+            "🔻 Down-trend in box ②."
         )
     # ── Live regime gate on the breakout edge ──────────────────────────────────
     # The 4yr OOS audit showed the breakout edge is BULL-CONCENTRATED (win ~58% in
