@@ -89,7 +89,25 @@ any of these — each was measured and FAILS out-of-sample:
   • PULLBACK (weekly-up + daily-down) cannot be sharpened: shallow-vs-deep doesn't separate
     robustly (DCM flat, F&O deep-better — opposite), and a reversal-candle trigger (hammer/
     engulf) HURTS (+0.17 vs +0.49%/10d). Keep the single undifferentiated Pullback state.
-  DATA INTEGRITY verified same run: 0 OHLC violations, body+wick≡range exactly, splits
+  • WEEKLY candlestick patterns FAIL OOS too (v4, scripts/audit_candle_anatomy_v4.py). On
+    DCM every weekly pattern looks positive (marubozu-up +2.0%/20d t2.9, hammer +1.5 t4.4)
+    — but marubozu-DOWN is ALSO +1.1% t2.0 and shooting-star +0.65: bearish patterns "work"
+    as well as bullish = it's bull-BETA (big weekly bar ⇒ high-beta name), not a pattern edge.
+    The 4yr F&O OOS panel breaks it: weekly marubozu-UP +0.31 t1.1 → −0.04 t−0.1 (dead,
+    sign-incoherent). Slower bars do NOT rescue the daily-pattern null.
+  • The BREAKOUT BAR's OWN anatomy is ANTI-predictive — do NOT add a "clean/marubozu
+    breakout candle" filter, it would INVERT the edge. Splitting 🚀 Breakout by break-bar
+    body%: the STRONG-body (marubozu-like) break UNDER-performs the weak/wick-y break on
+    BOTH panels (DCM +3.1 vs +5.1%/20d; F&O −0.7 vs +1.3 — the marubozu break is NEGATIVE
+    on large-caps), and "close in top-25%, no rejection" is −0.6% F&O while "close mid/low
+    with upper rejection" is +2.8%. Textbook is backwards here: a giant break bar has spent
+    its move intraday and gives back; a modest break has room. Re-confirms "big breakout
+    candle is a fade" via body% (v3 had it via range/volume). The edge is the base BEFORE
+    the break, never the break candle's shape.
+  • DAILY×WEEKLY candle CONFLUENCE (breakout + weekly strong-body / weekly close-near-high)
+    is DCM/bull/broad-only: +6.3%/20d t4.4 win 61 on DCM but +0.46 t0.6 (dead) on 4yr F&O —
+    collapses OOS exactly like the base breakout's universe-dependence. Not a robust add.
+  DATA INTEGRITY verified across runs: 0 OHLC violations, body+wick≡range exactly, splits
   <0.02% of bars — the candle math is sound; edges are absent, not mismeasured.
 
 Public entry point:
