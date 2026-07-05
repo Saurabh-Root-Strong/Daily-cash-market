@@ -54,6 +54,36 @@ panel (scripts/backtest_mtf_price_action.py; relative-to-universe forward return
      The ALIGNMENT gate is the most robust piece — the weekly-up vs weekly-down win
      spread holds OUT-OF-WINDOW on the independent 4yr F&O panel (+4.0pp OOS).
 
+GUARDRAILS — traps this design DELIBERATELY avoids (scripts/audit_price_action_v3.py,
+dual-panel: DCM broad 372d/940k bars + Tradebot 4yr F&O 1018d/210k bars; every masked
+event forward-relative, honest non-overlapping t). Do NOT "improve" the engine by adding
+any of these — each was measured and FAILS out-of-sample:
+  • CANDLESTICK PATTERNS (engulfing / hammer / shooting-star / doji / marubozu / 3-soldiers)
+    carry NO reliable swing edge: win-rates 43–52%, non-overlapping t≈0–3, and the SIGN
+    flips across panels (hammer +0.80%/10d on DCM but dead and −0.5% in F&O-bull; marubozu-
+    DOWN mean-reverts on DCM, weak on F&O). The big t_ov values are n-driven, not edges.
+    This RE-CONFIRMS the founding finding (candle anatomy ⟂ trend) on 4 fresh years — hence
+    body/wick stay CONTEXT, and only ER + breakout-from-base + alignment are signals.
+  • "BIG breakout candle" is a FADE on the live broad universe. Range-expansion (≥1.5×ATR)
+    breakouts −0.14%/10d (win 42); volume-surge (≥2×) +0.02% (dead). A 5-factor breakout
+    QUALITY score is WORSE than tight-base alone (+0.49 vs +1.92%/10d) because it dilutes
+    the one real axis. The edge is the CONSOLIDATION before the break (bottom-third ATR20,
+    already `_CONSOL_PCTL`), NOT the drama of the break bar. (≥3 prior level-touches is the
+    only add positive on BOTH panels, +1.09/+0.79%/10d, but weaker than tight-base on DCM —
+    not worth the complexity.) NOTE the universe flip: on large-cap F&O tight-base is dead
+    and volume/range-expansion work — but the live product runs the broad universe, so the
+    shipped tight-base definition is correct here.
+  • TRUE WEEKLY CANDLES LOSE to the EMA20/50-of-daily proxy for the alignment gate. Horse
+    race (ConfirmUp-minus-FalsePop f10 spread), both panels: EMA proxy +0.69pp t6.5 / +0.45pp
+    t5.9  >  weekly close>SMA10w +0.35/+0.42  >  weekly HH+HL/LL+LH +0.51/+0.23. The daily
+    EMA is a smoother, more responsive weekly-trend read than a resampled weekly bar — do
+    NOT switch `_mtf_fields` to W-FRI resampling.
+  • PULLBACK (weekly-up + daily-down) cannot be sharpened: shallow-vs-deep doesn't separate
+    robustly (DCM flat, F&O deep-better — opposite), and a reversal-candle trigger (hammer/
+    engulf) HURTS (+0.17 vs +0.49%/10d). Keep the single undifferentiated Pullback state.
+  DATA INTEGRITY verified same run: 0 OHLC violations, body+wick≡range exactly, splits
+  <0.02% of bars — the candle math is sound; edges are absent, not mismeasured.
+
 Public entry point:
   get_price_action(as_of_date, lookback_days=60, min_turnover_lacs) -> DataFrame,
   one row per liquid stock with the raw metrics, the class, the risk flags, and the

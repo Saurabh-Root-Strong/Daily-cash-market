@@ -247,7 +247,8 @@ def run_panel(name, C, H, L, O, TV):
         print(f"  MC f{h}: real {real*100:+.2f}% vs null {nulls.mean()*100:+.2f}%  p(real>null) {(nulls < real).mean():.3f}")
     return S
 
-CA, HA, LA, OA, TA = load_dcm()
-run_panel("A — DCM broad", CA, HA, LA, OA, TA)
-CB, HB, LB, OB, TB = load_fno()
-run_panel("B — 4yr F&O OOS", CB, HB, LB, OB, TB)
+if __name__ == "__main__":
+    CA, HA, LA, OA, TA = load_dcm()
+    run_panel("A — DCM broad", CA, HA, LA, OA, TA)
+    CB, HB, LB, OB, TB = load_fno()
+    run_panel("B — 4yr F&O OOS", CB, HB, LB, OB, TB)
