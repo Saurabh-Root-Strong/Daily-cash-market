@@ -39,8 +39,10 @@ from src.dashboard.cache.queries import (
     cached_forward_tilt,
     cached_sector_defensive,
 )
-from src.analytics.price_action import (BRK_BREAKOUT, BRK_FALSEBRK, BRK_STATES,
-                                        MTF_ALIGN, MTF_CONFIRM_UP, MTF_FALSE_POP)
+from src.analytics.price_action import (BRK_BREAKOUT, BRK_FALSEBRK, BRK_EXTENDED,
+                                        BRK_BOUNCE, BRK_COILING, BRK_NONE, BRK_STATES,
+                                        MTF_ALIGN, MTF_CONFIRM_UP, MTF_FALSE_POP,
+                                        MTF_PULLBACK, MTF_DOWN_ALGN, MTF_NEUTRAL)
 from src.dashboard.constants import NEGATIVE_COLOR, POSITIVE_COLOR, PLOT_BG, PAPER_BG, GRID_COLOR
 from src.dashboard.components.charts import hex_to_rgba as _hex_to_rgba  # deduped helper
 
@@ -2858,6 +2860,29 @@ A marginal dip (e.g. 98% of average) is treated as normal — only a genuine con
             "alignment pick isn't narrowing the list — it's already implied by the 🚀 "
             "setup. Drop it, or use 🧭 for the 🔵/🔻 quadrants or the no-setup grind names."
         )
+    # Contradiction guard — some setup×alignment pairs can NEVER co-occur (structural, not
+    # data: a 20d-high break is provably daily-up so 🚀/⚠️/↗ only live in the up quadrants;
+    # a 20d-low break is daily-down so 💥 only lives in the down quadrants). Picking an
+    # impossible pair returns an empty list with no explanation — warn instead. Map verified
+    # on 4,753 live rows (0 off-quadrant). 🧊 Coiling / — span all quadrants (never conflict).
+    _valid_aligns = {
+        BRK_BREAKOUT: {MTF_CONFIRM_UP},
+        BRK_FALSEBRK: {MTF_FALSE_POP},
+        BRK_EXTENDED: {MTF_CONFIRM_UP, MTF_FALSE_POP},
+        BRK_BOUNCE:   {MTF_PULLBACK, MTF_DOWN_ALGN},
+        BRK_COILING:  set(MTF_ALIGN),
+        BRK_NONE:     set(MTF_ALIGN),
+    }
+    if pa_setups and pa_aligns and not _nested:
+        _picked_aligns = set(pa_aligns)
+        _reachable = any(_valid_aligns.get(s, set(MTF_ALIGN)) & _picked_aligns for s in pa_setups)
+        if not _reachable:
+            st.caption(
+                "🚫 Impossible combination: none of your 🚀 setup picks ever occur in the "
+                "chosen 🧭 alignment quadrant — a 20d-high break is always daily-up (✅/⚠️ up "
+                "quadrants), a 20d-low break always daily-down (🔵/🔻). This filter returns "
+                "nothing. Match the quadrant to the setup, or use just one dropdown."
+            )
     # One-or-both decision guide — the two axes nest differently per setup cell, so the
     # right answer isn't uniform (audit: scripts/audit_setup_vs_alignment.py). Spell it out.
     with st.expander("❓ One dropdown or both? — how 🚀 Setup and 🧭 Alignment combine"):
