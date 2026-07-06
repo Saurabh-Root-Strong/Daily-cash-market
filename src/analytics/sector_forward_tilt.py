@@ -188,7 +188,9 @@ def _market_regime(nifty: pd.DataFrame) -> dict:
     """
     default = dict(state="UNKNOWN", vol_pct=float("nan"), ret_5d=float("nan"),
                    confidence_mult=1.0, momentum_inverts=False, med_trend="UNKNOWN",
-                   divergence="n/a", posture="Market context unavailable.",
+                   divergence="n/a", verdict="SELECTIVE", size_hint=0.5,
+                   action="Half size — market context unavailable, treat as low conviction.",
+                   posture="Market context unavailable.",
                    banner="Regime unknown — market context unavailable.")
     if nifty.empty or len(nifty) < 60:
         return default
@@ -222,45 +224,67 @@ def _market_regime(nifty: pd.DataFrame) -> dict:
     elif (not short_up) and med_dn: divergence = "ALIGNED_DN"
     else:                        divergence = "MIXED"
 
-    # ── primary regime → data-backed multiplier + posture ────────────────────────
+    # ── primary regime → the frozen POSTURE MATRIX (verdict · size · mult · action) ─
+    # Every row = a measured cell of scripts/audit_tilt_posture_matrix.py (fwd-10d, 4yr OOS).
+    # verdict ∈ {ACT, SELECTIVE, STAND-ASIDE}; size_hint ∈ [0,1] = how much of a full tilt
+    # to put on; mult scales the advertised est_rel_bps. STAND-ASIDE is NEVER upgraded by a
+    # bullish divergence (the worst cell is a bullish pop INSIDE a downtrend: −1.61%/10d).
     if reversal:
-        state, mult, inv, posture = ("REVERSAL", _MULT_REVERSAL, True,
-            "Momentum-crash risk — leaders fade in sharp pullbacks. Trim / stand aside.")
+        state, mult, inv = "REVERSAL", _MULT_REVERSAL, True
+        verdict, size = "STAND-ASIDE", 0.0
+        posture = "Momentum-crash risk — leaders fade in sharp pullbacks. Trim / stand aside."
         banner = (f"⚠ Sharp pullback (Nifty {ret_5d:+.1f}% / 5d). Momentum-crash proxy — the "
                   f"overweight tilt is UNRELIABLE here; suppressed. Trim long exposure.")
     elif dn_trend:
-        state, mult, inv, posture = ("TRENDING_DOWN", _MULT_DOWN, True,
-            "Tilt INVERTS in downtrends — do NOT chase leaders. Overweights suppressed; defensive only.")
+        state, mult, inv = "TRENDING_DOWN", _MULT_DOWN, True
+        verdict, size = "STAND-ASIDE", 0.0
+        posture = "Tilt INVERTS in downtrends — do NOT chase leaders. Overweights suppressed; defensive only."
         banner = ("Nifty below 20/50 EMA (downtrend). OOS-measured: the overweight (high-momentum) "
                   "basket UNDERPERFORMS by ~0.8%/10d here — leaders are the wrong side. Overweights "
                   "are suppressed; treat this tab as reduce/avoid, not a buy list.")
     elif high_vol:
-        state, mult, inv, posture = ("HIGH_VOL", _MULT_HIVOL, False,
-            "Edge intact in-sample, but a long-only book carries elevated market beta — size for vol.")
+        state, mult, inv = "HIGH_VOL", _MULT_HIVOL, False
+        verdict, size = "ACT", 0.75           # edge intact but big beta swings → size down for vol
+        posture = "Tilt live, but a long-only book carries elevated market beta — size down for vol."
         banner = (f"Realized vol in the top {(1-vol_pct)*100:.0f}%. Relative tilt held up in-sample; "
                   f"a long-only book still carries market beta — size for the swing.")
     elif up_trend:
-        state, mult, inv, posture = ("TRENDING_UP", _MULT_UP, False,
-            "Tilt active — favourable backdrop for a long-only sector tilt.")
+        state, mult, inv = "TRENDING_UP", _MULT_UP, False
+        verdict, size = "ACT", 1.0
+        posture = "Tilt active — favourable backdrop. Overweights are live; rotate into leaders."
         banner = "Nifty in a clean uptrend — favourable backdrop for a long-only sector tilt."
     else:
-        state, mult, inv, posture = ("CHOPPY", _MULT_CHOP, False,
-            "Tilt muted — leaders ≈ laggards in chop; little to add. Wait for a trend.")
+        state, mult, inv = "CHOPPY", _MULT_CHOP, False
+        verdict, size = "SELECTIVE", 0.5
+        posture = "Tilt muted — leaders ≈ laggards in chop. Half size, top names only; wait for a trend."
         banner = ("Nifty rangebound (mixed EMAs). OOS-measured: overweight ≈ underweight in chop — "
                   "the tilt has little to add; conviction is muted.")
 
-    # ── BULLTRAP overlay: 1-2wk pop inside a 1-2mo downtrend = weakest forward state ─
-    if divergence == "BULLTRAP" and not inv:
+    # ── divergence overlays: downgrade size only; never upgrade a STAND-ASIDE ─────
+    if divergence == "BULLTRAP" and verdict != "STAND-ASIDE":
         mult *= _MULT_BULLTRAP
+        size = min(size, 0.5)
+        if verdict == "ACT":
+            verdict = "SELECTIVE"
         banner += ("  ⚠ Bull-trap: 1-2wk bounce inside a 1-2mo DOWNTREND (weakest measured forward "
                    "state) — reduce size, don't add on this pop.")
         posture = "Bull-trap (1-2wk up, 1-2mo down) — " + posture
-    elif divergence == "DIP_IN_UP":
+    elif divergence == "ALIGNED_DN" and verdict == "SELECTIVE":
+        # both timeframes down but regime only choppy → step to the sideline (OW−UW −0.70%)
+        verdict, size, mult = "STAND-ASIDE", 0.0, min(mult, _MULT_DOWN)
+        posture = "Short- and medium-term both down — step aside. " + posture
+    elif divergence == "DIP_IN_UP" and verdict == "ACT":
         banner += "  ✓ 1-2wk dip inside a 1-2mo uptrend — historically the best entry timing."
 
+    _ACTION = {
+        "ACT":         "Trade the tilt — overweights are live. Rotate into the leaders below.",
+        "SELECTIVE":   "Half size, top-ranked names only — the edge is thin/fragile here.",
+        "STAND-ASIDE": "No long rotation — the tilt inverts / trends down; leaders bleed. Preserve capital.",
+    }
     return dict(state=state, vol_pct=vol_pct, ret_5d=ret_5d, ret_med=ret_med,
                 med_trend=med_trend, divergence=divergence, momentum_inverts=bool(inv),
-                confidence_mult=float(mult), posture=posture, banner=banner)
+                confidence_mult=float(mult), verdict=verdict, size_hint=float(size),
+                action=_ACTION[verdict], posture=posture, banner=banner)
 
 
 def _sector_persistence(as_of_date: date, min_turnover_lacs: float) -> pd.DataFrame:
@@ -392,6 +416,11 @@ def get_forward_tilt(
     regime["dispersion"] = disp
     if np.isfinite(disp) and disp < 1.5:
         regime["banner"] += "  (Low sector dispersion — tilt has little to add today.)"
+        regime["size_hint"] = round(float(regime.get("size_hint", 0.5)) * 0.5, 2)
+        if regime.get("verdict") == "ACT":
+            regime["verdict"] = "SELECTIVE"
+            regime["action"] = ("Half size — sectors are bunched (low dispersion); little to "
+                                "rotate on even in a good backdrop.")
 
     conf_mult = regime["confidence_mult"]
     brd = fac["breadth_accum"].fillna(0.0)

@@ -3706,34 +3706,53 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
         st.info("Not enough history / liquid sectors on this date to compute the tilt.")
         return
 
-    # ── market backdrop (now a DATA-BACKED reliability lever — OOS 4yr calibrated) ─
-    mult = float(regime.get("confidence_mult", 1.0))
-    banner = regime.get("banner", "")
-    state = regime.get("state", "UNKNOWN")
+    # ── the ONE decision surface: verdict · size · action (frozen posture matrix) ─
+    mult    = float(regime.get("confidence_mult", 1.0))
+    banner  = regime.get("banner", "")
+    state   = regime.get("state", "UNKNOWN")
     posture = regime.get("posture", "")
+    verdict = regime.get("verdict", "SELECTIVE")
+    size    = float(regime.get("size_hint", 0.5))
+    action  = regime.get("action", "")
     inverts = bool(regime.get("momentum_inverts", False))
-    n_sup = int(regime.get("ow_suppressed", 0))
-    if inverts:
-        st.error(f"**Market backdrop: {state}** — {banner}")
-    elif mult >= 0.95:
-        st.success(f"**Market backdrop: {state}** — {banner}")
-    else:
-        st.warning(f"**Market backdrop: {state}** — {banner}")
+    n_sup   = int(regime.get("ow_suppressed", 0))
 
-    # ── posture + medium-term (1-2mo) trend / divergence line ────────────────────
+    _V_STYLE = {
+        "ACT":         ("🟢", "#16a34a", "TRADE THE TILT"),
+        "SELECTIVE":   ("🟡", "#d97706", "SELECTIVE — HALF SIZE"),
+        "STAND-ASIDE": ("🔴", "#dc2626", "STAND ASIDE"),
+    }
+    icon, vcol, vlabel = _V_STYLE.get(verdict, _V_STYLE["SELECTIVE"])
+    pct = int(round(size * 100))
+    st.markdown(
+        f"<div style='border:1px solid {vcol}55;border-left:5px solid {vcol};"
+        f"border-radius:8px;padding:12px 16px;margin:4px 0 10px 0;background:{vcol}0d'>"
+        f"<div style='font-size:1.15rem;font-weight:700;color:{vcol}'>{icon} {vlabel}"
+        f"<span style='float:right;font-size:0.95rem;color:#8a8f98'>backdrop: {state} · "
+        f"suggested size {pct}%</span></div>"
+        f"<div style='margin-top:4px;color:#c9ced6'>{action}</div></div>",
+        unsafe_allow_html=True)
+
+    # ── the WHY (evidence banner) + medium-term / divergence line ────────────────
+    if inverts:
+        st.error(f"**Why — {state}:** {banner}")
+    elif mult >= 0.95:
+        st.success(f"**Why — {state}:** {banner}")
+    else:
+        st.warning(f"**Why — {state}:** {banner}")
+
     med = regime.get("med_trend", "UNKNOWN")
     dv = regime.get("divergence", "n/a")
     _DV_TXT = {
         "BULLTRAP":  "⚠ **Bull-trap** — 1-2wk up but 1-2mo down (weakest measured state; reduce size)",
         "DIP_IN_UP": "✓ **Dip-in-uptrend** — 1-2wk down inside a 1-2mo up (best entry timing)",
         "ALIGNED_UP":  "1-2wk and 1-2mo both up (aligned)",
-        "ALIGNED_DN":  "1-2wk and 1-2mo both down (aligned bearish)",
+        "ALIGNED_DN":  "⚠ 1-2wk and 1-2mo both down (aligned bearish — sideline)",
         "MIXED": "short/medium trend mixed", "n/a": "medium trend unavailable",
     }
     st.markdown(
-        f"**Posture:** {posture}  \n"
-        f"<span style='color:#8a8f98'>Medium-term (1-2mo) Nifty trend: <b>{med}</b> · "
-        f"{_DV_TXT.get(dv, dv)}</span>", unsafe_allow_html=True)
+        f"<span style='color:#8a8f98'>Two-horizon read → short (1-2wk) vs medium (1-2mo) Nifty "
+        f"trend: medium is <b>{med}</b> · {_DV_TXT.get(dv, dv)}</span>", unsafe_allow_html=True)
     if n_sup:
         st.caption(f"🚫 {n_sup} overweight call(s) suppressed — in this regime the top-momentum "
                    f"basket is measured to UNDERPERFORM (OOS 4yr). Shown as NEUTRAL, not a buy.")
