@@ -3706,17 +3706,42 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
         st.info("Not enough history / liquid sectors on this date to compute the tilt.")
         return
 
-    # ── market backdrop (context for a long-only book, not a reliability scaler) ─
+    # ── market backdrop (now a DATA-BACKED reliability lever — OOS 4yr calibrated) ─
     mult = float(regime.get("confidence_mult", 1.0))
     banner = regime.get("banner", "")
     state = regime.get("state", "UNKNOWN")
-    if mult >= 0.95:
+    posture = regime.get("posture", "")
+    inverts = bool(regime.get("momentum_inverts", False))
+    n_sup = int(regime.get("ow_suppressed", 0))
+    if inverts:
+        st.error(f"**Market backdrop: {state}** — {banner}")
+    elif mult >= 0.95:
         st.success(f"**Market backdrop: {state}** — {banner}")
     else:
         st.warning(f"**Market backdrop: {state}** — {banner}")
 
+    # ── posture + medium-term (1-2mo) trend / divergence line ────────────────────
+    med = regime.get("med_trend", "UNKNOWN")
+    dv = regime.get("divergence", "n/a")
+    _DV_TXT = {
+        "BULLTRAP":  "⚠ **Bull-trap** — 1-2wk up but 1-2mo down (weakest measured state; reduce size)",
+        "DIP_IN_UP": "✓ **Dip-in-uptrend** — 1-2wk down inside a 1-2mo up (best entry timing)",
+        "ALIGNED_UP":  "1-2wk and 1-2mo both up (aligned)",
+        "ALIGNED_DN":  "1-2wk and 1-2mo both down (aligned bearish)",
+        "MIXED": "short/medium trend mixed", "n/a": "medium trend unavailable",
+    }
+    st.markdown(
+        f"**Posture:** {posture}  \n"
+        f"<span style='color:#8a8f98'>Medium-term (1-2mo) Nifty trend: <b>{med}</b> · "
+        f"{_DV_TXT.get(dv, dv)}</span>", unsafe_allow_html=True)
+    if n_sup:
+        st.caption(f"🚫 {n_sup} overweight call(s) suppressed — in this regime the top-momentum "
+                   f"basket is measured to UNDERPERFORM (OOS 4yr). Shown as NEUTRAL, not a buy.")
+
     c1, c2, c3 = st.columns(3)
-    c1.metric("Market backdrop", state)
+    c1.metric("Market backdrop", state,
+              help="Data-backed reliability lever (OOS 4yr): downtrend/reversal suppress "
+                   "overweights (tilt inverts); chop mutes them; uptrend/high-vol keep them.")
     n_rev = int(df["revert"].sum()) if "revert" in df.columns else 0
     c2.metric("Reverting sectors", n_rev,
               help="Sectors whose high-rank calls historically FADE — their overweights are "
@@ -3814,12 +3839,16 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
                 "not predictive**: blending it into the tilt degraded accuracy in backtest, so "
                 "the ranking ignores it. Use it to sanity-check drawdown risk, not to pick.")
     st.caption(
-        "⚠ Validated on one broadly-bull 1.3yr sample. The **relative** tilt was regime-"
-        "independent in-sample (so market backdrop is context, not a confidence penalty), "
-        "but true momentum-crash reversals never occurred here — a sharp Nifty pullback "
-        "still raises a precautionary flag. UNDERWEIGHT = reduce/avoid, not a short. "
-        "WATCH = heavy accumulation but momentum not yet turned. ↩ = persistence gate "
-        "demoted a top-ranked but historically mean-reverting sector."
+        "⚠ Alpha validated on one bull 1.3yr sample; **regime behaviour** stress-tested OOS "
+        "on a 4yr multi-regime F&O panel (2022–26). Measured there: in a Nifty **downtrend** "
+        "the overweight (high-momentum) basket **underperforms** by ~0.8%/10d (every year) — "
+        "so downtrend/reversal **suppress overweights** and flip this tab to reduce/avoid; "
+        "chop mutes it; only uptrend/high-vol keep full conviction. A **bull-trap** (1-2wk up "
+        "inside a 1-2mo downtrend) is the weakest state → size down. There is **no "
+        "buy-the-crash long**: a price proxy for smart-money accumulation FAILED OOS "
+        "(beaten-down names mean-revert harder than resilient ones). UNDERWEIGHT = "
+        "reduce/avoid, not a short. WATCH = accumulation, momentum not yet turned. "
+        "↩ = persistence gate demoted a historically mean-reverting sector."
     )
 
 

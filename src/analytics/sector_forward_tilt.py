@@ -10,11 +10,21 @@ WHAT IS VALIDATED (scripts/factor_ic_diagnostic.py, backtest_rotation.py, mc_nul
   F&O positioning is NOT usable at sector granularity (only ~4 sectors carry enough
   F&O names to aggregate) and is deliberately excluded here.
 
-WHAT IS NOT PROVEN (honest guardrails, hard-coded conservative):
-  The sample is one broadly-BULL regime; cross-sectional momentum is KNOWN to crash in
-  sharp reversals, which this window never saw. So the tilt is regime-gated: a Nifty
-  trend/vol/pullback read scales a confidence multiplier in [0.3, 1.0] and raises a
-  "momentum fragile" banner in high-vol / reversal / downtrend states.
+REGIME BEHAVIOUR (4yr OOS stress test, scripts/audit_forward_tilt_regimes.py, Tradebot
+211-name F&O panel 2022–26 — this is the multi-regime evidence the DCM bull-only sample
+could not provide):
+  • TRENDING_DOWN (Nifty px<EMA20<EMA50): the tilt INVERTS. The overweight basket
+    UNDERPERFORMS the underweight by −0.81%/10d (t−2.1), −1.77%/40d, −2.80%/60d; quintile
+    Q5−Q1 −0.84% (monotone); negative in both halves and every year 2023–26. → overweights
+    are HARD-SUPPRESSED (demoted to NEUTRAL) and confidence ×0.30.
+  • REVERSAL (sharp pullback in an up-run): momentum-crash proxy → same suppression ×0.30.
+  • CHOPPY: overweight ≈ underweight (t−1.5) → conviction muted ×0.70.
+  • TRENDING_UP / HIGH_VOL: edge intact → ×1.0 (high-vol here was up-vol; flagged for beta).
+  • DIVERGENCE axis: a 1-2wk pop inside a 1-2mo downtrend (BULLTRAP) is the weakest forward
+    state → extra ×0.70; a 1-2wk dip inside a 1-2mo uptrend (DIP_IN_UP) is the best entry.
+  • The "smart money buys the crash" long (2-3mo) was tested with a price proxy and FAILED —
+    beaten-down names mean-revert HARDER than resilient ones — so NO buy-the-crash signal is
+    wired (real delivery-breadth accumulation is DCM-bull-only and untestable OOS).
 
 OUTPUT (decision-support, not a signal generator):
   get_forward_tilt(as_of_date, ...) -> (DataFrame per sector, regime meta dict)
@@ -64,16 +74,33 @@ _WATCH_RS_MAX  = 0.35     # ... while momentum rank is still weak
 # ── expected relative return map (from the validated ~1.9%/10d tercile spread) ─
 _REL_SLOPE_BPS = 290.0    # bps of 10d relative return per unit of (rank-0.5)
 
-# ── regime read (Nifty) — CONTEXT for a long-only book's market beta, NOT a ──
-# reliability scaler for the relative ranking. Measured: relative OW accuracy is
-# regime-INDEPENDENT (highest in downtrends, lowest in the uptrend), and OW absolute
-# returns were fine-to-best in high-vol/downtrend. So the old down/high-vol confidence
-# penalties were contradicted and are removed. Only a sharp pullback (the closest proxy
-# to a momentum-crash setup, and genuinely untestable in this one-regime sample) keeps a
-# mild, explicitly-UNVALIDATED caution.
-_VOL_HI_PCT    = 0.80     # realized-vol percentile above this = high-vol regime (context only)
+# ── regime read (Nifty) — now a DATA-BACKED reliability lever, not just context ──
+# The old code treated the market backdrop as pure context (mult ~1.0 everywhere) on the
+# grounds that the relative tilt was "regime-independent". That was a BULL-ONLY-SAMPLE
+# artifact. A 4-year multi-regime OOS stress test (Tradebot 211-name F&O panel 2022–26,
+# scripts/audit_forward_tilt_regimes.py) OVERTURNS it for genuine downtrends:
+#   • TRENDING_DOWN (Nifty px<EMA20<EMA50): the OVERWEIGHT (high relative-momentum) basket
+#     UNDERPERFORMS the underweight by −0.81%/10d (t−2.1), −1.77%/40d, −2.80%/60d — the
+#     momentum tilt INVERTS. Quintile Q5−Q1 = −0.84% (monotone down). Negative in BOTH
+#     halves and ALL FOUR years (2023 −0.58 / 2024 −0.83 / 2025 −0.60 / 2026 −1.26) — never
+#     positive. So chasing leaders in a downtrend is measurably the wrong side.
+#   • CHOPPY: OW ≈ UW (OW−UW −0.10%/10d, t−1.5) — the tilt adds ~nothing.
+#   • TRENDING_UP / HIGH_VOL: edge intact (OW−UW +0.47 / +0.59%). (High-vol here was up-vol.)
+# So downtrend/reversal now HARD-suppress the overweight call and flip posture to defensive;
+# chop is muted. The "smart-money accumulation buys the crash" long (2-3mo) was tested with a
+# price proxy and FAILED — beaten-down names mean-revert HARDER than resilient ones, so no
+# buy-the-crash signal is wired (delivery-breadth accumulation is DCM-bull-only, untestable OOS).
+_VOL_HI_PCT    = 0.80     # realized-vol percentile above this = high-vol regime
 _PULLBACK_5D   = -3.0     # Nifty 5d return below this % after an up-run = reversal caution
-_REVERSAL_MULT = 0.80     # only penalty that survives — and it is a prior, not validated
+_MED_TREND_WIN = 40       # ~2-month (trading-day) window for the medium-term trend axis
+_EMA_SLOPE_WIN = 10       # bars over which the 20-EMA slope is read (medium direction)
+# data-backed confidence multipliers per regime (OOS 4yr, above)
+_MULT_UP       = 1.00     # edge intact
+_MULT_HIVOL    = 1.00     # edge intact in-sample (up-vol) — flagged, not penalised
+_MULT_CHOP     = 0.70     # tilt adds ~nothing (OW≈UW)
+_MULT_DOWN     = 0.30     # edge INVERTS — suppress the overweight
+_MULT_REVERSAL = 0.30     # momentum-crash proxy — suppress
+_MULT_BULLTRAP = 0.70     # 1-2wk pop inside a 1-2mo downtrend — reduce size (overlay)
 
 # ── sector momentum-persistence gate (the real reliability lever) ────────────
 # Validated (walk-forward, causal): sectors differ structurally — industrials/materials
@@ -151,54 +178,89 @@ def _liquid_name_counts(as_of_date: date, min_turnover_lacs: float) -> pd.Series
 
 
 def _market_regime(nifty: pd.DataFrame) -> dict:
-    """Nifty trend/vol/pullback read — CONTEXT for a long-only book's market beta.
+    """Nifty trend/vol read → DATA-BACKED reliability lever + posture (OOS 4yr calibrated).
 
-    NOT a reliability scaler for the relative ranking: the relative tilt was measured
-    regime-independent, so this no longer penalises confidence in high-vol/downtrend
-    (those calls were fine-to-best in-sample). It labels the market backdrop honestly and
-    keeps ONE mild, explicitly-unvalidated caution for a sharp pullback (a momentum-crash
-    proxy this single-regime sample cannot test).
+    Returns, besides the label: a confidence multiplier that HARD-suppresses the overweight
+    call where the tilt was measured to invert (downtrend/reversal) or add nothing (chop);
+    a medium-term (1-2mo) trend axis and a short-vs-medium DIVERGENCE state (BULLTRAP =
+    1-2wk up inside a 1-2mo downtrend → the weakest forward state, size down); a `momentum_inverts`
+    flag the engine uses to demote overweights; and a plain-language `posture`.
     """
     default = dict(state="UNKNOWN", vol_pct=float("nan"), ret_5d=float("nan"),
-                   confidence_mult=1.0, banner="Regime unknown — market context unavailable.")
+                   confidence_mult=1.0, momentum_inverts=False, med_trend="UNKNOWN",
+                   divergence="n/a", posture="Market context unavailable.",
+                   banner="Regime unknown — market context unavailable.")
     if nifty.empty or len(nifty) < 60:
         return default
     nf = nifty.sort_values("trade_date").reset_index(drop=True)
     close = nf["close_val"].astype(float)
     ret = nf["nret"].astype(float) / 100.0
-    ema20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
+    ema20_s = close.ewm(span=20, adjust=False).mean()
+    ema20 = ema20_s.iloc[-1]
     ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1]
     px = close.iloc[-1]
     vol20 = ret.rolling(20).std()
     vol_pct = float((vol20 <= vol20.iloc[-1]).mean()) if vol20.notna().sum() > 20 else float("nan")
     ret_5d = float(_compound(nf["nret"], 5).iloc[-1])
     ret_20d = float(_compound(nf["nret"], 20).iloc[-1])
+    ret_med = float(_compound(nf["nret"], _MED_TREND_WIN).iloc[-1])   # ~2-month trend
+    ema_slope = float(ema20_s.iloc[-1] - ema20_s.iloc[-1 - _EMA_SLOPE_WIN]) if len(ema20_s) > _EMA_SLOPE_WIN else 0.0
 
     up_trend = px > ema20 > ema50
     dn_trend = px < ema20 < ema50
     high_vol = np.isfinite(vol_pct) and vol_pct >= _VOL_HI_PCT
     reversal = ret_5d <= _PULLBACK_5D and ret_20d > 0     # sharp pullback inside an up-run
 
-    _beta = ("The RELATIVE tilt (overweight vs underweight) held up in-sample regardless — "
-             "but a long-only book still carries market beta here.")
+    # ── medium-term (1-2 month) trend axis + short-vs-medium divergence ──────────
+    med_up = ret_med > 0 and ema_slope > 0
+    med_dn = ret_med < 0 and ema_slope < 0
+    short_up = ret_5d > 0
+    med_trend = "UP" if med_up else "DOWN" if med_dn else "FLAT"
+    if short_up and med_dn:      divergence = "BULLTRAP"    # 1-2wk up, 1-2mo down (weakest)
+    elif (not short_up) and med_up: divergence = "DIP_IN_UP"  # 1-2wk down, 1-2mo up (best dip)
+    elif short_up and med_up:    divergence = "ALIGNED_UP"
+    elif (not short_up) and med_dn: divergence = "ALIGNED_DN"
+    else:                        divergence = "MIXED"
+
+    # ── primary regime → data-backed multiplier + posture ────────────────────────
     if reversal:
-        state, mult, banner = ("REVERSAL", _REVERSAL_MULT,
-            f"⚠ Sharp pullback (Nifty {ret_5d:+.1f}% / 5d). Closest proxy to a momentum-crash "
-            f"setup — UNVALIDATED in this sample; trim long exposure as a precaution.")
+        state, mult, inv, posture = ("REVERSAL", _MULT_REVERSAL, True,
+            "Momentum-crash risk — leaders fade in sharp pullbacks. Trim / stand aside.")
+        banner = (f"⚠ Sharp pullback (Nifty {ret_5d:+.1f}% / 5d). Momentum-crash proxy — the "
+                  f"overweight tilt is UNRELIABLE here; suppressed. Trim long exposure.")
     elif dn_trend:
-        state, mult, banner = ("TRENDING_DOWN", 1.0,
-            f"Nifty below 20/50 EMA (downtrend). {_beta}")
+        state, mult, inv, posture = ("TRENDING_DOWN", _MULT_DOWN, True,
+            "Tilt INVERTS in downtrends — do NOT chase leaders. Overweights suppressed; defensive only.")
+        banner = ("Nifty below 20/50 EMA (downtrend). OOS-measured: the overweight (high-momentum) "
+                  "basket UNDERPERFORMS by ~0.8%/10d here — leaders are the wrong side. Overweights "
+                  "are suppressed; treat this tab as reduce/avoid, not a buy list.")
     elif high_vol:
-        state, mult, banner = ("HIGH_VOL", 1.0,
-            f"Realized vol in the top {(1-vol_pct)*100:.0f}%. {_beta}")
+        state, mult, inv, posture = ("HIGH_VOL", _MULT_HIVOL, False,
+            "Edge intact in-sample, but a long-only book carries elevated market beta — size for vol.")
+        banner = (f"Realized vol in the top {(1-vol_pct)*100:.0f}%. Relative tilt held up in-sample; "
+                  f"a long-only book still carries market beta — size for the swing.")
     elif up_trend:
-        state, mult, banner = ("TRENDING_UP", 1.0,
-            "Nifty in a clean uptrend — favourable backdrop for a long-only sector tilt.")
+        state, mult, inv, posture = ("TRENDING_UP", _MULT_UP, False,
+            "Tilt active — favourable backdrop for a long-only sector tilt.")
+        banner = "Nifty in a clean uptrend — favourable backdrop for a long-only sector tilt."
     else:
-        state, mult, banner = ("CHOPPY", 1.0,
-            "Nifty rangebound (mixed EMAs) — neutral backdrop; relative tilt still applies.")
-    return dict(state=state, vol_pct=vol_pct, ret_5d=ret_5d,
-                confidence_mult=float(mult), banner=banner)
+        state, mult, inv, posture = ("CHOPPY", _MULT_CHOP, False,
+            "Tilt muted — leaders ≈ laggards in chop; little to add. Wait for a trend.")
+        banner = ("Nifty rangebound (mixed EMAs). OOS-measured: overweight ≈ underweight in chop — "
+                  "the tilt has little to add; conviction is muted.")
+
+    # ── BULLTRAP overlay: 1-2wk pop inside a 1-2mo downtrend = weakest forward state ─
+    if divergence == "BULLTRAP" and not inv:
+        mult *= _MULT_BULLTRAP
+        banner += ("  ⚠ Bull-trap: 1-2wk bounce inside a 1-2mo DOWNTREND (weakest measured forward "
+                   "state) — reduce size, don't add on this pop.")
+        posture = "Bull-trap (1-2wk up, 1-2mo down) — " + posture
+    elif divergence == "DIP_IN_UP":
+        banner += "  ✓ 1-2wk dip inside a 1-2mo uptrend — historically the best entry timing."
+
+    return dict(state=state, vol_pct=vol_pct, ret_5d=ret_5d, ret_med=ret_med,
+                med_trend=med_trend, divergence=divergence, momentum_inverts=bool(inv),
+                confidence_mult=float(mult), posture=posture, banner=banner)
 
 
 def _sector_persistence(as_of_date: date, min_turnover_lacs: float) -> pd.DataFrame:
@@ -364,6 +426,14 @@ def get_forward_tilt(
     fac["persistence"] = fac["sector"].map(pmap)
     fac["revert"] = fac["persistence"] < 0                     # NaN → False (unknown ⇒ keep)
     fac.loc[(fac["tilt"] == "OVERWEIGHT") & fac["revert"], "tilt"] = "NEUTRAL"
+
+    # ── regime-inversion gate (OOS 4yr): in downtrends/reversals the overweight call
+    # is anti-predictive (OW−UW −0.8%/10d, monotone, every year) — suppress ALL overweights.
+    regime["ow_suppressed"] = 0
+    if regime.get("momentum_inverts"):
+        n_sup = int((fac["tilt"] == "OVERWEIGHT").sum())
+        fac.loc[fac["tilt"] == "OVERWEIGHT", "tilt"] = "NEUTRAL"
+        regime["ow_suppressed"] = n_sup
 
     # expected relative return (bps, 10d); regime mult is ~1.0 (context only) — wide error bars
     fac["est_rel_bps"] = ((fac["rank"] - 0.5) * _REL_SLOPE_BPS * conf_mult).round(0)
