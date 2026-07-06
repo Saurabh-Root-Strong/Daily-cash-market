@@ -3676,10 +3676,21 @@ def _render_relative_strength(trade_date: date, min_turnover: float, all_dates: 
 # ── Entry Point ───────────────────────────────────────────────────────────────
 
 _TILT_STYLE = {
-    "OVERWEIGHT":  ("🟢", POSITIVE_COLOR, "Rotate INTO"),
-    "UNDERWEIGHT": ("🔴", NEGATIVE_COLOR, "Reduce / avoid"),
-    "WATCH":       ("🟡", "#d9a441",       "Accumulating, not yet moved"),
-    "NEUTRAL":     ("⚪", "#8a8f98",       "No tilt"),
+    "OVERWEIGHT":  ("🟢", POSITIVE_COLOR, "BUY list — rotate in"),
+    "UNDERWEIGHT": ("🔴", NEGATIVE_COLOR, "AVOID / trim"),
+    "WATCH":       ("🟡", "#d9a441",       "WAIT — not moved yet"),
+    "NEUTRAL":     ("⚪", "#8a8f98",       "no clear signal"),
+}
+# plain-English hover tooltips — "buy or avoid, and which?"
+_TILT_HELP = {
+    "OVERWEIGHT": ("BUY CANDIDATES. Strongest sectors — money and price are flowing in faster "
+                   "than the market. In a green backdrop, these are the ones to buy / add for the "
+                   "next 1-2 weeks. It's a lean (~55-60% right over many trades), not a sure thing."),
+    "UNDERWEIGHT": ("AVOID. Weakest sectors — money is leaving. Don't buy these; trim if you hold "
+                    "them. NOT a short signal (you can't cheaply short a whole sector)."),
+    "WATCH": ("WAIT, don't buy yet. Quiet buying is showing up but the price hasn't turned. Buy "
+              "only once it strengthens into the green BUY list — early entries here often just sit."),
+    "NEUTRAL": ("SKIP. Middle of the pack — no clear buy or avoid edge right now."),
 }
 
 
@@ -3724,10 +3735,16 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
     }
     icon, vcol, vlabel = _V_STYLE.get(verdict, _V_STYLE["SELECTIVE"])
     pct = int(round(size * 100))
+    _card_tip = ("What to do today, in one line. "
+                 "🟢 TRADE THE TILT = market's healthy, OK to buy the green list at full size. "
+                 "🟡 SELECTIVE = weak/unclear market, buy only the top 1-2 names at half size. "
+                 "🔴 STAND ASIDE = don't buy — in this market the 'leaders' usually fall hardest; "
+                 "hold cash / protect what you have. 'Suggested size' = how much of a normal "
+                 "position to put on (100% / 50% / 0%).")
     st.markdown(
-        f"<div style='border:1px solid {vcol}55;border-left:5px solid {vcol};"
+        f"<div title=\"{_card_tip}\" style='border:1px solid {vcol}55;border-left:5px solid {vcol};"
         f"border-radius:8px;padding:12px 16px;margin:4px 0 10px 0;background:{vcol}0d'>"
-        f"<div style='font-size:1.15rem;font-weight:700;color:{vcol}'>{icon} {vlabel}"
+        f"<div style='font-size:1.15rem;font-weight:700;color:{vcol}'>{icon} {vlabel} ⓘ"
         f"<span style='float:right;font-size:0.95rem;color:#8a8f98'>backdrop: {state} · "
         f"suggested size {pct}%</span></div>"
         f"<div style='margin-top:4px;color:#c9ced6'>{action}</div></div>",
@@ -3759,39 +3776,51 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Market backdrop", state,
-              help="Data-backed reliability lever (OOS 4yr): downtrend/reversal suppress "
-                   "overweights (tilt inverts); chop mutes them; uptrend/high-vol keep them.")
+              help="The overall market mood, which decides whether the buy list is trustworthy "
+                   "today. Uptrend = OK to buy the leaders. Chop = buy small, top names only. "
+                   "Downtrend / sharp fall = DON'T buy the leaders — history shows they fall "
+                   "hardest here, so the buy list is switched off.")
     n_rev = int(df["revert"].sum()) if "revert" in df.columns else 0
     c2.metric("Reverting sectors", n_rev,
-              help="Sectors whose high-rank calls historically FADE — their overweights are "
-                   "demoted by the persistence gate.")
+              help="How many top sectors have a habit of fading right after they look strong. We "
+                   "drop these from the buy list so you're not buying the top just before it turns.")
     disp = regime.get("dispersion", float("nan"))
     c3.metric("Sector dispersion", f"{disp:.1f}" if disp == disp else "—",
-              help="Cross-sectional spread of 2-week relative strength. Low ⇒ little to rotate on.")
+              help="How far apart the sectors are today. High = clear leaders and laggards, so "
+                   "picking is worth it. Low = everything moving together, so there's little to "
+                   "gain from rotating (the tool trims size).")
 
     # ── OW / UW / WATCH buckets ───────────────────────────────────────────────
     def _bucket(name: str):
         g = df[df["tilt"] == name].copy()
         icon, color, sub = _TILT_STYLE[name]
-        st.markdown(f"<b style='color:{color}'>{icon} {name}</b> "
+        tip = _TILT_HELP.get(name, "").replace('"', "'")
+        st.markdown(f"<b style='color:{color}' title=\"{tip}\">{icon} {name} ⓘ</b> "
                     f"<span style='color:#8a8f98'>· {sub}</span>", unsafe_allow_html=True)
         if g.empty:
             st.caption("— none —"); return
         for _, r in g.iterrows():
             flag = ""
             if r["divergence"] >= 0.30:
-                flag = " · 🔼 delivery leads price (pre-breakout)"
+                flag = " · 🔼 buying ahead of price (early)"
             elif r["divergence"] <= -0.30:
-                flag = " · 🔽 price leads delivery (late-stage)"
+                flag = " · 🔽 price ahead of buying (late)"
             if r.get("revert", False):
-                flag += " · ↩ reverts historically"
+                flag += " · ↩ tends to fade after looking strong"
             if r["thin"]:
-                flag += " · ⚠ thin"
+                flag += " · ⚠ too few stocks (noisy)"
             st.markdown(
-                f"**{r['sector']}** &nbsp; rs₂w {r['rs_2w']:+.1f}% · "
-                f"dv5d {r['dv5d']:.2f} · est {int(r['est_rel_bps']):+d}bps{flag}",
-                unsafe_allow_html=True)
+                f"**{r['sector']}** &nbsp; <span title='Strength vs Nifty over the last 2 weeks — "
+                f"higher = leading the market'>rs₂w {r['rs_2w']:+.1f}%</span> · "
+                f"<span title='Recent delivery-buying vs its own normal — above 1 = more real "
+                f"buying than usual'>dv5d {r['dv5d']:.2f}</span> · "
+                f"<span title='Rough expected move vs the average sector over ~10 days. A lean, "
+                f"wide error bars — 0 when the backdrop says stand aside'>est {int(r['est_rel_bps']):+d}bps</span>"
+                f"{flag}", unsafe_allow_html=True)
 
+    st.caption("Each row: **rs₂w** = 2-week strength vs the market (higher = leading) · **dv5d** = "
+               "real buying vs its own normal (>1 = heavier) · **est** = rough 10-day edge vs the "
+               "average sector. Hover any label for the plain meaning.")
     col_ow, col_uw = st.columns(2)
     with col_ow:
         _bucket("OVERWEIGHT")
@@ -3800,7 +3829,7 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
             demoted = df[(df["rank"] >= 0.75) & (df["revert"]) & (df["tilt"] != "OVERWEIGHT")]
             if not demoted.empty:
                 names = ", ".join(demoted["sector"])
-                st.caption(f"↩ demoted (historically revert): {names}")
+                st.caption(f"↩ kept OFF the buy list (look strong now but usually fade next): {names}")
         st.write("")
         _bucket("WATCH")
     with col_uw:
@@ -3826,30 +3855,55 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
             t = t.merge(_defn[["sector", "down_capture", "beta"]], on="sector", how="left")
         cfg = {
             "sector": "Sector",
-            "tilt": "Tilt",
-            "rank": st.column_config.NumberColumn("Rank %ile", format="%d"),
-            "rs_2w": st.column_config.NumberColumn("RS 2wk %", format="%.1f"),
-            "rs_1w": st.column_config.NumberColumn("RS 1wk %", format="%.1f"),
-            "dv5d": st.column_config.NumberColumn("Deliv 5d×", format="%.2f"),
-            "accum_breadth": st.column_config.NumberColumn("Accum brd %", format="%d"),
+            "tilt": st.column_config.TextColumn(
+                "Tilt", help="🟢 OVERWEIGHT = buy list · 🔴 UNDERWEIGHT = avoid/trim · "
+                             "🟡 WATCH = wait, not yet · ⚪ NEUTRAL = skip."),
+            "rank": st.column_config.NumberColumn(
+                "Strength rank", format="%d",
+                help="Where this sector sits vs all others today, 0 (weakest) to 100 "
+                     "(strongest). 75+ is the buy zone, 25 or below is the avoid zone."),
+            "rs_2w": st.column_config.NumberColumn(
+                "2wk vs mkt %", format="%.1f",
+                help="How much it beat (+) or lagged (−) the Nifty over the last 2 weeks. "
+                     "This is the main strength signal."),
+            "rs_1w": st.column_config.NumberColumn(
+                "1wk vs mkt %", format="%.1f", help="Same as 2wk, but over the last 1 week."),
+            "dv5d": st.column_config.NumberColumn(
+                "Buying vs normal ×", format="%.2f",
+                help="Recent real (delivery) buying compared to its own usual level. "
+                     "Above 1 = heavier buying than normal; below 1 = lighter."),
+            "accum_breadth": st.column_config.NumberColumn(
+                "Stocks accumulating %", format="%d",
+                help="Share of the sector's stocks showing quiet accumulation. Higher = "
+                     "the strength is broad, not just one or two names."),
             "persistence": st.column_config.NumberColumn(
-                "Persistence", format="%.1f",
-                help="Trailing mean forward relative-edge. >0 = high ranks kept winning "
-                     "(trend, trust OW); <0 = they faded (revert, OW demoted)."),
-            "n_liq": st.column_config.NumberColumn("# liq", format="%d"),
-            "est_rel_bps": st.column_config.NumberColumn("Est rel (bps/10d)", format="%d"),
-            "confidence": st.column_config.NumberColumn("Conf", format="%.2f"),
+                "Follow-through", format="%.1f",
+                help="Track record of this sector AFTER it looks strong. Positive = strength "
+                     "usually continues (trust the buy). Negative = it usually fades, so we "
+                     "keep it off the buy list even when it ranks high."),
+            "n_liq": st.column_config.NumberColumn(
+                "# tradable", format="%d",
+                help="How many liquid stocks the sector has. Too few = the signal is noisy."),
+            "est_rel_bps": st.column_config.NumberColumn(
+                "Rough 10d edge (bps)", format="%d",
+                help="Ballpark out/under-performance vs the average sector over ~10 days "
+                     "(100 bps = 1%). A lean with wide error bars; shows 0 when the backdrop "
+                     "says stand aside."),
+            "confidence": st.column_config.NumberColumn(
+                "Confidence", format="%.2f",
+                help="How much to trust this row, 0 to 1. Lower when the market backdrop is "
+                     "weak, the sector fades historically, or it has too few stocks."),
         }
         if "down_capture" in t.columns:
             cfg["down_capture"] = st.column_config.NumberColumn(
-                "Down-cap 🛡", format="%.2f",
-                help="Trailing avg sector fall ÷ Nifty fall on DOWN days. <1 = historically "
-                     "fell LESS than the market. Descriptive context — NOT a forward signal "
-                     "(a regime-conditional defensive blend failed to beat momentum in "
-                     "backtest).")
+                "Falls vs mkt 🛡", format="%.2f",
+                help="On days the market fell, how much this sector fell versus Nifty. Below 1 "
+                     "= it dropped LESS than the market (more defensive). Just context for "
+                     "drawdown risk — it does NOT go into the buy/avoid call.")
             cfg["beta"] = st.column_config.NumberColumn(
-                "Beta", format="%.2f",
-                help="Sensitivity to Nifty. <1 = cushions market moves.")
+                "Swinginess", format="%.2f",
+                help="How much it moves for a given Nifty move. Below 1 = calmer than the "
+                     "market; above 1 = bigger swings both ways.")
         st.dataframe(t, hide_index=True, use_container_width=True, column_config=cfg)
         if "down_capture" in t.columns:
             st.caption(
