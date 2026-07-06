@@ -464,8 +464,14 @@ def get_forward_tilt(
         fac.loc[fac["tilt"] == "OVERWEIGHT", "tilt"] = "NEUTRAL"
         regime["ow_suppressed"] = n_sup
 
-    # expected relative return (bps, 10d); regime mult is ~1.0 (context only) — wide error bars
-    fac["est_rel_bps"] = ((fac["rank"] - 0.5) * _REL_SLOPE_BPS * conf_mult).round(0)
+    # expected relative return (bps, 10d), scaled by the data-backed regime mult (wide error
+    # bars). Under momentum inversion (downtrend/reversal) the high-rank edge is measured to
+    # be NEGATIVE, not positive — so we do NOT advertise a positive bps there: zero it out to
+    # stay consistent with the suppressed overweights and the STAND-ASIDE verdict.
+    if regime.get("momentum_inverts"):
+        fac["est_rel_bps"] = 0.0
+    else:
+        fac["est_rel_bps"] = ((fac["rank"] - 0.5) * _REL_SLOPE_BPS * conf_mult).round(0)
     # per-sector confidence: regime × thin × historically-reverting down-weights
     fac["confidence"] = (conf_mult
                          * np.where(fac["thin"], 0.5, 1.0)
