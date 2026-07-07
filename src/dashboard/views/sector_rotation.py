@@ -39,6 +39,7 @@ from src.dashboard.cache.queries import (
     cached_forward_tilt,
     cached_sector_defensive,
     cached_market_breadth,
+    cached_nifty_breakout,
 )
 from src.analytics.price_action import (BRK_BREAKOUT, BRK_FALSEBRK, BRK_EXTENDED,
                                         BRK_BOUNCE, BRK_COILING, BRK_NONE, BRK_STATES,
@@ -3825,6 +3826,22 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
             st.caption("⚠ Early caution (low confidence): index up but breadth quietly falling — "
                        "leadership is narrowing. The one signal with a mild forward-down lean in "
                        "backtest (P≈56%), so treat as 'tighten', not 'sell'.")
+
+    # ── Nifty breakout flag — the sharpest 8yr signal (held vs fake), context only ─────
+    try:
+        bk = cached_nifty_breakout(selected_date)
+    except Exception:                                            # noqa: BLE001
+        bk = {"ok": False}
+    if bk.get("ok") and bk.get("state") in ("HELD", "FAILED"):
+        ds = bk["days_since"]; ago = "today" if ds == 0 else f"{ds}d ago"
+        if bk["state"] == "HELD":
+            st.caption(f"🚀 **Nifty breakout held** ({ago}, above {bk['level']:.0f}) — the single "
+                       f"strongest state in the 8yr audit: a 20-day-high break that *sticks* → "
+                       f"+1%/2wk (t+3.5) and +8.7%/6mo (t+4.0, 92% hit). Confirmed continuation.")
+        else:
+            st.caption(f"⚠ **Failed breakout / fakeout** ({ago}) — Nifty broke a 20-day high then "
+                       f"fell back below {bk['level']:.0f}. 8yr: fakeouts dip short-term (t−1.7/2wk) "
+                       f"but tend to recover later — don't chase the break, wait for a clean hold.")
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Market backdrop", state,

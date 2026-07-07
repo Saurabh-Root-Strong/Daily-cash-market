@@ -124,6 +124,13 @@ def cached_market_breadth(trade_date: date) -> dict:
 
 
 @st.cache_data(ttl=_TTL)
+def cached_nifty_breakout(trade_date: date) -> dict:
+    """Nifty 20d-high breakout state (HELD vs FAILED) — sharpest 8yr signal, context flag."""
+    from src.analytics.sector_forward_tilt import get_nifty_breakout
+    return get_nifty_breakout(trade_date)
+
+
+@st.cache_data(ttl=_TTL)
 def cached_fao_latest(trade_date: date, data_type: str) -> pd.DataFrame:
     from src.analytics.fao_participants import get_fao_latest
     return get_fao_latest(trade_date, data_type=data_type)

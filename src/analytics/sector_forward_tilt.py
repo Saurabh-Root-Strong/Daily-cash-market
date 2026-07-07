@@ -644,3 +644,37 @@ def get_market_breadth(as_of_date: date, min_turnover_lacs: Optional[float] = No
                death_cross=death, dur_days=int(dur), narrowing=narrowing,
                n=int(p.shape[1]), caption=cap)
     return out
+
+
+# ── Nifty breakout state (held vs fake) — the sharpest 8yr signal (context flag) ──────
+# audit_trend_4band_8yr.py: a 20d-high close-break that HELD 3 days → +1.0%/10d (t+3.5),
+# +8.7%/6mo (t+4.0, 92% hit); a FAKE break (reversed ≤3d) → −0.5%/10d (t−1.7 short) then
+# recovers. Display context only — the single most significant state in the 8-year audit.
+def get_nifty_breakout(as_of_date: date) -> dict:
+    """Detect a recent Nifty 20d-high breakout and whether it HELD or FAILED (causal)."""
+    out = dict(ok=False, state="none", days_since=0, level=float("nan"))
+    try:
+        df = query_dataframe(
+            "SELECT trade_date, high_val, close_val FROM index_data "
+            "WHERE index_name = 'Nifty 50' AND trade_date <= ? ORDER BY trade_date",
+            [as_of_date])
+    except Exception:                                            # noqa: BLE001
+        return out
+    if df.empty or len(df) < 30:
+        return out
+    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    c = df["close_val"].astype(float).reset_index(drop=True)
+    h = df["high_val"].astype(float).reset_index(drop=True)
+    hi = h.shift(1).rolling(20).max()                            # prior 20d high (causal)
+    brk = c > hi                                                 # 20d-high close-break
+    look = 7                                                     # was there a fresh break in the last week?
+    recent = brk.iloc[-look:]
+    if not recent.any():
+        return dict(ok=True, state="none", days_since=0, level=float("nan"))
+    pos = int(np.where(recent.values)[0][-1])                    # most recent break within window
+    abs_i = len(c) - look + pos
+    level = float(hi.iloc[abs_i])
+    days_since = len(c) - 1 - abs_i
+    held = bool((c.iloc[abs_i:] >= level).all())                 # stayed above the broken level
+    return dict(ok=True, state="HELD" if held else "FAILED",
+                days_since=days_since, level=level)
