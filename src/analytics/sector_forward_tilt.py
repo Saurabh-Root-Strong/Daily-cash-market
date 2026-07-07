@@ -10,21 +10,21 @@ WHAT IS VALIDATED (scripts/factor_ic_diagnostic.py, backtest_rotation.py, mc_nul
   F&O positioning is NOT usable at sector granularity (only ~4 sectors carry enough
   F&O names to aggregate) and is deliberately excluded here.
 
-REGIME BEHAVIOUR (4yr OOS stress test, scripts/audit_forward_tilt_regimes.py, Tradebot
-211-name F&O panel 2022–26 — this is the multi-regime evidence the DCM bull-only sample
-could not provide):
-  • TRENDING_DOWN (Nifty px<EMA20<EMA50): the tilt INVERTS. The overweight basket
-    UNDERPERFORMS the underweight by −0.81%/10d (t−2.1), −1.77%/40d, −2.80%/60d; quintile
-    Q5−Q1 −0.84% (monotone); negative in both halves and every year 2023–26. → overweights
-    are HARD-SUPPRESSED (demoted to NEUTRAL) and confidence ×0.30.
-  • REVERSAL (sharp pullback in an up-run): momentum-crash proxy → same suppression ×0.30.
+REGIME BEHAVIOUR (real-bear calibrated on DCM's OWN sector data 2018–2026, incl the 2018
+midcap crisis / 2020 COVID / 2022 bear — scripts/audit_tilt_realbears.py +
+audit_suppression_adjudicate.py; supersedes the earlier stock-level read):
+  • TRENDING_DOWN (Nifty px<EMA20<EMA50): the SECTOR tilt does NOT reliably invert. OW−UW is
+    +1.7%/10d pooled (t+2.3) and +1.6% even when the market KEPT falling (t+0.5, insignificant).
+    The earlier "inverts −0.8%/10d" was a STOCK-level (Tradebot F&O) result that does NOT
+    transfer to the sector product. → overweights are KEPT, but size is REDUCED (×0.50): the
+    relative signal is unreliable in downtrends AND a long-only book carries market beta.
+  • REVERSAL (sharp pullback in an up-run): momentum-crash TAIL risk (rare) → small size ×0.40.
   • CHOPPY: overweight ≈ underweight (t−1.5) → conviction muted ×0.70.
   • TRENDING_UP / HIGH_VOL: edge intact → ×1.0 (high-vol here was up-vol; flagged for beta).
   • DIVERGENCE axis: a 1-2wk pop inside a 1-2mo downtrend (BULLTRAP) is the weakest forward
     state → extra ×0.70; a 1-2wk dip inside a 1-2mo uptrend (DIP_IN_UP) is the best entry.
-  • The "smart money buys the crash" long (2-3mo) was tested with a price proxy and FAILED —
-    beaten-down names mean-revert HARDER than resilient ones — so NO buy-the-crash signal is
-    wired (real delivery-breadth accumulation is DCM-bull-only and untestable OOS).
+  • The "smart money buys the crash" long (2-3mo) was tested and FAILED — beaten-down names
+    mean-revert HARDER than resilient ones — so NO buy-the-crash signal is wired.
 
 OUTPUT (decision-support, not a signal generator):
   get_forward_tilt(as_of_date, ...) -> (DataFrame per sector, regime meta dict)
@@ -98,8 +98,8 @@ _EMA_SLOPE_WIN = 10       # bars over which the 20-EMA slope is read (medium dir
 _MULT_UP       = 1.00     # edge intact
 _MULT_HIVOL    = 1.00     # edge intact in-sample (up-vol) — flagged, not penalised
 _MULT_CHOP     = 0.70     # tilt adds ~nothing (OW≈UW)
-_MULT_DOWN     = 0.30     # edge INVERTS — suppress the overweight
-_MULT_REVERSAL = 0.30     # momentum-crash proxy — suppress
+_MULT_DOWN     = 0.50     # sector tilt UNRELIABLE (not inverting) + long-only beta → reduce, keep OW
+_MULT_REVERSAL = 0.40     # momentum-crash tail risk (rare) → small size
 _MULT_BULLTRAP = 0.70     # 1-2wk pop inside a 1-2mo downtrend — reduce size (overlay)
 
 # ── sector momentum-persistence gate (the real reliability lever) ────────────
@@ -224,24 +224,28 @@ def _market_regime(nifty: pd.DataFrame) -> dict:
     elif (not short_up) and med_dn: divergence = "ALIGNED_DN"
     else:                        divergence = "MIXED"
 
-    # ── primary regime → the frozen POSTURE MATRIX (verdict · size · mult · action) ─
-    # Every row = a measured cell of scripts/audit_tilt_posture_matrix.py (fwd-10d, 4yr OOS).
-    # verdict ∈ {ACT, SELECTIVE, STAND-ASIDE}; size_hint ∈ [0,1] = how much of a full tilt
-    # to put on; mult scales the advertised est_rel_bps. STAND-ASIDE is NEVER upgraded by a
-    # bullish divergence (the worst cell is a bullish pop INSIDE a downtrend: −1.61%/10d).
+    # ── primary regime → the POSTURE MATRIX (verdict · size · mult · action) ──────
+    # Sector-level, real-bear-calibrated (scripts/audit_suppression_adjudicate.py, DCM
+    # 2018-2026 incl COVID/2022). Correction to the earlier stock-level read: at the SECTOR
+    # level the tilt does NOT significantly invert in downtrends — even when the market kept
+    # falling, OW−UW was +1.6% (t+0.5, insignificant); pooled +1.7%. So downtrend/reversal
+    # now REDUCE SIZE (unreliable relative signal + long-only market beta) rather than hard-
+    # suppress overweights. verdict ∈ {ACT, SELECTIVE, STAND-ASIDE}; size_hint ∈ [0,1].
     if reversal:
-        state, mult, inv = "REVERSAL", _MULT_REVERSAL, True
-        verdict, size = "STAND-ASIDE", 0.0
-        posture = "Momentum-crash risk — leaders fade in sharp pullbacks. Trim / stand aside."
-        banner = (f"⚠ Sharp pullback (Nifty {ret_5d:+.1f}% / 5d). Momentum-crash proxy — the "
-                  f"overweight tilt is UNRELIABLE here; suppressed. Trim long exposure.")
+        state, mult, inv = "REVERSAL", _MULT_REVERSAL, False
+        verdict, size = "SELECTIVE", 0.3
+        posture = "Sharp pullback — momentum-crash tail risk + market beta. Small size, top names only."
+        banner = (f"⚠ Sharp pullback (Nifty {ret_5d:+.1f}% / 5d). Momentum-crash tail risk and a "
+                  f"long-only book carries beta here — small size, top-ranked names only.")
     elif dn_trend:
-        state, mult, inv = "TRENDING_DOWN", _MULT_DOWN, True
-        verdict, size = "STAND-ASIDE", 0.0
-        posture = "Tilt INVERTS in downtrends — do NOT chase leaders. Overweights suppressed; defensive only."
-        banner = ("Nifty below 20/50 EMA (downtrend). OOS-measured: the overweight (high-momentum) "
-                  "basket UNDERPERFORMS by ~0.8%/10d here — leaders are the wrong side. Overweights "
-                  "are suppressed; treat this tab as reduce/avoid, not a buy list.")
+        state, mult, inv = "TRENDING_DOWN", _MULT_DOWN, False
+        verdict, size = "SELECTIVE", 0.4
+        posture = "Downtrend — the sector tilt is unreliable here + long-only carries market beta. Reduced size, top names."
+        banner = ("Nifty below 20/50 EMA (downtrend). Real-bear-measured (2018-2026 incl COVID/2022): "
+                  "the sector overweight does NOT reliably underperform here (OW−UW ~+1.6%, not "
+                  "significant) — earlier 'inverts' was a stock-level read that doesn't transfer. "
+                  "But the relative signal is unreliable and a long-only book carries market beta, "
+                  "so size DOWN and stick to top-ranked names — don't deploy full.")
     elif high_vol:
         state, mult, inv = "HIGH_VOL", _MULT_HIVOL, False
         verdict, size = "ACT", 0.75           # edge intact but big beta swings → size down for vol
@@ -269,17 +273,18 @@ def _market_regime(nifty: pd.DataFrame) -> dict:
         banner += ("  ⚠ Bull-trap: 1-2wk bounce inside a 1-2mo DOWNTREND (weakest measured forward "
                    "state) — reduce size, don't add on this pop.")
         posture = "Bull-trap (1-2wk up, 1-2mo down) — " + posture
-    elif divergence == "ALIGNED_DN" and verdict == "SELECTIVE":
-        # both timeframes down but regime only choppy → step to the sideline (OW−UW −0.70%)
-        verdict, size, mult = "STAND-ASIDE", 0.0, min(mult, _MULT_DOWN)
-        posture = "Short- and medium-term both down — step aside. " + posture
+    elif divergence == "ALIGNED_DN" and verdict != "ACT":
+        # both short- and medium-term down → trim size further (not a hard sideline: sector
+        # momentum does not significantly invert even in sustained falls), keep top names.
+        size = min(size, 0.3); mult = min(mult, _MULT_DOWN)
+        posture = "Short- and medium-term both down — extra caution, smaller size. " + posture
     elif divergence == "DIP_IN_UP" and verdict == "ACT":
         banner += "  ✓ 1-2wk dip inside a 1-2mo uptrend — historically the best entry timing."
 
     _ACTION = {
         "ACT":         "Trade the tilt — overweights are live. Rotate into the leaders below.",
-        "SELECTIVE":   "Half size, top-ranked names only — the edge is thin/fragile here.",
-        "STAND-ASIDE": "No long rotation — the tilt inverts / trends down; leaders bleed. Preserve capital.",
+        "SELECTIVE":   "Reduced size, top-ranked names only — the edge is thin/unreliable here.",
+        "STAND-ASIDE": "No long rotation — preserve capital.",
     }
     return dict(state=state, vol_pct=vol_pct, ret_5d=ret_5d, ret_med=ret_med,
                 med_trend=med_trend, divergence=divergence, momentum_inverts=bool(inv),

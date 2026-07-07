@@ -3749,10 +3749,10 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
     pct = int(round(size * 100))
     _card_tip = ("What to do today, in one line. "
                  "🟢 TRADE THE TILT = market's healthy, OK to buy the green list at full size. "
-                 "🟡 SELECTIVE = weak/unclear market, buy only the top 1-2 names at half size. "
-                 "🔴 STAND ASIDE = don't buy — in this market the 'leaders' usually fall hardest; "
-                 "hold cash / protect what you have. 'Suggested size' = how much of a normal "
-                 "position to put on (100% / 50% / 0%).")
+                 "🟡 SELECTIVE = weak/unclear market (chop or downtrend) — buy only the top names "
+                 "at reduced size; the list still holds up but a long-only book falls with the "
+                 "market. 🔴 STAND ASIDE = preserve capital. 'Suggested size' = how much of a "
+                 "normal position to put on.")
     st.markdown(
         f"<div title=\"{_card_tip}\" style='border:1px solid {vcol}55;border-left:5px solid {vcol};"
         f"border-radius:8px;padding:12px 16px;margin:4px 0 10px 0;background:{vcol}0d'>"
@@ -3822,10 +3822,11 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Market backdrop", state,
-              help="The overall market mood, which decides whether the buy list is trustworthy "
-                   "today. Uptrend = OK to buy the leaders. Chop = buy small, top names only. "
-                   "Downtrend / sharp fall = DON'T buy the leaders — history shows they fall "
-                   "hardest here, so the buy list is switched off.")
+              help="The overall market mood, which sets how big to trade the buy list today. "
+                   "Uptrend = full size. Chop = small, top names only. Downtrend / sharp fall = "
+                   "reduced size, top names only — the buy list still holds up in bears (tested "
+                   "2018-2026), but the signal is less reliable and a long-only book still falls "
+                   "with the market, so don't deploy full.")
     n_rev = int(df["revert"].sum()) if "revert" in df.columns else 0
     c2.metric("Reverting sectors", n_rev,
               help="How many top sectors have a habit of fading right after they look strong. We "
@@ -3958,14 +3959,15 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
                 "not predictive**: blending it into the tilt degraded accuracy in backtest, so "
                 "the ranking ignores it. Use it to sanity-check drawdown risk, not to pick.")
     st.caption(
-        "⚠ Alpha validated on one bull 1.3yr sample; **regime behaviour** stress-tested OOS "
-        "on a 4yr multi-regime F&O panel (2022–26). Measured there: in a Nifty **downtrend** "
-        "the overweight (high-momentum) basket **underperforms** by ~0.8%/10d (every year) — "
-        "so downtrend/reversal **suppress overweights** and flip this tab to reduce/avoid; "
-        "chop mutes it; only uptrend/high-vol keep full conviction. A **bull-trap** (1-2wk up "
-        "inside a 1-2mo downtrend) is the weakest state → size down. There is **no "
-        "buy-the-crash long**: a price proxy for smart-money accumulation FAILED OOS "
-        "(beaten-down names mean-revert harder than resilient ones). UNDERWEIGHT = "
+        "⚠ Alpha validated on a bull sample; **regime behaviour** now calibrated on DCM's own "
+        "**real-bear data 2018–2026** (2018 midcap crisis / 2020 COVID / 2022 bear). Measured: "
+        "in a Nifty **downtrend** the sector overweight does **not** reliably underperform "
+        "(OW−UW ~+1.6%, not significant — the earlier 'inverts ~0.8%' was a stock-level read that "
+        "doesn't transfer to sectors). So downtrend/reversal **reduce size and keep top names** "
+        "(the signal is unreliable and a long-only book carries market beta) rather than switch "
+        "off; chop mutes; only uptrend/high-vol keep full size. A **bull-trap** (1-2wk up inside "
+        "a 1-2mo downtrend) is the weakest state → extra size cut. There is **no buy-the-crash "
+        "long**: smart-money accumulation FAILED to lead the recovery in backtest. UNDERWEIGHT = "
         "reduce/avoid, not a short. WATCH = accumulation, momentum not yet turned. "
         "↩ = persistence gate demoted a historically mean-reverting sector."
     )
