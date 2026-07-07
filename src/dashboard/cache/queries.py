@@ -117,6 +117,13 @@ def cached_sector_defensive(trade_date: date, min_turnover_lacs: float = 1.0) ->
 
 
 @st.cache_data(ttl=_TTL)
+def cached_market_breadth(trade_date: date) -> dict:
+    """Large-cap breadth + 200-DMA regime NOWCAST (situational context, not a forecast)."""
+    from src.analytics.sector_forward_tilt import get_market_breadth
+    return get_market_breadth(trade_date)
+
+
+@st.cache_data(ttl=_TTL)
 def cached_fao_latest(trade_date: date, data_type: str) -> pd.DataFrame:
     from src.analytics.fao_participants import get_fao_latest
     return get_fao_latest(trade_date, data_type=data_type)

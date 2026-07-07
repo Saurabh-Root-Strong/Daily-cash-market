@@ -38,6 +38,7 @@ from src.dashboard.cache.queries import (
     cached_price_action,
     cached_forward_tilt,
     cached_sector_defensive,
+    cached_market_breadth,
 )
 from src.analytics.price_action import (BRK_BREAKOUT, BRK_FALSEBRK, BRK_EXTENDED,
                                         BRK_BOUNCE, BRK_COILING, BRK_NONE, BRK_STATES,
@@ -3773,6 +3774,40 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
     if n_sup:
         st.caption(f"🚫 {n_sup} overweight call(s) suppressed — in this regime the top-momentum "
                    f"basket is measured to UNDERPERFORM (OOS 4yr). Shown as NEUTRAL, not a buy.")
+
+    # ── market-breadth NOWCAST — "are we in a sustained downtrend?" (context, not forecast) ─
+    try:
+        bd = cached_market_breadth(selected_date)
+    except Exception:                                            # noqa: BLE001
+        bd = {"ok": False}
+    if bd.get("ok"):
+        _BD = {  # state → (emoji, colour, plain one-liner)
+            "BULL":       ("🟢", "#16a34a", "Broad uptrend — most large-caps above their trend lines and the index above its 200-day line."),
+            "RECOVERING": ("🟡", "#2f9e6f", "Recovering — breadth is strong again but the index hasn't reclaimed its 200-day line yet (bounce, not confirmed bull)."),
+            "NEUTRAL":    ("⚪", "#8a8f98", "Mixed — no broad trend either way."),
+            "WEAKENING":  ("🟠", "#d97706", "Weakening — the index still looks OK but fewer and fewer stocks are holding up (leadership narrowing)."),
+            "BEAR":       ("🔴", "#dc2626", "Broad downtrend — most large-caps below their trend lines and the index below its 200-day line."),
+        }
+        emo, bcol, one = _BD.get(bd["state"], _BD["NEUTRAL"])
+        b50 = bd["b50"]; b200 = bd["b200"]; dur = bd["dur_days"]
+        _bd_tip = ("A snapshot of where the WHOLE market is now — not a forecast. It counts how many "
+                   "of ~400 large-caps are above their own 50-day and 200-day lines, and whether the "
+                   "Nifty is above/below its 200-day line. IMPORTANT (from 4yr backtest): a 'death "
+                   "cross' / below-200-day does NOT predict a fall here — those signals usually mark "
+                   "bottoms, not tops. So use this to know the mood, not to time a sell.").replace('"',"'")
+        st.markdown(
+            f"<div title=\"{_bd_tip}\" style='border:1px solid {bcol}44;border-radius:8px;"
+            f"padding:8px 14px;margin:8px 0 4px 0;background:{bcol}0a'>"
+            f"<b style='color:{bcol}'>{emo} Market regime nowcast: {bd['state']} ⓘ</b> "
+            f"<span style='color:#8a8f98'>· {one}</span><br>"
+            f"<span style='color:#8a8f98;font-size:0.9rem'>{bd['caption']}"
+            f"{' · death cross (long-term lines crossed down)' if bd.get('death_cross') else ''}"
+            f" · held {dur} day{'s' if dur != 1 else ''}</span></div>",
+            unsafe_allow_html=True)
+        if bd.get("narrowing"):
+            st.caption("⚠ Early caution (low confidence): index up but breadth quietly falling — "
+                       "leadership is narrowing. The one signal with a mild forward-down lean in "
+                       "backtest (P≈56%), so treat as 'tighten', not 'sell'.")
 
     c1, c2, c3 = st.columns(3)
     c1.metric("Market backdrop", state,

@@ -480,3 +480,107 @@ def get_forward_tilt(
     fac["accum_breadth"] = fac["breadth_accum"]
     fac = fac.sort_values("score", ascending=False).reset_index(drop=True)
     return fac[cols], regime
+
+
+# ── market-breadth regime NOWCAST (situational awareness, NOT a forecast) ─────────
+# Backtested on the 4yr F&O panel (scripts/audit_regime_detection.py). HONEST verdict:
+# structural bear signals (below-200-DMA, EMA50<EMA200 death cross) are LAGGING and
+# CONTRARIAN in this regime — a confirmed death cross was followed by +5.3%/40d (91%
+# false-alarm), so NONE of these forecast a 1-2mo decline. Breadth also does NOT sharpen
+# the tilt inversion (OW−UW ≈ −0.8% with or without a breadth split). So this nowcast is
+# DISPLAY-ONLY context — it describes the CONCURRENT risk state ("are we broadly weak
+# right now"), it is not wired into the tilt and it is not a market-direction call. The one
+# mildly forward-tilted signal is breadth DIVERGENCE (index up while breadth quietly falls =
+# leadership narrowing) — surfaced as an explicit LOW-CONFIDENCE early-caution only.
+_BREADTH_MIN_TO_LACS = 5000.0     # ~50 Cr turnover floor → stable large/mid-cap breadth set
+_BREADTH_BULL        = 55.0       # % of members above 50-DMA for a broad-bull read
+_BREADTH_BEAR        = 40.0       # ... below this = broad weakness
+
+
+def get_market_breadth(as_of_date: date, min_turnover_lacs: Optional[float] = None) -> dict:
+    """Large-cap breadth + index-structure NOWCAST (concurrent risk state, causal).
+
+    Returns state ∈ {BULL, NEUTRAL, BEAR, UNKNOWN}, breadth %s, structural flags, how many
+    days the state has held, and a low-confidence 'leadership narrowing' early-caution. All
+    inputs use data ≤ as_of_date. This is context, not a forecast (see module note above).
+    """
+    out = dict(ok=False, state="UNKNOWN", b50=float("nan"), b200=float("nan"),
+               px_vs_200=float("nan"), death_cross=False, dur_days=0,
+               narrowing=False, n=0, caption="Breadth unavailable (insufficient history).")
+    try:
+        df = query_dataframe(
+            """
+            SELECT b.symbol, b.trade_date, b.close_price
+            FROM daily_data b
+            WHERE b.series IN ('EQ','SM','ST')
+              AND b.trade_date > (?::date - 400) AND b.trade_date <= ?
+              AND b.symbol IN (SELECT symbol FROM daily_data
+                               WHERE trade_date = ? AND turnover_lacs >= ?)
+            ORDER BY b.symbol, b.trade_date
+            """,
+            [as_of_date, as_of_date, as_of_date, _BREADTH_MIN_TO_LACS],
+        )
+    except Exception as exc:                                      # noqa: BLE001
+        log.warning("breadth query failed (%s)", exc)
+        return out
+    if df.empty:
+        return out
+    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    p = df.pivot_table("close_price", "trade_date", "symbol").sort_index()
+    if len(p) < 55:
+        return out
+    s50 = p.rolling(50).mean()
+    s200 = p.rolling(200).mean()
+    b50 = ((p > s50).sum(axis=1) / s50.notna().sum(axis=1).replace(0, np.nan) * 100)
+    has200 = s200.notna().sum(axis=1)
+    b200 = ((p > s200).sum(axis=1) / has200.replace(0, np.nan) * 100)
+
+    # index structure (Nifty 50)
+    nf = _load_nifty(as_of_date)
+    px_vs_200 = float("nan"); death = False
+    if not nf.empty and len(nf) >= 200:
+        c = nf.sort_values("trade_date")["close_val"].astype(float)
+        sma200 = c.rolling(200).mean().iloc[-1]
+        px_vs_200 = float(c.iloc[-1] / sma200 - 1) * 100 if sma200 and sma200 > 0 else float("nan")
+        death = bool(c.ewm(span=50, adjust=False).mean().iloc[-1]
+                     < c.ewm(span=200, adjust=False).mean().iloc[-1])
+
+    # 5-state concurrent nowcast: combine breadth (short-term participation) with the
+    # 200-DMA (long-term trend). RECOVERING/WEAKENING name the TRANSITIONS the user asked
+    # about — short-term and long-term disagreeing = regime turning but not yet confirmed.
+    px200_ok = np.isfinite(px_vs_200)
+    def _state_at(bp):
+        long_up = (not px200_ok) or px_vs_200 > 0
+        if bp >= _BREADTH_BULL:
+            return "BULL" if long_up else "RECOVERING"       # strong breadth; long-line yes/no
+        if bp < _BREADTH_BEAR:
+            return "BEAR" if not long_up else "WEAKENING"    # weak breadth; long-line no/yes
+        return "NEUTRAL"
+    state = _state_at(float(b50.iloc[-1]))
+    # duration: consecutive trailing days breadth has held today's strength band (breadth-only,
+    # so it is a true time series — the long-line overlay is a today-only read).
+    def _band(x): return "hi" if x >= _BREADTH_BULL else ("lo" if x < _BREADTH_BEAR else "mid")
+    daily_band = b50.apply(_band); today_band = daily_band.iloc[-1]
+    dur = 0
+    for v in daily_band.iloc[::-1]:
+        if v == today_band: dur += 1
+        else: break
+
+    # early-caution: index 20d up but breadth rolling over (narrowing leadership)
+    idx_r20 = (float(nf.sort_values("trade_date")["close_val"].astype(float).iloc[-1]
+                     / nf.sort_values("trade_date")["close_val"].astype(float).iloc[-21] - 1) * 100
+               if not nf.empty and len(nf) > 21 else float("nan"))
+    b50_chg10 = float(b50.iloc[-1] - b50.iloc[-11]) if len(b50) > 11 else float("nan")
+    narrowing = bool(np.isfinite(idx_r20) and idx_r20 > 0
+                     and np.isfinite(b50_chg10) and b50_chg10 < 0 and b50.iloc[-1] < 60)
+
+    b50v = float(b50.iloc[-1]); b200v = float(b200.iloc[-1]) if b200.notna().any() else float("nan")
+    _pct = lambda x: f"{x:.0f}%" if np.isfinite(x) else "n/a"
+    cap = (f"{_pct(b50v)} of large-caps above their 50-day line, {_pct(b200v)} above the "
+           f"200-day line. Nifty is {abs(px_vs_200):.1f}% {'above' if px_vs_200>=0 else 'below'} "
+           f"its 200-day line" if np.isfinite(px_vs_200) else
+           f"{_pct(b50v)} of large-caps above their 50-day line")
+    out.update(ok=True, state=state, b50=b50v, b200=b200v, px_vs_200=px_vs_200,
+               death_cross=death, dur_days=int(dur), narrowing=narrowing,
+               n=int(p.shape[1]), caption=cap)
+    return out
