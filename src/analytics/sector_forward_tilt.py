@@ -97,6 +97,12 @@ _EMA_SLOPE_WIN = 10       # bars over which the 20-EMA slope is read (medium dir
 _REGIME_CONFIRM = 3       # a persistent regime must hold this many days before it switches
                           # (8yr audit: raw EMA-stack whipsaws — median run 3d, 42% flip back;
                           #  confirmation-gating debounces it so the tilt size stops flip-flopping)
+# trend-quality (Kaufman efficiency ratio, 20d) — 8yr audit: within an uptrend, strong-ER
+# days hit 77% (fwd10) vs choppy-ER 55% (monotone 77/62/55, +0.63%/yr, 5/7 yrs +). A real
+# trend persists; a choppy 'uptrend' (price>EMAs but grinding) doesn't. Gentle size nudge only.
+_ER_STRONG     = 0.50     # ER20 >= this = strong clean trend → full size
+_ER_CHOPPY     = 0.30     # ER20 <  this = choppy/grinding → trim size
+_TQ_MULT       = {"strong": 1.00, "moderate": 0.90, "choppy": 0.80}  # applied in ACT regimes only
 # data-backed confidence multipliers per regime (OOS 4yr, above)
 _MULT_UP       = 1.00     # edge intact
 _MULT_HIVOL    = 1.00     # edge intact in-sample (up-vol) — flagged, not penalised
@@ -220,6 +226,7 @@ def _market_regime(nifty: pd.DataFrame) -> dict:
     default = dict(state="UNKNOWN", vol_pct=float("nan"), ret_5d=float("nan"),
                    confidence_mult=1.0, momentum_inverts=False, med_trend="UNKNOWN",
                    divergence="n/a", verdict="SELECTIVE", size_hint=0.5,
+                   trend_strength="moderate", er20=float("nan"),
                    action="Half size — market context unavailable, treat as low conviction.",
                    posture="Market context unavailable.",
                    banner="Regime unknown — market context unavailable.")
@@ -238,6 +245,12 @@ def _market_regime(nifty: pd.DataFrame) -> dict:
     ret_20d = float(_compound(nf["nret"], 20).iloc[-1])
     ret_med = float(_compound(nf["nret"], _MED_TREND_WIN).iloc[-1])   # ~2-month trend
     ema_slope = float(ema20_s.iloc[-1] - ema20_s.iloc[-1 - _EMA_SLOPE_WIN]) if len(ema20_s) > _EMA_SLOPE_WIN else 0.0
+
+    # trend quality (Kaufman efficiency ratio 20d): |net move| / path length. High = clean trend.
+    diff20 = float(close.diff().abs().iloc[-20:].sum())
+    er20 = float(abs(close.iloc[-1] - close.iloc[-21]) / diff20) if len(close) > 21 and diff20 > 0 else float("nan")
+    trend_strength = ("strong" if np.isfinite(er20) and er20 >= _ER_STRONG else
+                      "choppy" if np.isfinite(er20) and er20 < _ER_CHOPPY else "moderate")
 
     # confirmation-gated persistent regime (debounced — 8yr audit: raw stack whipsaws 42%)
     base = _confirmed_base_state(close, ema20_s, ema50_s, vol20)
@@ -297,6 +310,14 @@ def _market_regime(nifty: pd.DataFrame) -> dict:
         banner = ("Nifty rangebound (mixed EMAs). OOS-measured: overweight ≈ underweight in chop — "
                   "the tilt has little to add; conviction is muted.")
 
+    # ── trend-quality size nudge (ACT regimes only): a choppy 'uptrend' persists worse ──
+    if verdict == "ACT":
+        size *= _TQ_MULT[trend_strength]
+        if trend_strength == "choppy":
+            banner += "  (Choppy uptrend — grinding, not a clean trend; size trimmed.)"
+        elif trend_strength == "strong":
+            banner += "  (Strong clean trend — full conviction.)"
+
     # ── divergence overlays: downgrade size only; never upgrade a STAND-ASIDE ─────
     if divergence == "BULLTRAP" and verdict != "STAND-ASIDE":
         mult *= _MULT_BULLTRAP
@@ -321,7 +342,8 @@ def _market_regime(nifty: pd.DataFrame) -> dict:
     }
     return dict(state=state, vol_pct=vol_pct, ret_5d=ret_5d, ret_med=ret_med,
                 med_trend=med_trend, divergence=divergence, momentum_inverts=bool(inv),
-                confidence_mult=float(mult), verdict=verdict, size_hint=float(size),
+                confidence_mult=float(mult), verdict=verdict, size_hint=round(float(size), 2),
+                trend_strength=trend_strength, er20=er20,
                 action=_ACTION[verdict], posture=posture, banner=banner)
 
 

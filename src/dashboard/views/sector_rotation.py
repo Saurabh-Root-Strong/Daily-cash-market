@@ -3779,9 +3779,15 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
         "ALIGNED_DN":  "⚠ 1-2wk and 1-2mo both down (aligned bearish — sideline)",
         "MIXED": "short/medium trend mixed", "n/a": "medium trend unavailable",
     }
+    ts = regime.get("trend_strength", "moderate"); er = regime.get("er20", float("nan"))
+    _TS = {"strong": "🟢 strong clean trend", "moderate": "🟡 moderate trend",
+           "choppy": "🟠 choppy/grinding (not a clean trend)"}
+    er_txt = f" (ER {er:.2f})" if er == er else ""
     st.markdown(
         f"<span style='color:#8a8f98'>Two-horizon read → short (1-2wk) vs medium (1-2mo) Nifty "
-        f"trend: medium is <b>{med}</b> · {_DV_TXT.get(dv, dv)}</span>", unsafe_allow_html=True)
+        f"trend: medium is <b>{med}</b> · {_DV_TXT.get(dv, dv)}<br>Trend quality: "
+        f"<b>{_TS.get(ts, ts)}</b>{er_txt} — 8yr: clean trends persist (77% hit) vs choppy (55%); "
+        f"size nudged accordingly.</span>", unsafe_allow_html=True)
     if n_sup:
         st.caption(f"🚫 {n_sup} overweight call(s) suppressed — in this regime the top-momentum "
                    f"basket is measured to UNDERPERFORM (OOS 4yr). Shown as NEUTRAL, not a buy.")
