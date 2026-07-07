@@ -3792,6 +3792,12 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
             f"<div style='margin-top:5px'>{cells}</div>"
             f"<div style='margin-top:5px;color:#c9ced6;font-size:0.9rem'>{mtf['posture']}</div></div>",
             unsafe_allow_html=True)
+        st.caption(
+            "Accuracy (8yr, matched horizon): **swing / short** trend has a *mild* forward edge "
+            "(~+1-2pp vs drift) — use them for entry timing. **Long / very-long** bands DESCRIBE "
+            "the current trend but are **not predictive** — the market mean-reverts, so a long-term "
+            "🔴▼ DOWN is a *bottom* signal (all-4-down → ~76% up over ~3mo), **not** a reason to "
+            "short. Up-calls barely beat the bull drift; the real value is the alignment read above.")
 
     # ── the WHY (evidence banner) + medium-term / divergence line ────────────────
     if inverts:
