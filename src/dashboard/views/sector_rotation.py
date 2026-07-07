@@ -2189,6 +2189,17 @@ def _render_smart_money(selected_date: date, min_turnover: float) -> None:
         f"Based on **100 days** of turnover-weighted delivery data "
         f"— as of **{selected_date.strftime('%d %b %Y')}**"
     )
+    st.info(
+        "**Which tab to trade for sector returns?** Head-to-head backtest (137 days, both "
+        "engines walked forward — scripts/backtest_smartmoney_vs_tilt.py): for **picking which "
+        "sector rises next**, the **🎯 1–2 Wk Forward Tilt (momentum) wins clearly** — its BUY "
+        "sectors returned **+2.7%/10d vs +1.3%** here, rank-IC t+7.0 vs ~0, and its top pick "
+        "+3.0% vs −0.3%. This delivery signal is best as a **confirmation overlay**, not a "
+        "standalone sector picker: when **both** tabs flag the same sector as BUY, forward "
+        "return was the highest of all (**+3.7%/10d, 60% hit**). So use this page to see *where "
+        "institutional money is flowing* and to **confirm** a Forward-Tilt pick — not to rank "
+        "sectors by return on its own. (Bull-only sample — delivery data is 2024-12 onward.)",
+        icon="🧭")
 
     with st.expander("📖 How to read this page", expanded=False):
         st.markdown("""
