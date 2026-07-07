@@ -94,6 +94,9 @@ _VOL_HI_PCT    = 0.80     # realized-vol percentile above this = high-vol regime
 _PULLBACK_5D   = -3.0     # Nifty 5d return below this % after an up-run = reversal caution
 _MED_TREND_WIN = 40       # ~2-month (trading-day) window for the medium-term trend axis
 _EMA_SLOPE_WIN = 10       # bars over which the 20-EMA slope is read (medium direction)
+_REGIME_CONFIRM = 3       # a persistent regime must hold this many days before it switches
+                          # (8yr audit: raw EMA-stack whipsaws — median run 3d, 42% flip back;
+                          #  confirmation-gating debounces it so the tilt size stops flip-flopping)
 # data-backed confidence multipliers per regime (OOS 4yr, above)
 _MULT_UP       = 1.00     # edge intact
 _MULT_HIVOL    = 1.00     # edge intact in-sample (up-vol) — flagged, not penalised
@@ -177,6 +180,34 @@ def _liquid_name_counts(as_of_date: date, min_turnover_lacs: float) -> pd.Series
     return df.set_index("sector")["n_liq"] if not df.empty else pd.Series(dtype=int)
 
 
+def _confirmed_base_state(close: pd.Series, ema20_s: pd.Series, ema50_s: pd.Series,
+                          vol20: pd.Series, k: int = _REGIME_CONFIRM, look: int = 30) -> str:
+    """Debounced persistent regime (UP/DOWN/HIGH_VOL/CHOP) for the last day — kills whipsaw.
+
+    Classifies each of the last `look` days by the raw EMA-stack + vol rule (causal), then
+    only accepts a regime SWITCH after the new label has held `k` consecutive days; transient
+    <k-day flips keep the prior confirmed regime. REVERSAL is handled separately (immediate).
+    """
+    n = len(close)
+    lo = max(60, n - look)
+    labels = []
+    for i in range(lo, n):
+        px, e20, e50 = close.iloc[i], ema20_s.iloc[i], ema50_s.iloc[i]
+        vp = float((vol20.iloc[:i + 1] <= vol20.iloc[i]).mean()) if np.isfinite(vol20.iloc[i]) else np.nan
+        if px < e20 < e50:                                   labels.append("DOWN")
+        elif np.isfinite(vp) and vp >= _VOL_HI_PCT:          labels.append("HIGH_VOL")
+        elif px > e20 > e50:                                 labels.append("UP")
+        else:                                                labels.append("CHOP")
+    if not labels:
+        return "CHOP"
+    last = pending = labels[0]; cnt = 0
+    for v in labels:
+        if v == pending: cnt += 1
+        else:            pending, cnt = v, 1
+        if cnt >= k:     last = pending
+    return last
+
+
 def _market_regime(nifty: pd.DataFrame) -> dict:
     """Nifty trend/vol read → DATA-BACKED reliability lever + posture (OOS 4yr calibrated).
 
@@ -198,8 +229,8 @@ def _market_regime(nifty: pd.DataFrame) -> dict:
     close = nf["close_val"].astype(float)
     ret = nf["nret"].astype(float) / 100.0
     ema20_s = close.ewm(span=20, adjust=False).mean()
-    ema20 = ema20_s.iloc[-1]
-    ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1]
+    ema50_s = close.ewm(span=50, adjust=False).mean()
+    ema20 = ema20_s.iloc[-1]; ema50 = ema50_s.iloc[-1]
     px = close.iloc[-1]
     vol20 = ret.rolling(20).std()
     vol_pct = float((vol20 <= vol20.iloc[-1]).mean()) if vol20.notna().sum() > 20 else float("nan")
@@ -208,10 +239,12 @@ def _market_regime(nifty: pd.DataFrame) -> dict:
     ret_med = float(_compound(nf["nret"], _MED_TREND_WIN).iloc[-1])   # ~2-month trend
     ema_slope = float(ema20_s.iloc[-1] - ema20_s.iloc[-1 - _EMA_SLOPE_WIN]) if len(ema20_s) > _EMA_SLOPE_WIN else 0.0
 
-    up_trend = px > ema20 > ema50
-    dn_trend = px < ema20 < ema50
-    high_vol = np.isfinite(vol_pct) and vol_pct >= _VOL_HI_PCT
-    reversal = ret_5d <= _PULLBACK_5D and ret_20d > 0     # sharp pullback inside an up-run
+    # confirmation-gated persistent regime (debounced — 8yr audit: raw stack whipsaws 42%)
+    base = _confirmed_base_state(close, ema20_s, ema50_s, vol20)
+    up_trend = base == "UP"
+    dn_trend = base == "DOWN"
+    high_vol = base == "HIGH_VOL"
+    reversal = ret_5d <= _PULLBACK_5D and ret_20d > 0     # sharp pullback inside an up-run (immediate)
 
     # ── medium-term (1-2 month) trend axis + short-vs-medium divergence ──────────
     med_up = ret_med > 0 and ema_slope > 0
