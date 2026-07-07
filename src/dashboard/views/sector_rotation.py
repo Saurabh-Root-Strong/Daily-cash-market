@@ -2202,6 +2202,18 @@ def _render_smart_money(selected_date: date, min_turnover: float) -> None:
         "institutional money is flowing* and to **confirm** a Forward-Tilt pick — not to rank "
         "sectors by return on its own. (Bull-only sample — delivery data is 2024-12 onward.)",
         icon="🧭")
+    st.warning(
+        "**Picking the STOCK inside a sector? Read this (8yr, 1.28M stock-days — "
+        "scripts/audit_stock_accumulation_8yr.py).** Over a **1-2 week** hold, individual stocks "
+        "**mean-revert**: high delivery-accumulation (rank-IC **t−3.5**) AND high price momentum "
+        "(**t−4.5**) are both mildly **anti-predictive** at the single-stock level — the "
+        "*least*-accumulated decile beat the most-accumulated (+0.66% vs +0.40%/10d). The validated "
+        "edge is the **SECTOR** call (momentum, IC t+7), NOT the individual stock ranking. **So: use "
+        "this tab to pick the right sector + see institutional flow — but don't assume the "
+        "top-ranked / most-accumulated STOCK is the best swing entry. Within a strong sector, the "
+        "pulled-back / laggard name tends to beat the extended leader over 1-2 weeks** (short-term "
+        "reversal). The stock lists here are context, not a ranked buy-order.",
+        icon="⚠️")
 
     with st.expander("📖 How to read this page", expanded=False):
         st.markdown("""
