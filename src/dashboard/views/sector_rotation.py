@@ -40,6 +40,7 @@ from src.dashboard.cache.queries import (
     cached_sector_defensive,
     cached_market_breadth,
     cached_nifty_breakout,
+    cached_mtf_trend,
 )
 from src.analytics.price_action import (BRK_BREAKOUT, BRK_FALSEBRK, BRK_EXTENDED,
                                         BRK_BOUNCE, BRK_COILING, BRK_NONE, BRK_STATES,
@@ -3762,6 +3763,35 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
         f"suggested size {pct}%</span></div>"
         f"<div style='margin-top:4px;color:#c9ced6'>{action}</div></div>",
         unsafe_allow_html=True)
+
+    # ── MULTI-TIMEFRAME TREND — "is the market trend changing?" (for stock-entry timing) ─
+    try:
+        mtf = cached_mtf_trend(selected_date)
+    except Exception:                                            # noqa: BLE001
+        mtf = {"ok": False}
+    if mtf.get("ok"):
+        _SICON = {"UP": "🟢▲", "DOWN": "🔴▼", "FLAT": "⚪●"}
+        _ENTRY = {"BEST": ("#16a34a", "BEST ENTRY WINDOW"), "EXTENDED": ("#d97706", "EXTENDED — DON'T CHASE"),
+                  "MIXED": ("#d97706", "MIXED / TRANSITION"), "WEAK": ("#dc2626", "WEAK — RISKY"),
+                  "STANDDOWN": ("#dc2626", "BROAD DOWNTREND — WAIT")}
+        ec, elabel = _ENTRY.get(mtf["entry"], ("#8a8f98", mtf["entry"]))
+        cells = "".join(
+            f"<span style='display:inline-block;min-width:118px'>"
+            f"<b>{k.upper()}</b> <span style='color:#8a8f98'>({v['horizon']})</span> "
+            f"{_SICON.get(v['state'],'')}{' 🔄' if v['flipped'] else ''}</span>"
+            for k, v in mtf["bands"].items())
+        _mtf_tip = ("Market trend at 4 horizons (Nifty vs its EMA + slope). 8yr backtest: 3/4-up = "
+                    "the best entry (leaders building, not exhausted); 4/4-up = EXTENDED, often near "
+                    "a top (don't chase); all-down = wait/bottom-fish, don't short (bounces). "
+                    "Longer-timeframe turns can't be forecast — this is a concurrent read. 🔄 = a "
+                    "band just flipped.").replace('"', "'")
+        st.markdown(
+            f"<div title=\"{_mtf_tip}\" style='border:1px solid {ec}55;border-radius:8px;"
+            f"padding:10px 14px;margin:2px 0 10px 0;background:{ec}0d'>"
+            f"<b style='color:{ec}'>🧭 Multi-timeframe trend: {mtf['n_up']}/4 up · {elabel} ⓘ</b>"
+            f"<div style='margin-top:5px'>{cells}</div>"
+            f"<div style='margin-top:5px;color:#c9ced6;font-size:0.9rem'>{mtf['posture']}</div></div>",
+            unsafe_allow_html=True)
 
     # ── the WHY (evidence banner) + medium-term / divergence line ────────────────
     if inverts:

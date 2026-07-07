@@ -678,3 +678,48 @@ def get_nifty_breakout(as_of_date: date) -> dict:
     held = bool((c.iloc[abs_i:] >= level).all())                 # stayed above the broken level
     return dict(ok=True, state="HELD" if held else "FAILED",
                 days_since=days_since, level=level)
+
+
+# ── multi-timeframe trend read (swing/short/long/vlong) — "is the trend changing?" ────
+# 8yr backtest scripts/audit_mtf_trend_8yr.py: 3/4-up is the BEST entry (t+3.4 swing) —
+# 4/4-up is EXTENDED (weaker, often near tops); all-DOWN is a long-horizon bottom (+5.5%/65d
+# contrarian, don't short); swing turns tradeable but a swing DOWN-turn is contrarian (bounce);
+# longer-timeframe turns lag and are NOT forecastable. Concurrent read + honest entry posture.
+_MTF_BANDS = {"swing": (10, "1-3 wk"), "short": (30, "1-2 mo"),
+              "long": (60, "2.5-4 mo"), "vlong": (120, "4-6 mo")}
+
+def get_mtf_trend(as_of_date: date) -> dict:
+    """Per-band Nifty trend (UP/DOWN/FLAT) + alignment + validated entry posture (causal)."""
+    out = dict(ok=False, bands={}, n_up=0, n_dn=0, posture="", entry="", flips=[])
+    try:
+        df = query_dataframe(
+            "SELECT trade_date, close_val FROM index_data WHERE index_name = 'Nifty 50' "
+            "AND trade_date <= ? ORDER BY trade_date", [as_of_date])
+    except Exception:                                            # noqa: BLE001
+        return out
+    if df.empty or len(df) < 130:
+        return out
+    c = df["close_val"].astype(float).reset_index(drop=True)
+    bands = {}; n_up = n_dn = 0; flips = []
+    for name, (span, horizon) in _MTF_BANDS.items():
+        e = c.ewm(span=span, adjust=False).mean()
+        sl_win = max(5, span // 4)
+        slope = e - e.shift(sl_win)
+        px, ev, sv = c.iloc[-1], e.iloc[-1], slope.iloc[-1]
+        state = "UP" if (px > ev and sv > 0) else "DOWN" if (px < ev and sv < 0) else "FLAT"
+        # recent flip (state 3 days ago differed and was the opposite trend)
+        px3, ev3, sv3 = c.iloc[-4], e.iloc[-4], (e.iloc[-4] - e.iloc[-4 - sl_win]) if len(e) > 4 + sl_win else 0
+        prev = "UP" if (px3 > ev3 and sv3 > 0) else "DOWN" if (px3 < ev3 and sv3 < 0) else "FLAT"
+        flipped = state != prev and state in ("UP", "DOWN") and prev in ("UP", "DOWN")
+        bands[name] = dict(state=state, horizon=horizon, flipped=bool(flipped))
+        if flipped: flips.append((name, state))
+        n_up += state == "UP"; n_dn += state == "DOWN"
+
+    if   n_up == 4: entry, posture = ("EXTENDED", "Fully aligned UP — trend intact but EXTENDED; hold/trail, don't chase new entries (all-4-up is measurably weaker than 3/4, often near a local top).")
+    elif n_up == 3: entry, posture = ("BEST",     "Best entry window — trend established across timeframes but not exhausted (strongest measured forward, ~t+3.4 swing). Favourable for new longs.")
+    elif n_up == 2: entry, posture = ("MIXED",    "Mixed / transition — timeframes disagree. Be selective on new entries; wait for alignment to build.")
+    elif n_up == 1: entry, posture = ("WEAK",     "Mostly down — new longs are risky; keep tight, prefer only the strongest setups.")
+    else:           entry, posture = ("STANDDOWN","Broad downtrend (all timeframes down) — wait. Don't short (history bounces); only long-horizon bottom-fishing, small.")
+    out.update(ok=True, bands=bands, n_up=int(n_up), n_dn=int(n_dn),
+               posture=posture, entry=entry, flips=flips)
+    return out

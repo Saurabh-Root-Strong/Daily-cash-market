@@ -131,6 +131,13 @@ def cached_nifty_breakout(trade_date: date) -> dict:
 
 
 @st.cache_data(ttl=_TTL)
+def cached_mtf_trend(trade_date: date) -> dict:
+    """Multi-timeframe Nifty trend (swing/short/long/vlong) + entry posture — 'is trend changing?'"""
+    from src.analytics.sector_forward_tilt import get_mtf_trend
+    return get_mtf_trend(trade_date)
+
+
+@st.cache_data(ttl=_TTL)
 def cached_fao_latest(trade_date: date, data_type: str) -> pd.DataFrame:
     from src.analytics.fao_participants import get_fao_latest
     return get_fao_latest(trade_date, data_type=data_type)
