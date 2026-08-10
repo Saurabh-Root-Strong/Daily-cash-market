@@ -103,10 +103,61 @@ def cached_price_action(
 
 
 @st.cache_data(ttl=_TTL)
-def cached_forward_tilt(trade_date: date, min_turnover_lacs: float = 1.0):
-    """Validated 1-2wk forward sector tilt + regime meta. Returns (DataFrame, dict)."""
+def cached_forward_tilt(trade_date: date, min_turnover_lacs: float = 1.0,
+                        horizon_days: int = 10):
+    """
+    Forward sector tilt + regime meta. Returns (DataFrame, dict).
+
+    `horizon_days` scales the RS lookbacks with the forward window; 10 is the
+    validated 1-2wk build and is bit-identical to the previous behaviour.
+    """
     from src.analytics.sector_forward_tilt import get_forward_tilt
-    return get_forward_tilt(trade_date, min_turnover_lacs=min_turnover_lacs)
+    return get_forward_tilt(trade_date, min_turnover_lacs=min_turnover_lacs,
+                            horizon_days=horizon_days)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_clock_stock_detail(sector: str, trade_date: date, min_turnover_lacs: float = 1.0,
+                              lookback_days: int = 10):
+    """
+    Stocks inside a Rotation-Clock sector, ranked by delivery-vs-own-normal.
+
+    `lookback_days` MUST be the Clock's selected Analysis Period (5/10/22/65).
+    It is part of the cache key, so each window caches separately.
+    """
+    from src.analytics.sector_rotation import get_clock_stock_detail
+    return get_clock_stock_detail(sector, trade_date, min_turnover_lacs,
+                                  lookback_days=lookback_days)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_sector_month_map(trade_date: date):
+    """Sector x month seasonality grid + meta. DESCRIPTIVE — see module docstring."""
+    from src.analytics.sector_seasonality import get_sector_month_map
+    return get_sector_month_map(trade_date)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_month_suggestion(trade_date: date, top_k: int = 4) -> dict:
+    """Causal (walk-forward) sector suggestion for the month about to start."""
+    from src.analytics.sector_seasonality import get_next_month_suggestion
+    return get_next_month_suggestion(trade_date, top_k=top_k)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_seasonality_record(trade_date: date, top_k: int = 3, lens: str = "dcm",
+                              mode: str = "month", since: str | None = None) -> dict:
+    """
+    Walk-forward track record of the seasonality rule.
+
+    `mode="persistence"` is the CONTROL (ranks sectors ignoring the calendar
+    month). It must be displayed next to `mode="month"`, because on DCM buckets
+    the control reproduces ~96% of the seasonal rule's return — the difference
+    between the two is the only genuinely seasonal part.
+    """
+    from src.analytics.sector_seasonality import get_seasonality_track_record
+    return get_seasonality_track_record(trade_date, top_k=top_k, lens=lens,
+                                        mode=mode, since=since)
 
 
 @st.cache_data(ttl=_TTL)

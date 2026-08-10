@@ -1282,6 +1282,141 @@ def get_sector_stocks_rotation(
     )
 
 
+def get_clock_stock_detail(
+    sector: str,
+    as_of_date: date,
+    min_turnover_lacs: Optional[float] = None,
+    lookback_days: int = 14,
+) -> pd.DataFrame:
+    """
+    Which stocks inside a Rotation-Clock sector are worth looking at, and which
+    merely DROVE the move. Two different questions — the drill-down shows both,
+    because ranking by the second one is measurably backwards.
+
+    MEASURED (scripts/audit_stock_pick_in_clock.py, 1.19M stock-days 2018-2026,
+    forward 10d EXCESS OVER THE STOCK'S OWN SECTOR, so this is pure stock
+    selection with the sector call stripped out; Newey-West t at lag=10):
+
+        feature                              IC        t
+        dacc  (delivery vs own 100d normal)  +0.0323  +9.56   <- the one that works
+        rel_mom (momentum vs sector)         -0.0226  -4.79
+        dvshare (share of sector delivery)   -0.0351  -4.79
+        turnsurge (turnover vs own normal)   -0.0164  -3.52
+        contrib (drove the sector move)      -0.0212  -4.85
+
+    `dacc` quintiles are MONOTONIC (-0.245 / -0.082 / -0.012 / +0.100 / +0.247),
+    Q5-Q1 = +0.562%/10d (t +7.36, 65% hit), stable in all three eras
+    (t +4.85 / +6.66 / +5.13) and it SURVIVES residualising on the stock's own
+    momentum (t +8.42). It is the cleanest stock-level signal in this codebase.
+
+    THE COST CAVEAT THAT DECIDES HOW TO USE IT: as a STANDALONE trade, top-3 by
+    dacc nets -4.9%/yr (t -2.32) — a 0.5% round trip against +0.31%/10d gross.
+    It only pays as a SELECTION rule inside a sector you have ALREADY decided to
+    buy, where you must hold something anyway and the incremental cost is zero.
+
+    Returns one row per stock with `dacc`, `contrib_pct`, `rel_ret_pct` and a
+    plain-English `read`.
+    """
+    base = get_sector_stocks_rotation(sector, as_of_date, min_turnover_lacs,
+                                      lookback_days=lookback_days)
+    if base is None or base.empty:
+        return pd.DataFrame()
+    df = base.copy()
+
+    # delivery conviction vs the stock's OWN normal (NOT a sector-relative percentile —
+    # that distinction is exactly why the earlier stock-level read came out inverted)
+    if {"wtd_deliv_per", "avg_deliv_per_100d"}.issubset(df.columns):
+        df["dacc"] = df["wtd_deliv_per"] / df["avg_deliv_per_100d"].replace(0, np.nan)
+    else:
+        df["dacc"] = np.nan
+
+    # REAL prices. `price_chg_pct` from get_sector_stocks_rotation is a
+    # turnover-weighted MEAN OF DAILY returns, not a period return — over a 5-day
+    # window it reads roughly a daily average, ~5x understated. For a "how did this
+    # stock do" column we need actual close-to-close moves, so fetch them directly:
+    #   ltp        last close on/before as_of
+    #   chg_1d_pct last close vs the session before it
+    #   ret_win_pct last close vs the close just before the window opened
+    px = query_dataframe(
+        """
+        WITH px AS (
+            SELECT b.symbol, b.trade_date, b.close_price,
+                   ROW_NUMBER() OVER (PARTITION BY b.symbol
+                                      ORDER BY b.trade_date DESC) AS rn_desc
+            FROM daily_data b
+            INNER JOIN v_sector_master s ON b.symbol = s.symbol
+            WHERE b.series IN ('EQ', 'SM', 'ST')
+              AND s.sector = ?
+              AND b.trade_date <= ?
+        ),
+        last2 AS (
+            SELECT symbol,
+                   MAX(CASE WHEN rn_desc = 1 THEN close_price END) AS ltp,
+                   MAX(CASE WHEN rn_desc = 2 THEN close_price END) AS prev_close
+            FROM px WHERE rn_desc <= 2 GROUP BY symbol
+        ),
+        start_px AS (
+            SELECT symbol, ARGMAX(close_price, trade_date) AS start_close
+            FROM px WHERE trade_date <= ? GROUP BY symbol
+        )
+        SELECT l.symbol, l.ltp,
+               CASE WHEN l.prev_close > 0
+                    THEN (l.ltp - l.prev_close) / l.prev_close * 100 END AS chg_1d_pct,
+               CASE WHEN s.start_close > 0
+                    THEN (l.ltp - s.start_close) / s.start_close * 100 END AS ret_win_pct
+        FROM last2 l LEFT JOIN start_px s ON l.symbol = s.symbol
+        """,
+        [sector, as_of_date, as_of_date - timedelta(days=lookback_days)],
+    )
+    if not px.empty:
+        df = df.drop(columns=[c for c in ("ltp",) if c in df.columns]).merge(
+            px, on="symbol", how="left")
+    else:
+        df["ltp"] = np.nan; df["chg_1d_pct"] = np.nan; df["ret_win_pct"] = np.nan
+
+    # relative move = this stock's WINDOW return minus the sector's typical one
+    df["rel_ret_pct"] = df["ret_win_pct"] - df["ret_win_pct"].median()
+
+    dv_col = next((c for c in ("deliv_value_cr", "deliv_val_cr") if c in df.columns), None)
+    if dv_col:
+        tot = float(df[dv_col].sum())
+        df["dv_share_pct"] = 100.0 * df[dv_col] / tot if tot else np.nan
+        # attribution: how much of the sector's move this name accounts for
+        df["contrib_pct"] = df["rel_ret_pct"] * df["dv_share_pct"] / 100.0
+    else:
+        df["dv_share_pct"] = np.nan
+        df["contrib_pct"] = np.nan
+
+    def _read(r) -> str:
+        d, rr = r.get("dacc"), r.get("rel_ret_pct")
+        if pd.isna(d):
+            return "no delivery baseline yet"
+        if d >= 1.20 and (pd.isna(rr) or rr <= 0):
+            return "heavy delivery, price still lagging - the strongest combination"
+        if d >= 1.20:
+            return "heavy delivery vs its own normal"
+        if d >= 1.05:
+            return "delivery a little above its own normal"
+        if d <= 0.85:
+            return "delivery BELOW its own normal - weakest quintile historically"
+        return "delivery near its own normal"
+
+    df["read"] = df.apply(_read, axis=1)
+    # Thin-name guard. Extreme dacc skews to SMALL names: on 2026-08-07 the only
+    # dacc>3 name in Metals & Mining carried Rs48 Cr of delivery vs a sector median
+    # of Rs167 Cr. A 5x delivery jump on a small base is real but not necessarily
+    # tradable, so it is flagged rather than silently ranked first. (Separately,
+    # 855 of 2,712 symbols have <20 liquid days in the trailing 150, which makes
+    # their 100-day baseline itself noisy.)
+    if "deliv_value_cr" in df.columns and len(df) >= 4:
+        med = float(df["deliv_value_cr"].median())
+        df["thin"] = df["deliv_value_cr"] < (0.33 * med)
+    else:
+        df["thin"] = False
+    df.loc[df["thin"], "read"] = df.loc[df["thin"], "read"] + " (small base - check liquidity)"
+    return df.sort_values("dacc", ascending=False).reset_index(drop=True)
+
+
 def get_sector_rotation_history(
     sector: str,
     as_of_date: date,

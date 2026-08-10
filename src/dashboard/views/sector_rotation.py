@@ -37,6 +37,10 @@ from src.dashboard.cache.queries import (
     cached_sector_memory_context,
     cached_price_action,
     cached_forward_tilt,
+    cached_clock_stock_detail,
+    cached_sector_month_map,
+    cached_month_suggestion,
+    cached_seasonality_record,
     cached_sector_defensive,
     cached_market_breadth,
     cached_nifty_breakout,
@@ -917,7 +921,10 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
             # Label cols carry the display string (e.g. "🟢 LB +39%"); the *_oi_chg_pct
             # cols carry the raw signed OI-change % that feeds the strength gate below.
             _FNO_EXP_COLS = ["near_fut_label", "next_fut_label", "far_fut_label",
-                             "near_opt_label", "next_opt_label", "far_opt_label"]
+                             "near_opt_label", "next_opt_label", "far_opt_label",
+                             "near_trend_label", "next_trend_label", "far_trend_label",
+                             "near_opt_trend_label", "next_opt_trend_label",
+                             "far_opt_trend_label"]
             _FNO_NUM_COLS = ["near_oi_chg_pct", "next_oi_chg_pct", "far_oi_chg_pct"]
             _fno_symbols: set[str] = set()   # F&O underlying universe for this date
             try:
@@ -1007,8 +1014,12 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
 
             display_cols = ["symbol", "company_name", "industry", "ltp", "conviction",
                             "pa_class", "breakout", "mtf_align", "efficiency_ratio",
-                            "near_fut_label", "next_fut_label", "far_fut_label",
-                            "near_opt_label", "next_opt_label", "far_opt_label",
+                            "near_fut_label", "near_trend_label",
+                            "next_fut_label", "next_trend_label",
+                            "far_fut_label", "far_trend_label",
+                            "near_opt_label", "near_opt_trend_label",
+                            "next_opt_label", "next_opt_trend_label",
+                            "far_opt_label", "far_opt_trend_label",
                             "wtd_deliv_per", "deliv_vs_100d_pct", "avg_deliv_per_100d",
                             "deliv_value_cr", "turnover_cr", "price_chg_pct"]
             display_cols = [c for c in display_cols if c in stocks.columns]
@@ -1261,6 +1272,131 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
                              "Speculative / longer-term positioning.\n"
                              "Lower liquidity — treat as directional context, not a primary signal.\n"
                              "Large OI build in far month = conviction over the coming 2–3 months"),
+                    # ── EXPIRY-CYCLE trend per expiry (the 'Cycle' columns) ────
+                    # The Fut Near/Next/Far columns above are a ONE-DAY snapshot:
+                    # over 503 sessions that label changes 70.7% of the time and
+                    # outright reverses 22.4%. These columns run the same OI-price
+                    # matrix CUMULATIVELY from the current monthly expiry cycle's
+                    # first session, which flips 30.7% / reverses 2.3% — the most
+                    # stable of the three bases tested (a rolling 5-day window sat
+                    # in between at 36.6% / 3.4%).
+                    "near_trend_label": _htc(
+                        "Near Cycle",
+                        help="FUTURES — Near-month build for THIS EXPIRY CYCLE, plus the "
+                             "day-by-day path. Format:  🟢 LB +8% | +2, -1, +3, +2\n\n"
+                             "LEFT of the bar — cumulative since the cycle began:\n"
+                             "🟢 LB = Long Buildup (OI building + price up over the cycle)\n"
+                             "🔴 SB = Short Buildup (OI building + price down)\n"
+                             "🔵 SC = Short Covering (OI falling + price up)\n"
+                             "🟠 LU = Long Unwinding (OI falling + price down)\n"
+                             "⚪ = no clear build either way\n"
+                             "⚠ = TODAY moved AGAINST the cycle build — it is fading\n\n"
+                             "RIGHT of the bar — the last 4 daily OI changes %, "
+                             "NEWEST FIRST: the leftmost figure is TODAY, then yesterday, "
+                             "and so on. This separates a build still running "
+                             "(+5, +4, +2, +3) from one that stalled a week ago "
+                             "(-1, +0, +4, +9). Both can show the same cumulative number.\n\n"
+                             "These 4 figures are NOT what the cumulative is made of. The "
+                             "cumulative spans the whole cycle — 13 sessions by mid-month, "
+                             "19 by expiry — so the 4 shown are only its most recent slice "
+                             "and will not add up to it.\n\n"
+                             "The number left of the bar is the raw cumulative OI change on "
+                             "the SAME contract since the cycle's first session:\n"
+                             "    (today's OI − OI at cycle start) ÷ OI at cycle start × 100\n"
+                             "It grows through the month by design — median ~1% on day 1, "
+                             "~5% by day 5, ~38% by day 20.\n\n"
+                             "The COLOUR is not read off that raw number: it ranks each "
+                             "stock against every other stock on the same cycle day, because "
+                             "a raw % partly measures how far into the cycle you are.\n\n"
+                             "'—' left of the bar = no cumulative yet (expiry day itself), or "
+                             "the contract held under a fifth of its current OI at cycle "
+                             "start, which is a fill-up ramp rather than a build. The daily "
+                             "path is still shown in that case."),
+                    "next_trend_label": _htc(
+                        "Next Cycle",
+                        help="FUTURES — Next-month build for this expiry cycle, same reading "
+                             "as 'Near Cycle'.\n\n"
+                             "This is the column to watch as expiry approaches: it shows "
+                             "where positions are being built for the COMING month while the "
+                             "near month is being closed out.\n\n"
+                             "Expect the cumulative to blank out ('— | path') late in a "
+                             "cycle. A next-month contract is still filling up — by day 20 "
+                             "its OI is typically 20x+ what it was at cycle start, which is "
+                             "contract age, not conviction, so it is not shown as a build. "
+                             "The daily path stays visible throughout."),
+                    # ── OPTIONS over the expiry cycle ──────────────────────────
+                    # Deliberately NOT the futures method. Over a full cycle a fixed
+                    # strike loses ~95-98% of its premium to theta (87-90% of OTM
+                    # strikes end lower), so "OI up + premium down" measured across a
+                    # cycle would call almost the whole chain 'writing' by the clock.
+                    # At ONE day the same measurement is clean (median premium change
+                    # +0.0%, 37% lower). So the buy/write verdict is taken DAILY and
+                    # the cycle is summarised by counting those verdicts.
+                    "near_opt_trend_label": _htc(
+                        "Opt Near Cycle",
+                        help="OPTIONS — near-month positioning across THIS EXPIRY CYCLE.\n"
+                             "Format:  🔴 Bear | CE Wrt15 PE Buy9 /16d\n\n"
+                             "Each session the call side and the put side are judged "
+                             "separately on open interest vs premium:\n"
+                             "  Buy  = OI up + premium up    (buyers accumulating)\n"
+                             "  Wrt  = OI up + premium down  (writers/sellers accumulating)\n"
+                             "  Cov  = OI down + premium up  (writers buying back)\n"
+                             "  Exit = OI down + premium down (buyers closing)\n\n"
+                             "The number after each is how many sessions that was the "
+                             "dominant verdict; '/16d' is how many sessions were counted.\n\n"
+                             "Direction: call WRITING caps upside (bearish) and call "
+                             "buying is bullish; put WRITING supports (bullish) and put "
+                             "buying is bearish. Those are summed into one score.\n\n"
+                             "🟢 Bull / 🔴 Bear / ⚪ Bal is that score RANKED AGAINST "
+                             "OTHER STOCKS, not read off the raw counts — writing is the "
+                             "dominant activity market-wide (the most common verdict for "
+                             "125 of 210 call chains and 114 of 210 put chains), so an "
+                             "unranked label would read 'writing' almost everywhere and "
+                             "tell you nothing.\n\n"
+                             "Sessions close to expiry are EXCLUDED from the count: with "
+                             "one session left 95% of the chain reads as unwinding, which "
+                             "is everyone closing out, not a view. '—' means too few "
+                             "sessions counted yet (early in a cycle)."),
+                    "next_opt_trend_label": _htc(
+                        "Opt Next Cycle",
+                        help="OPTIONS — next-month positioning across this expiry cycle. "
+                             "Same reading as 'Opt Near Cycle'.\n\n"
+                             "Watch this as expiry approaches: it shows where option "
+                             "positions are being built for the coming month while the "
+                             "near month is being closed out.\n\n"
+                             "Blank early in a cycle for most stocks — next-month options "
+                             "barely trade until they are close to becoming the near month "
+                             "(median 7 traded strikes vs 22 for the near month). Roughly "
+                             "70% of rows are blank on cycle day 5 and 13% by day 15. The "
+                             "'/Nd' count is per stock for the same reason: thin sessions "
+                             "are dropped rather than counted."),
+                    "far_opt_trend_label": _htc(
+                        "Opt Far Cycle",
+                        help="OPTIONS — far-month (3rd expiry) positioning this cycle.\n\n"
+                             "Almost always blank, and that is the honest answer. Far-month "
+                             "stock options barely trade: the median far chain trades ZERO "
+                             "strikes and ZERO contracts, 82% of stock-side-days have no "
+                             "far volume at all, and on a typical session only about 2 of "
+                             "200+ stocks clear 100 far contracts. This column renders on "
+                             "roughly 2% of rows — the handful of names where someone is "
+                             "genuinely positioning 2-3 months out.\n\n"
+                             "Counts only, no Bull/Bear tint. The near and next columns rank "
+                             "each stock against its peers, which needs a real cross-section; "
+                             "with only a few far chains trading on any day there is nobody "
+                             "to rank against, so no directional verdict is claimed.\n\n"
+                             "Same reading otherwise: Buy / Wrt / Cov / Exit with the number "
+                             "of sessions each held, and '/Nd' sessions counted."),
+                    "far_trend_label": _htc(
+                        "Far Cycle",
+                        help="FUTURES — Far-month OI change for this expiry cycle.\n\n"
+                             "OI ONLY — no direction. The far month trades a median of 33 "
+                             "contracts a day (vs 4,192 near-month), so its closing price is "
+                             "stale and cannot support a Long/Short read.\n\n"
+                             "Shown only where the contract actually traded (median ≥100 "
+                             "contracts/day); otherwise '—'. That blanks most rows most "
+                             "days, which is the honest answer — roughly three-quarters of "
+                             "far-month rows never clear that bar, and a brand-new far "
+                             "contract is pure fill-up for most of its first cycle."),
                     # ── Options OI-Premium Matrix (Near / Next) ─────────────────
                     # Solves the core PCR ambiguity: PCR tells you the RATIO of put/call OI
                     # but NOT whether that OI was built by BUYERS or WRITERS.
@@ -1385,7 +1521,9 @@ def _sector_card(row: pd.Series, selected_date: date, min_turnover: float,
 
 # ── Phase Card (Rotation Clock) ───────────────────────────────────────────────
 
-def _phase_card(row: pd.Series, color: str) -> None:
+def _phase_card(row: pd.Series, color: str, selected_date: date | None = None,
+                min_turnover: float | None = None, key: str = "",
+                window: int = 10) -> None:
     sector  = row["sector"]
     price   = row["cum_price_ret_pct"]
     dv_cr   = row["deliv_value_cr"]
@@ -1411,6 +1549,92 @@ def _phase_card(row: pd.Series, color: str) -> None:
         f"</div></div>",
         unsafe_allow_html=True,
     )
+
+    if selected_date is None:
+        return
+    # Stock drill-down. Ranked by delivery-vs-own-normal, which is the ONLY
+    # within-sector stock metric that measured positive (IC +0.032, t +9.56,
+    # monotonic quintiles, stable in all 3 eras). Momentum, delivery-value share
+    # and "who drove the move" all measured NEGATIVE at t -3.5..-4.9, so the
+    # obvious "biggest participant" ranking would be upside down — the attribution
+    # column is shown but explicitly labelled as not a buy order.
+    with st.expander(f"🔍 {sector} — which stocks (same {window}-day window as the clock)",
+                     expanded=False):
+        try:
+            # window MUST match the Clock's Analysis Period. Hardcoding it meant a
+            # 3-month clock opened 14-day stock data; dacc moves 4.34/5.20/5.44/5.26
+            # across the 5/10/22/65-day windows, i.e. a different top name.
+            det = cached_clock_stock_detail(sector, selected_date,
+                                            float(min_turnover or 1.0),
+                                            lookback_days=int(window))
+        except Exception as exc:                                  # noqa: BLE001
+            st.caption(f"Stock detail unavailable: {exc}")
+            return
+        if det is None or det.empty:
+            st.caption("No liquid stocks in this sector for the current filter.")
+            return
+
+        show = det.head(12).copy()
+        _wk = max(1, int(round(window / 5)))
+        show = show.rename(columns={
+            "symbol": "Stock", "ltp": "LTP", "chg_1d_pct": "1D %",
+            "ret_win_pct": f"{window}D %", "rel_ret_pct": "vs sector",
+            "dacc": "Deliv x", "deliv_value_cr": "Deliv Cr", "read": "Read",
+        })
+        cols = ["Stock", "LTP", "1D %", f"{window}D %", "vs sector",
+                "Deliv x", "Deliv Cr", "Read"]
+        cols = [c for c in cols if c in show.columns]
+        # Explicit column_config: without it the last columns get clipped and render
+        # blank (that is what happened to "Share of sector delivery %"). Share of
+        # sector delivery is dropped — "Deliv Cr" says the same thing more legibly.
+        st.dataframe(
+            show[cols], hide_index=True, use_container_width=True,
+            column_config={
+                "Stock": st.column_config.TextColumn(width="small"),
+                "LTP": st.column_config.NumberColumn(
+                    "LTP ₹", format="%.2f", width="small",
+                    help="Last traded (close) price on the selected date."),
+                "1D %": st.column_config.NumberColumn(
+                    "1D %", format="%+.2f", width="small",
+                    help="Close-to-close move vs the previous session."),
+                f"{window}D %": st.column_config.NumberColumn(
+                    f"{_wk}W %", format="%+.2f", width="small",
+                    help=f"Actual return over the clock's {window}-day window "
+                         f"(close now vs close {window} days ago). NOT an average "
+                         f"of daily moves."),
+                "vs sector": st.column_config.NumberColumn(
+                    "vs sector", format="%+.2f", width="small",
+                    help="This stock's window return minus the sector's median "
+                         "stock. Positive = leading its own sector."),
+                "Deliv x": st.column_config.NumberColumn(
+                    "Deliv ×", format="%.2f", width="small",
+                    help="Delivery %% over the window divided by this stock's OWN "
+                         "100-day normal. Above 1 = heavier real buying than usual. "
+                         "This is the column the list is sorted by, and the only "
+                         "within-sector metric that measured predictive."),
+                "Deliv Cr": st.column_config.NumberColumn(
+                    "Deliv ₹Cr", format="%.0f", width="small",
+                    help="Delivered value over the window — the size behind the ratio. "
+                         "A big ratio on a tiny base is flagged in Read."),
+                "Read": st.column_config.TextColumn(width="large"),
+            })
+
+        drivers = det.nlargest(3, "contrib_pct")["symbol"].tolist() if "contrib_pct" in det else []
+        st.caption(
+            "**Sorted by delivery vs the stock's own 100-day normal** - measured over "
+            "1.19M stock-days (2018-2026) that is the one within-sector metric that "
+            "works: IC +0.032, t +9.6, quintiles monotonic (-0.25 to +0.25 %/10d), "
+            "stable across all three eras, and it survives controlling for the stock's "
+            "own momentum.\n\n"
+            + (f"**Drove the sector move:** {', '.join(drivers)} - shown for attribution "
+               f"only. Ranking by who drove it measured **-0.34%/10d (t -4.8)**, i.e. the "
+               f"names that already moved tend to give it back. Same for momentum "
+               f"(t -4.8) and delivery-value share (t -4.8).\n\n" if drivers else "")
+            + "⚠️ Standalone this does not pay: top-3 by this metric nets **-4.9%/yr** "
+              "after a 0.5% round trip. It is a **selection rule for a sector you have "
+              "already decided to buy** - where you must hold something anyway and the "
+              "incremental cost is zero - not a signal in its own right."
+        )
 
 
 # ── Cross-Period Comparison ───────────────────────────────────────────────────
@@ -1622,6 +1846,8 @@ def _render_custom_range(all_dates: list, min_turnover: float) -> None:
         )
 
         for _, row in grp.iterrows():
+            # Custom Range has neither selected_date nor window in scope, and already
+            # renders its own '📋 Stocks in ...' expander below — no drill-down here.
             _phase_card(row, color)
 
             with st.expander(f"📋 Stocks in {row['sector']} — {from_snap.strftime('%d %b')} to {to_snap.strftime('%d %b %Y')}", expanded=False):
@@ -2003,13 +2229,28 @@ Ideal entry: sector moving from Improving to Leading (rising delivery + price cr
     k5.metric("⚠️ Weakening", pc.get("Weakening", 0), help="Delivery falling + price beating Nifty50 — distributing into rally")
     k6.metric("📤 Lagging",   pc.get("Lagging",   0), help="Delivery falling + price below Nifty50 — institutional exit")
 
-    # Bubble chart
-    st.plotly_chart(
-        _rotation_clock_chart(df, sel, nifty_return=nifty_ret,
-                              center=(df["sector_median_ret"].iloc[0] if "sector_median_ret" in df.columns else None)),
-        use_container_width=True,
-        key=f"rot_clock_chart_{window}",
-    )
+    # Bubble chart — collapsed by default. The quadrant counts above and the
+    # sector cards below carry the same information in less space; the chart is
+    # for when you want to see WHERE in a quadrant a sector sits (a bubble just
+    # inside "Leading" is a different call from one deep in it). Plotly is also
+    # the heaviest thing on the tab, so not rendering it until asked keeps the
+    # page responsive when switching Analysis Period.
+    _n_plot = len(df)
+    with st.expander(f"📈 Rotation Clock chart — {sel} · {_n_plot} sectors "
+                     f"(click to show)", expanded=False):
+        st.plotly_chart(
+            _rotation_clock_chart(df, sel, nifty_return=nifty_ret,
+                                  center=(df["sector_median_ret"].iloc[0]
+                                          if "sector_median_ret" in df.columns else None)),
+            use_container_width=True,
+            key=f"rot_clock_chart_{window}",
+        )
+        st.caption(
+            "Vertical dashed line = the TYPICAL sector (cross-sectional median), which is "
+            "the quadrant centre — not Nifty50. Nifty is the thin grey reference only. "
+            "Bubble size = delivery value ₹Cr. A sector's DISTANCE from the centre matters: "
+            "a name just over the line is a marginal call, deep in a quadrant is a clear one."
+        )
 
     # Sector reference legend — all sectors in a compact color-coded grid
     _render_clock_legend(df)
@@ -2041,7 +2282,7 @@ Ideal entry: sector moving from Improving to Leading (rising delivery + price cr
                     unsafe_allow_html=True,
                 )
                 for _, row in leading.iterrows():
-                    _phase_card(row, "#00c853")
+                    _phase_card(row, "#00c853", selected_date, min_turnover, window=window)
             # WATCH — Improving (contrarian inflow) had NO forward edge on its own in
             # the walk-forward (~-0.1%/mo). Accumulation without price confirmation —
             # a watchlist, not a buy. Wait for it to migrate into Leading.
@@ -2055,7 +2296,7 @@ Ideal entry: sector moving from Improving to Leading (rising delivery + price cr
                     unsafe_allow_html=True,
                 )
                 for _, row in improving.iterrows():
-                    _phase_card(row, "#40c4ff")
+                    _phase_card(row, "#40c4ff", selected_date, min_turnover, window=window)
 
     with col_out:
         st.markdown("#### 🔴 MONEY FLOWING OUT")
@@ -2069,7 +2310,7 @@ Ideal entry: sector moving from Improving to Leading (rising delivery + price cr
                     unsafe_allow_html=True,
                 )
                 for _, row in weakening.iterrows():
-                    _phase_card(row, "#ff9100")
+                    _phase_card(row, "#ff9100", selected_date, min_turnover, window=window)
             if not lagging.empty:
                 st.markdown(
                     f"<div style='font-size:12px;color:#d50000;font-weight:600;margin:10px 0 4px 0'>"
@@ -2077,12 +2318,12 @@ Ideal entry: sector moving from Improving to Leading (rising delivery + price cr
                     unsafe_allow_html=True,
                 )
                 for _, row in lagging.iterrows():
-                    _phase_card(row, "#d50000")
+                    _phase_card(row, "#d50000", selected_date, min_turnover, window=window)
 
     if not neutral.empty:
         with st.expander(f"⚖️ Neutral Sectors — {len(neutral)} with no clear bias", expanded=False):
             for _, row in neutral.iterrows():
-                _phase_card(row, "#888888")
+                _phase_card(row, "#888888", selected_date, min_turnover, window=window)
 
     # Cross-period comparison
     with st.expander("📊 Cross-Period Comparison — All 4 Timeframes at Once", expanded=False):
@@ -2203,16 +2444,29 @@ def _render_smart_money(selected_date: date, min_turnover: float) -> None:
         "sectors by return on its own. (Bull-only sample — delivery data is 2024-12 onward.)",
         icon="🧭")
     st.warning(
-        "**Picking the STOCK inside a sector? Read this (8yr, 1.28M stock-days — "
-        "scripts/audit_stock_accumulation_8yr.py).** Over a **1-2 week** hold, individual stocks "
-        "**mean-revert**: high delivery-accumulation (rank-IC **t−3.5**) AND high price momentum "
-        "(**t−4.5**) are both mildly **anti-predictive** at the single-stock level — the "
-        "*least*-accumulated decile beat the most-accumulated (+0.66% vs +0.40%/10d). The validated "
-        "edge is the **SECTOR** call (momentum, IC t+7), NOT the individual stock ranking. **So: use "
-        "this tab to pick the right sector + see institutional flow — but don't assume the "
-        "top-ranked / most-accumulated STOCK is the best swing entry. Within a strong sector, the "
-        "pulled-back / laggard name tends to beat the extended leader over 1-2 weeks** (short-term "
-        "reversal). The stock lists here are context, not a ranked buy-order.",
+        "**Picking the STOCK inside a sector? (re-measured 2026-08-09 — "
+        "scripts/audit_stock_pick_in_clock.py, 1.19M stock-days 2018-2026, forward 10d "
+        "EXCESS OVER THE STOCK'S OWN SECTOR, Newey-West t.)**\n\n"
+        "**It depends entirely on how you measure delivery.** Against the stock's OWN "
+        "100-day normal, delivery accumulation is the single best stock-level signal here: "
+        "IC **+0.032, t +9.6**, quintiles monotonic (−0.25 → +0.25 %/10d), stable in all "
+        "three eras, and it survives controlling for the stock's own momentum. Measured as "
+        "a *sector-relative percentile* it looks anti-predictive — that framing, not "
+        "accumulation itself, was the problem.\n\n"
+        "**What is genuinely anti-predictive:** price momentum vs the sector (t −4.8), "
+        "share of the sector's delivery value (t −4.8), turnover surge (t −3.5) and "
+        "\"who drove the sector move\" (t −4.9). So the biggest / most-active name is a "
+        "**bad** default pick.\n\n"
+        "**Correction to earlier copy:** this banner used to say the laggard beats the "
+        "extended leader inside a strong sector. Measured, the opposite holds — in a "
+        "top-30%-momentum sector the leader returns **+0.377%** vs the laggard's "
+        "**+0.128%** (laggard−leader −0.25pp, t −2.70). The decile curve is **U-shaped**: "
+        "both extremes beat the middle. Outside strong sectors the laggard edges ahead, "
+        "but not significantly (t +1.05).\n\n"
+        "**Cost decides how to use it:** top-3 by delivery-vs-own-normal nets **−4.9%/yr** "
+        "standalone (0.5% round trip vs +0.31%/10d gross). It pays only as a **selection "
+        "rule inside a sector you have already decided to buy**, where you must hold "
+        "something anyway. The sector call remains the validated edge.",
         icon="⚠️")
 
     with st.expander("📖 How to read this page", expanded=False):
@@ -3721,24 +3975,86 @@ _TILT_HELP = {
 
 
 def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
-    """Validated 1–2 week cross-sectional momentum tilt (regime-gated)."""
-    st.markdown("#### 🎯 1–2 Week Forward Tilt &nbsp; <sub>β</sub>", unsafe_allow_html=True)
+    """Cross-sectional momentum sector tilt, regime-gated, at a user-selected
+    forward horizon (1-2 .. 11-12 weeks). The RS lookback scales with the horizon;
+    1-2wk is the originally validated build and is bit-identical to it."""
+    st.markdown("#### 🎯 Forward Sector Tilt &nbsp; <sub>β</sub>", unsafe_allow_html=True)
     st.caption(
-        "The **only** sector call that survived deep validation: cross-sectional "
-        "**momentum** (relative strength vs Nifty) predicts 1–2wk forward returns — "
-        "daily-IC t≈9, Monte-Carlo p<0.002 vs 600 random portfolios, cost- and "
-        "sub-period-robust. Measured accuracy: an OVERWEIGHT sector beats the median "
-        "sector **~55%** of the time on its own; a **causal sector-persistence gate** "
-        "(drops historically mean-reverting sectors like Realty / Banking / Consumer "
-        "Durables) lifts that to **~60%** and the OW-vs-UW basket wins ~64% of 5-day "
-        "rebalances. A statistical lean (~1–2% relative / 2wk), not a per-call oracle."
+        "Cross-sectional **momentum** - relative strength vs Nifty - is the sector call "
+        "that has held up best here. Pick a forward horizon below; the ranking window "
+        "scales with it, and each horizon shows its **own** measured record.\n\n"
+        "A **causal sector-persistence gate** drops sectors that historically fade right "
+        "after looking strong (Realty / Banking / Consumer Durables), which lifts "
+        "overweight accuracy from ~55% to ~60% of the time vs the median sector.\n\n"
+        "⚠️ Two corrections to earlier copy on this tab. (1) The old headline "
+        "'daily-IC t≈9' was a **naive** t-statistic - forward windows overlap, so "
+        "consecutive days are not independent observations. Overlap-corrected "
+        "(Newey-West) the same reproduction gives **t≈1.6** at 1-2wk; the long/short IC "
+        "is the sturdier read at **t 2.15**. (2) The 1-2wk horizon has been **negative "
+        "in 2025-26**. Treat this as a statistical lean, never a per-call oracle."
     )
 
+    # ── horizon selector ──────────────────────────────────────────────────────
+    # The RS lookbacks scale with the chosen window (long = h, short = h/2), so
+    # 1-2 wk stays bit-identical to the validated build. Each horizon carries its
+    # OWN measured evidence — the 1-2wk validation is NOT reused for the others.
+    from src.analytics.sector_forward_tilt import TILT_HORIZONS, _HORIZON_EVIDENCE
+    _labels = [lbl for lbl, _ in TILT_HORIZONS]
+    _pick = st.radio(
+        "Forward horizon", _labels, index=0, horizontal=True,
+        key="tilt_horizon",
+        help="How far ahead the tilt is aimed. The momentum lookback scales with it "
+             "(a 12-week call is ranked on 12-week relative strength, not 2-week). "
+             "1-2 wk is the originally validated build.",
+    )
+    _hd = dict(TILT_HORIZONS)[_pick]
+    _ev = _HORIZON_EVIDENCE.get(_hd, {})
+
+    # Every factor label below must follow the radio. The VALUES were already
+    # horizon-scaled; leaving the labels fixed at "rs2w / 2-week / 10-day" meant a
+    # 12-week call was displayed under 2-week captions — numbers moving while the
+    # words stayed put, which is worse than not offering the horizon at all.
+    _wkL = max(1, int(round(_hd / 5)))          # long RS lookback, in weeks
+    _wkS = max(1, int(round((_hd // 2) / 5)))   # short RS lookback, in weeks
+    _rsL_lbl = f"rs{_wkL}w"
+    _rsS_lbl = f"rs{_wkS}w"
+    _edge_lbl = f"~{_wkL}-week"
+
     try:
-        df, regime = cached_forward_tilt(selected_date, min_turnover)
+        df, regime = cached_forward_tilt(selected_date, min_turnover, horizon_days=_hd)
     except Exception as exc:                                  # noqa: BLE001
         st.error(f"Forward tilt unavailable: {exc}")
         return
+
+    if _ev:
+        _era = _ev.get("era", {})
+        _recent = _era.get("2025-26")
+        _ok = bool(_ev.get("validated"))
+        _col = "#16a34a" if (_ok and (_recent or 0) > 0) else "#d97706"
+        _tag = ("overlap-corrected long/short IC clears |t|≥2"
+                if _ok else "does NOT clear |t|≥2 once overlap is corrected")
+        st.markdown(
+            f"<div style='border:1px solid {_col}55;border-left:4px solid {_col};"
+            f"border-radius:6px;padding:9px 13px;margin:2px 0 10px 0;background:{_col}0d;"
+            f"font-size:0.9rem;color:#c9ced6'>"
+            f"<b style='color:{_col}'>{_pick} evidence</b> — long-only top-4, excess vs the "
+            f"equal-weight sector basket, non-overlapping rebalance, net of 25bps/side: "
+            f"<b>{_ev['net_yr']:+.1f}%/yr</b> (t {_ev['net_t']:.2f}), rebalances "
+            f"{_ev['reb_yr']:.1f}×/yr. Long/short IC t (Newey-West) "
+            f"<b>{_ev['ls_ic_t']:+.2f}</b> — {_tag}.<br>"
+            f"By era: 2018-21 <b>{_era.get('2018-21', float('nan')):+.1f}%</b> · "
+            f"2022-24 <b>{_era.get('2022-24', float('nan')):+.1f}%</b> · "
+            f"2025-26 <b>{_recent:+.1f}%</b>"
+            + ("  ⚠️ <b>negative in the current era</b> — the short horizons have stopped "
+               "paying; 7-12 wk is where the surviving edge is."
+               if (_recent is not None and _recent < 0) else "")
+            + "</div>", unsafe_allow_html=True)
+        if _hd != 10:
+            st.caption(
+                "⚠️ The headline validation quoted below (daily-IC t≈9, Monte-Carlo "
+                "p<0.002) is a **1-2 week** result and does **not** transfer to this "
+                "horizon. Read the box above — it is this horizon's own measured record."
+            )
     if df is None or df.empty:
         st.info("Not enough history / liquid sectors on this date to compute the tilt.")
         return
@@ -3783,20 +4099,28 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
         mtf = {"ok": False}
     if mtf.get("ok"):
         _SICON = {"UP": "🟢▲", "DOWN": "🔴▼", "FLAT": "⚪●"}
-        _ENTRY = {"BEST": ("#16a34a", "BEST ENTRY WINDOW"), "EXTENDED": ("#d97706", "EXTENDED — DON'T CHASE"),
-                  "MIXED": ("#d97706", "MIXED / TRANSITION"), "WEAK": ("#dc2626", "WEAK — RISKY"),
-                  "STANDDOWN": ("#dc2626", "BROAD DOWNTREND — WAIT")}
+        # Descriptive labels only. A 13.6yr re-audit (scripts/audit_mtf_entry_claims.py)
+        # found NO alignment state carries forward edge that survives base-rate,
+        # overlap and multiplicity correction, so none of these are colour-coded as
+        # a trade instruction any more — neutral slate, not green/red.
+        _ENTRY = {"ALIGNED_UP": ("#64748b", "ALL 4 UP — MATURE TREND"),
+                  "MOSTLY_UP": ("#64748b", "3 OF 4 UP"),
+                  "MIXED": ("#64748b", "MIXED / TRANSITION"),
+                  "MOSTLY_DOWN": ("#64748b", "MOSTLY DOWN"),
+                  "ALL_DOWN": ("#64748b", "ALL 4 DOWN — BOTTOM-ISH, NOT A SHORT")}
         ec, elabel = _ENTRY.get(mtf["entry"], ("#8a8f98", mtf["entry"]))
         cells = "".join(
             f"<span style='display:inline-block;min-width:118px'>"
             f"<b>{k.upper()}</b> <span style='color:#8a8f98'>({v['horizon']})</span> "
             f"{_SICON.get(v['state'],'')}{' 🔄' if v['flipped'] else ''}</span>"
             for k, v in mtf["bands"].items())
-        _mtf_tip = ("Market trend at 4 horizons (Nifty vs its EMA + slope). 8yr backtest: 3/4-up = "
-                    "the best entry (leaders building, not exhausted); 4/4-up = EXTENDED, often near "
-                    "a top (don't chase); all-down = wait/bottom-fish, don't short (bounces). "
-                    "Longer-timeframe turns can't be forecast — this is a concurrent read. 🔄 = a "
-                    "band just flipped.").replace('"', "'")
+        _mtf_tip = ("Market trend at 4 horizons (Nifty vs its EMA + slope). This is a "
+                    "CONCURRENT description of the trend, not a forecast. 13.6yr re-audit: no "
+                    "alignment state has forward edge that survives base-rate, overlap and "
+                    "multiplicity correction. All-4-down is the best of the five over ~3 months "
+                    "(+2.2pp vs drift) and is a bottom-ish read, never a short. 4/4-up is the "
+                    "most common state (35% of sessions). 'Turn' = a band just flipped."
+                    ).replace('"', "'")
         st.markdown(
             f"<div title=\"{_mtf_tip}\" style='border:1px solid {ec}55;border-radius:8px;"
             f"padding:10px 14px;margin:2px 0 10px 0;background:{ec}0d'>"
@@ -3804,12 +4128,23 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
             f"<div style='margin-top:5px'>{cells}</div>"
             f"<div style='margin-top:5px;color:#c9ced6;font-size:0.9rem'>{mtf['posture']}</div></div>",
             unsafe_allow_html=True)
+        _ev = mtf.get("evidence") or {}
+        _det = mtf.get("detail") or ""
         st.caption(
-            "Accuracy (8yr, matched horizon): **swing / short** trend has a *mild* forward edge "
-            "(~+1-2pp vs drift) — use them for entry timing. **Long / very-long** bands DESCRIBE "
-            "the current trend but are **not predictive** — the market mean-reverts, so a long-term "
-            "🔴▼ DOWN is a *bottom* signal (all-4-down → ~76% up over ~3mo), **not** a reason to "
-            "short. Up-calls barely beat the bull drift; the real value is the alignment read above.")
+            "**Re-audited on 13.6 years (3,165 sessions) — this panel is descriptive, not a timer.** "
+            "Nifty rises in 59.9% of 10-day and 67.5% of 65-day windows *unconditionally*, so every "
+            "state is scored as excess over that drift."
+            + (f"  Current state ({mtf['n_up']}/4 up): **{_ev.get('ex10', float('nan')):+.2f}pp** vs "
+               f"drift at 10d (t {_ev.get('t10', float('nan')):+.2f}), "
+               f"**{_ev.get('ex65', float('nan')):+.2f}pp** at 65d "
+               f"(t {_ev.get('t65', float('nan')):+.2f}); seen {_ev.get('freq', float('nan')):.0f}% of sessions."
+               if _ev else "")
+            + (f"  This reading is **{_det}**." if _det else "")
+            + "  The earlier '3/4-up = best entry, t+3.4' claim came from a **naive** t-statistic: "
+              "forward windows overlap, and once corrected it falls to t≈1.2 and fails a "
+              "multiplicity test against the other four states (p=0.59). In a non-overlapping "
+              "sample the ordering actually reverses. Use the alignment as context for sizing, "
+              "not as a buy trigger.")
 
     # ── the WHY (evidence banner) + medium-term / divergence line ────────────────
     if inverts:
@@ -3892,12 +4227,34 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
                        f"but tend to recover later — don't chase the break, wait for a clean hold.")
 
     c1, c2, c3 = st.columns(3)
-    c1.metric("Market backdrop", state,
-              help="The overall market mood, which sets how big to trade the buy list today. "
-                   "Uptrend = full size. Chop = small, top names only. Downtrend / sharp fall = "
-                   "reduced size, top names only — the buy list still holds up in bears (tested "
-                   "2018-2026), but the signal is less reliable and a long-only book still falls "
-                   "with the market, so don't deploy full.")
+    # Plain-English mood. The engine states are EMA20/EMA50 reads; the raw names
+    # ("TRENDING_UP") were being read as a call on the whole market, which they are
+    # not — they only set how big to trade the buy list.
+    # Say what the market is DOING, in words that need no finance vocabulary.
+    # ("Risk-on" was replaced — it is macro cross-asset jargon and does not describe
+    # what this reads, which is simply Nifty vs its 20/50-day averages.)
+    _MOOD = {
+        "TRENDING_UP":   ("Uptrend",     "🟢", "Nifty is above its 20- and 50-day averages and rising."),
+        "HIGH_VOL":      ("Uptrend, wild", "🟡", "Still trending up, but daily swings are unusually large."),
+        "CHOPPY":        ("Sideways",    "🟡", "No clear direction — the averages are tangled."),
+        "TRENDING_DOWN": ("Downtrend",   "🟠", "Nifty is below its 20- and 50-day averages and falling."),
+        "REVERSAL":      ("Sharp drop",  "🔴", "A hard fall inside what had been an up-run."),
+    }
+    _mood, _icon, _mood_what = _MOOD.get(state, (state.replace("_", " ").title(), "⚪", ""))
+    _sz = int(round(float(regime.get("size_hint", 0.5)) * 100))
+    c1.metric("Market mood", f"{_icon} {_mood}",
+              delta=f"buy list at {_sz}% size", delta_color="off",
+              help=f"{_mood_what} This is a description of the last few weeks, NOT a "
+                   f"forecast of where the index goes next.\n\n"
+                   f"What it does: it sets the STARTING size for today's buy list. That "
+                   f"start is then trimmed by how clean the trend is (a grinding, choppy "
+                   f"uptrend gets x0.8) and by a few other checks, which is why the final "
+                   f"number shown is {_sz}%, not 100%.\n\n"
+                   f"Why trust the dial: measured 2018-2026, the buy list beat the sell "
+                   f"list by +0.71% over 10 days while the trend was up (t 2.7), and by "
+                   f"+0.08% (t 0.4 - i.e. nothing) when it was not.\n\n"
+                   f"Engine state: {state}.")
+
     n_rev = int(df["revert"].sum()) if "revert" in df.columns else 0
     c2.metric("Reverting sectors", n_rev,
               help="How many top sectors have a habit of fading right after they look strong. We "
@@ -3928,17 +4285,18 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
             if r["thin"]:
                 flag += " · ⚠ too few stocks (noisy)"
             st.markdown(
-                f"**{r['sector']}** &nbsp; <span title='Strength vs Nifty over the last 2 weeks — "
-                f"higher = leading the market'>rs₂w {r['rs_2w']:+.1f}%</span> · "
+                f"**{r['sector']}** &nbsp; <span title='Strength vs Nifty over the last "
+                f"{_wkL} weeks — higher = leading the market'>{_rsL_lbl} {r['rs_2w']:+.1f}%</span> · "
                 f"<span title='Recent delivery-buying vs its own normal — above 1 = more real "
                 f"buying than usual'>dv5d {r['dv5d']:.2f}</span> · "
-                f"<span title='Rough expected move vs the average sector over ~10 days. A lean, "
+                f"<span title='Rough expected move vs the average sector over {_edge_lbl}. A lean, "
                 f"wide error bars — 0 when the backdrop says stand aside'>est {int(r['est_rel_bps']):+d}bps</span>"
                 f"{flag}", unsafe_allow_html=True)
 
-    st.caption("Each row: **rs₂w** = 2-week strength vs the market (higher = leading) · **dv5d** = "
-               "real buying vs its own normal (>1 = heavier) · **est** = rough 10-day edge vs the "
-               "average sector. Hover any label for the plain meaning.")
+    st.caption(f"Each row: **{_rsL_lbl}** = {_wkL}-week strength vs the market (higher = leading) · "
+               f"**dv5d** = real buying vs its own normal (>1 = heavier) · **est** = rough "
+               f"{_edge_lbl} edge vs the average sector. All three follow the horizon you "
+               f"picked above. Hover any label for the plain meaning.")
     col_ow, col_uw = st.columns(2)
     with col_ow:
         _bucket("OVERWEIGHT")
@@ -3981,11 +4339,13 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
                 help="Where this sector sits vs all others today, 0 (weakest) to 100 "
                      "(strongest). 75+ is the buy zone, 25 or below is the avoid zone."),
             "rs_2w": st.column_config.NumberColumn(
-                "2wk vs mkt %", format="%.1f",
-                help="How much it beat (+) or lagged (−) the Nifty over the last 2 weeks. "
-                     "This is the main strength signal."),
+                f"{_wkL}wk vs mkt %", format="%.1f",
+                help=f"How much it beat (+) or lagged (−) the Nifty over the last {_wkL} weeks. "
+                     f"This is the main strength signal, and its window follows the forward "
+                     f"horizon selected at the top of the tab."),
             "rs_1w": st.column_config.NumberColumn(
-                "1wk vs mkt %", format="%.1f", help="Same as 2wk, but over the last 1 week."),
+                f"{_wkS}wk vs mkt %", format="%.1f",
+                help=f"Same as the {_wkL}-week column, but over the last {_wkS} week(s)."),
             "dv5d": st.column_config.NumberColumn(
                 "Buying vs normal ×", format="%.2f",
                 help="Recent real (delivery) buying compared to its own usual level. "
@@ -4044,14 +4404,214 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
     )
 
 
+_MONTHS_ABBR = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
+
+def _season_cell(mean: float, tier: str, cross, clamp: float = 5.0) -> str:
+    """One heatmap cell. Colour = effect, opacity = confidence, ring = significance."""
+    v = max(-1.0, min(1.0, (mean or 0.0) / clamp))
+    mult = {"STRONG": 1.0, "WEAK": 0.90, "NOISE": 0.26}.get(tier, 0.26)
+    alpha = round(0.06 + 0.55 * abs(v) * mult, 3)
+    rgb = "22,163,74" if v >= 0 else "220,38,38"
+    ring = ""
+    if tier == "STRONG":
+        ring = "box-shadow:inset 0 0 0 2px #eab308;"
+    elif tier == "WEAK":
+        ring = "box-shadow:inset 0 0 0 1px rgba(234,179,8,.55);"
+    mark = "<sup style='color:#38bdf8'>✓</sup>" if cross else ""
+    dim = "opacity:.45;" if tier == "NOISE" else "font-weight:600;"
+    return (f"<td style='background:rgba({rgb},{alpha});{ring}text-align:center;"
+            f"padding:5px 3px;font-size:11px;font-variant-numeric:tabular-nums'>"
+            f"<span style='{dim}'>{mean:+.1f}</span>{mark}</td>")
+
+
+def _render_month_seasonality(selected_date: date) -> None:
+    """Month-wise best/worst sectors — descriptive calendar map + causal suggestion."""
+    st.markdown("#### 🗓️ Month-Wise Best / Worst Sectors")
+    st.caption(
+        "How each sector has behaved in each **calendar month**, measured as excess "
+        "return vs the equal-weight sector basket and de-meaned per sector (so this "
+        "shows the *month* effect, not the sector's own drift). Built only from months "
+        "that completed before the selected date."
+    )
+
+    try:
+        grid, meta = cached_sector_month_map(selected_date)
+        sugg = cached_month_suggestion(selected_date, top_k=4)
+        rec_dcm = cached_seasonality_record(selected_date, top_k=3, lens="dcm")
+        rec_nse = cached_seasonality_record(selected_date, top_k=3, lens="nse")
+    except Exception as exc:                                  # noqa: BLE001
+        st.error(f"Seasonality unavailable: {exc}")
+        return
+    if grid is None or grid.empty:
+        st.info("Not enough month history on this date.")
+        return
+
+    # ── the honest headline: the rule's sign depends on the sector definition ──
+    d_ann = rec_dcm.get("net_annual") if "error" not in rec_dcm else None
+    n_ann = rec_nse.get("net_annual") if "error" not in rec_nse else None
+    if d_ann is not None and n_ann is not None and (d_ann > 0) != (n_ann > 0):
+        st.markdown(
+            "<div style='border:1px solid #dc262655;border-left:5px solid #dc2626;"
+            "border-radius:8px;padding:12px 16px;margin:4px 0 12px 0;background:#dc26260d'>"
+            "<div style='font-size:1.05rem;font-weight:700;color:#dc2626'>"
+            "⚠️ DO NOT TRADE THIS TAB STANDALONE</div>"
+            "<div style='margin-top:5px;color:#c9ced6;font-size:.92rem'>"
+            "Walked forward over the <b>same window</b>, this rule returns "
+            f"<b>{d_ann:+.1f}%/yr</b> on these 24 buckets but <b>{n_ann:+.1f}%/yr</b> on the "
+            "22 NSE sector indices. Same rule, same period, <b>opposite sign</b> — so the "
+            "result is a property of the sector <i>definition</i>, not of the market. "
+            "Across the full grid <b>zero</b> cells survive a permutation control, and the "
+            "naive-significant count is <i>lower</i> than pure noise produces. "
+            "Use this as a context//timing overlay on the Forward-Tilt call, never as a "
+            "standalone sector picker.</div></div>",
+            unsafe_allow_html=True)
+
+    # ── suggestion for the month about to start ──
+    if "error" not in sugg:
+        when = f"for **{sugg['target_period']}**" + (" (starts soon)" if sugg["is_next"] else " (current month)")
+        st.markdown(f"##### 📌 {sugg['month']} playbook {when}")
+        c1, c2 = st.columns(2)
+        for col, key, title, arrow in ((c1, "best", "Historically strongest", "▲"),
+                                       (c2, "worst", "Historically weakest", "▼")):
+            with col:
+                rows = []
+                for r in sugg[key]:
+                    tier = r["tier"]
+                    badge = ("🟡 weak" if tier == "WEAK" else
+                             "🟢 strong" if tier == "STRONG" else "⚪ noise")
+                    rows.append({
+                        "Sector": r["sector"], "Avg %": round(r["mean"], 2),
+                        "Hit %": round(r["hit"]), "Yrs": r["n"],
+                        "Evidence": badge,
+                        "2-lens": "✓" if r.get("cross") else "",
+                    })
+                st.markdown(f"**{arrow} {title}**")
+                st.dataframe(pd.DataFrame(rows), hide_index=True,
+                             use_container_width=True)
+        st.caption(
+            f"Evidence tier: 🟢 survives the grid-wide permutation control "
+            f"(|t| ≥ {meta.get('crit_t', float('nan')):.1f}) · 🟡 nominally significant only · "
+            f"⚪ indistinguishable from noise. **2-lens ✓** = the matching NSE sector index "
+            f"shows the same sign over its longer 13.6-yr history — the single most useful "
+            f"column here. This month: {sugg['n_strong']} strong, {sugg['n_weak']} weak, "
+            f"{sugg['n_cross']} two-lens confirmed."
+        )
+
+    # ── what the rule has actually been worth, WITH the control ──
+    # The control is mandatory. Ranking by a sector's mean excess in a month also
+    # picks up that sector's persistent drift, so a pure-persistence rule that
+    # never looks at the calendar reproduces most of the "seasonal" return. Only
+    # the DIFFERENCE between the two rows is a seasonal claim. Windows are matched
+    # (2018+) so the DCM-vs-NSE comparison is lens-vs-lens, not era-vs-era.
+    st.markdown("##### 📉 What this rule has actually returned (walk-forward, net of cost)")
+    SINCE = "2018-01-01"
+    tr = []
+    for lens_lbl, lens_key in (("DCM 24 buckets", "dcm"), ("NSE 22 indices", "nse")):
+        for mode_lbl, mode_key in (("seasonal (by month)", "month"),
+                                   ("month effect only", "demeaned"),
+                                   ("CONTROL — ignores month", "persistence")):
+            try:
+                rec = cached_seasonality_record(selected_date, top_k=3, lens=lens_key,
+                                                mode=mode_key, since=SINCE)
+            except Exception:                                 # noqa: BLE001
+                rec = {"error": "n/a"}
+            if "error" in rec:
+                tr.append({"Sector definition": lens_lbl, "Rule": mode_lbl,
+                           "Months": "—", "Net %/mo": "—", "Net t": "—",
+                           "Hit %": "—", "Net %/yr": "—"})
+                continue
+            tr.append({
+                "Sector definition": lens_lbl, "Rule": mode_lbl,
+                "Months": rec["n_months"],
+                "Net %/mo": round(rec["net_pm"], 2),
+                "Net t": round(rec["net_t"], 2),
+                "Hit %": round(rec["hit"]),
+                "Net %/yr": round(rec["net_annual"], 1),
+            })
+    st.dataframe(pd.DataFrame(tr), hide_index=True, use_container_width=True)
+    st.caption(
+        f"Rule: each month, rank sectors by their mean excess in that calendar month using "
+        f"**only prior data**, hold the top 3, rebalance monthly. 25bps/side on ~80% monthly "
+        f"turnover. **Windows matched from {SINCE[:4]}** so the two lenses are comparable.\n\n"
+        "**Read the CONTROL row first.** It ranks sectors by their overall mean and never "
+        "looks at the calendar. On the 24 buckets it earns almost as much as the seasonal "
+        "rule — so most of that number is sector *persistence*, not seasonality. Only the gap "
+        "between 'seasonal' and 'CONTROL' is a seasonal claim, and it does not clear |t| ≥ 2. "
+        "Note the control **reverses sign** on NSE indices, which have point-in-time "
+        "constituents; `v_sector_master` applies today's sector membership backwards over all "
+        "history, so DCM's persistence is likely a constituent artifact."
+    )
+
+    # ── the full grid ──
+    st.markdown("##### 🔥 Full grid — every sector × month")
+    piv = grid.pivot(index="sector", columns="m", values="mean")
+    tiers = grid.pivot(index="sector", columns="m", values="tier")
+    crosses = grid.pivot(index="sector", columns="m", values="cross")
+    order = piv.max(axis=1).sort_values(ascending=False).index
+
+    html = ["<div style='overflow-x:auto'><table style='border-collapse:collapse;width:100%'>",
+            "<thead><tr><th style='text-align:left;padding:6px 10px;font-size:11px;"
+            "color:#8a8f98;position:sticky;left:0;background:#0e1117'>Sector</th>"]
+    for mo in _MONTHS_ABBR:
+        html.append(f"<th style='padding:6px 3px;font-size:10px;color:#8a8f98'>{mo}</th>")
+    html.append("</tr></thead><tbody>")
+    for s in order:
+        html.append("<tr><th style='text-align:left;padding:5px 10px;font-size:11.5px;"
+                    "font-weight:500;white-space:nowrap;position:sticky;left:0;"
+                    f"background:#0e1117'>{s}</th>")
+        for m in range(1, 13):
+            if m not in piv.columns or pd.isna(piv.loc[s, m]):
+                html.append("<td style='text-align:center;color:#3a3f48;font-size:11px'>·</td>")
+            else:
+                html.append(_season_cell(float(piv.loc[s, m]), str(tiers.loc[s, m]),
+                                         bool(crosses.loc[s, m]) if pd.notna(crosses.loc[s, m]) else False))
+        html.append("</tr>")
+    html.append("</tbody></table></div>")
+    st.markdown("".join(html), unsafe_allow_html=True)
+    st.caption(
+        "Green = outperformed that month, red = underperformed. **Faint cells fail the "
+        "significance control — which is almost all of them, by design.** Yellow ring = "
+        "nominally significant. <sup style='color:#38bdf8'>✓</sup> = confirmed by the "
+        "independent NSE index lens.",
+        unsafe_allow_html=True)
+
+    with st.expander("⚠️ What would break this — read before acting"):
+        st.markdown(
+            f"""
+- **Sample size.** {meta.get('months', 0)} months = about **{meta.get('months', 0)//12} observations
+  per sector-month cell**. Monthly returns are fat-tailed; 8 points cannot establish a
+  seasonal effect. Only waiting fixes this.
+- **Multiple testing.** {meta.get('n_cells', 0)} cells are tested at once. At p<0.05 you
+  *expect* ~{int(0.05*meta.get('n_cells',0))} false positives. The permutation control
+  (|t| ≥ {meta.get('crit_t', float('nan')):.1f}) is what a cell must beat to mean anything;
+  currently **{meta.get('n_strong', 0)}** do.
+- **Lens instability.** The same rule flips sign between the 24-bucket and 22-index
+  definitions over the identical window. That alone disqualifies it as a standalone signal.
+- **Dividends.** These are price series. Indian ex-dividend dates cluster **Jun–Aug**, and
+  high-yield sectors carry ~2% of mechanical drag in an ex-date-heavy month — the same order
+  as the effects shown. Treat Jun–Aug readings as suspect.
+- **Constituent look-ahead.** `v_sector_master` holds *current* tickers, applied backwards
+  over all history, so a sector's past is measured on the stocks that are in it today.
+- **Costs.** ~80% monthly turnover. Gross edges of ~1%/month are largely eaten by the
+  0.4%/month round trip.
+- **The one durable pattern** found in the 13.6-yr study is **financials over defensives in
+  October** (+5.13%/mo, t=3.84, 11 of 13 years) and its **July mirror** — visible above as
+  Banking/Oct and the Jul column.
+"""
+        )
+
+
 def render(selected_date: date, min_turnover: float, all_dates: list | None = None) -> None:
     st.subheader("🔄 Sector Rotation — Smart Money Tracker")
 
-    tab_smart, tab_tilt, tab_clock, tab_rs = st.tabs([
+    tab_smart, tab_tilt, tab_clock, tab_rs, tab_season = st.tabs([
         "🎯 Smart Money (Daily Signal)",
-        "🧭 1–2 Wk Forward Tilt",
+        "🧭 Forward Tilt",
         "📅 Rotation Clock",
         "📈 vs Nifty50",
+        "🗓️ Month-Wise Best/Worst",
     ])
 
     with tab_smart:
@@ -4065,3 +4625,6 @@ def render(selected_date: date, min_turnover: float, all_dates: list | None = No
 
     with tab_rs:
         _render_relative_strength(selected_date, min_turnover, all_dates=all_dates)
+
+    with tab_season:
+        _render_month_seasonality(selected_date)
