@@ -65,15 +65,23 @@ def aggregate_by_sector(
         total_deliv_value = grp["deliv_value_lacs"].sum()
         stock_count = len(grp)
 
-        valid_price = grp.dropna(subset=["price_change_pct"])
+        valid_price = grp.dropna(subset=["price_change_pct"]).copy()
         valid_deliv = grp.dropna(subset=["deliv_per"])
 
-        simple_price = valid_price["price_change_pct"].mean()
+        # Clip before averaging. On a listing day bhavcopy `prev_close` is the IPO
+        # ISSUE PRICE, so day one books the listing gain as a return (WINSOL
+        # 75 -> 383 = +411%); unadjusted splits/bonuses produce the mirror image.
+        # Either one drags a whole sector's daily number on its own. Same-day
+        # turnover weighting is kept deliberately here — this is a one-day "what
+        # actually traded today" snapshot, not a compounding series.
+        valid_price["_r"] = valid_price["price_change_pct"].clip(-25, 25)
+
+        simple_price = valid_price["_r"].mean()
         simple_deliv = valid_deliv["deliv_per"].mean()
 
         if weighting == "turnover" and total_turnover > 0:
             w = valid_price["turnover_lacs"] / valid_price["turnover_lacs"].sum()
-            wtd_price = (valid_price["price_change_pct"] * w).sum() if not valid_price.empty else None
+            wtd_price = (valid_price["_r"] * w).sum() if not valid_price.empty else None
             w2 = valid_deliv["turnover_lacs"] / valid_deliv["turnover_lacs"].sum()
             wtd_deliv = (valid_deliv["deliv_per"] * w2).sum() if not valid_deliv.empty else None
         else:
@@ -177,27 +185,48 @@ def get_sector_drilldown(trade_date: date, sector_name: str, top_n: int = 10) ->
 
 
 def get_sector_history(sector_name: str, days: int = 60) -> pd.DataFrame:
+    """
+    Daily delivery % / price change / turnover for one sector.
+
+    The daily price change uses a LAGGED turnover weight and drops each symbol's
+    first session, for two reasons (same pattern as sector_forward_tilt):
+      - a stock's SAME-DAY turnover explodes on the day it jumps, so weighting by
+        it correlates the weight with the return being weighted (+0.717%/day of
+        fake drift, measured 2026-07-31);
+      - on a listing day bhavcopy `prev_close` is the IPO ISSUE PRICE, so day one
+        books the listing gain as a return (WINSOL 75 -> 383 = +411%). LAG() is
+        NULL on a symbol's first session, so `w_lag IS NOT NULL` removes those.
+    Returns are winsorized at +/-25% for unadjusted splits/bonuses.
+    """
     min_turnover_lacs = get_min_turnover_filter()
     sql = """
+        WITH base AS (
+            SELECT b.trade_date, b.symbol, b.turnover_lacs, b.deliv_per,
+                   CASE WHEN b.prev_close > 0
+                        THEN GREATEST(LEAST(
+                                 (b.close_price - b.prev_close) / b.prev_close * 100,
+                                 25), -25)
+                   END AS r,
+                   LAG(b.turnover_lacs) OVER (PARTITION BY b.symbol
+                                              ORDER BY b.trade_date) AS w_lag
+            FROM daily_data b
+            INNER JOIN v_sector_master s ON b.symbol = s.symbol
+            WHERE s.sector = ?
+              AND b.series IN ('EQ', 'SM', 'ST')
+        )
         SELECT
-            b.trade_date,
-            SUM(b.deliv_per * b.turnover_lacs) / NULLIF(SUM(b.turnover_lacs), 0)
+            trade_date,
+            SUM(deliv_per * turnover_lacs) / NULLIF(SUM(turnover_lacs), 0)
                 AS avg_deliv_per,
-            SUM(
-                CASE WHEN b.prev_close > 0
-                THEN (b.close_price - b.prev_close) / b.prev_close * 100
-                END * b.turnover_lacs
-            ) / NULLIF(SUM(CASE WHEN b.prev_close > 0 THEN b.turnover_lacs END), 0)
+            SUM(CASE WHEN r IS NOT NULL THEN r * w_lag END)
+            / NULLIF(SUM(CASE WHEN r IS NOT NULL THEN w_lag END), 0)
                 AS avg_price_change_pct,
-            SUM(b.turnover_lacs) / 100 AS total_turnover_cr,
-            COUNT(DISTINCT b.symbol) AS stock_count
-        FROM daily_data b
-        INNER JOIN v_sector_master s ON b.symbol = s.symbol
-        WHERE s.sector = ?
-          AND b.series IN ('EQ', 'SM', 'ST')
-          AND b.turnover_lacs >= ?
-        GROUP BY b.trade_date
-        ORDER BY b.trade_date DESC
+            SUM(turnover_lacs) / 100 AS total_turnover_cr,
+            COUNT(DISTINCT symbol) AS stock_count
+        FROM base
+        WHERE turnover_lacs >= ? AND w_lag IS NOT NULL
+        GROUP BY trade_date
+        ORDER BY trade_date DESC
         LIMIT ?
     """
     df = query_dataframe(sql, [sector_name, min_turnover_lacs, days])
@@ -233,16 +262,33 @@ def _build_master_performance(
     # Period returns are weighted by each stock's TRAILING-AVERAGE turnover, NOT
     # its end-day turnover. Contemporaneous (same-period) turnover correlates with
     # the move — big up-moves trade big — which systematically OVER-weights the
-    # gainers and inflated the sector return by +2-7%/week (measured). A stable,
-    # pre-determined trailing-average turnover keeps the "where the money is"
-    # weighting while removing that bias. Point-in-time: window ends at as_of_date.
+    # gainers and inflated the sector return by +2-7%/week (measured).
+    #
+    # 2026-08-07: that fix was only HALF done. The weight window still ENDED at
+    # as_of_date, so it overlapped the very period being weighted — ~5% overlap
+    # for the 1W return but ~100% for 3M, which is the whole window.
+    # The window now ends where the return window OPENS, so the weight is fully
+    # pre-determined at the moment the return starts accruing — which is also the
+    # correct financial semantic: it is the weight a real basket formed at the
+    # period open would actually have held. Data-correctness fix only — no
+    # scoring logic is touched. (150 calendar days ~= 101 sessions, verified.)
+    #
+    # Effect, measured over 92 sessions 2024-01..2026-08 with the start_prices
+    # series bug (below) fixed on BOTH arms so the two changes are not confounded:
+    #     period   mean|diff|   bias    rank-corr   top-3 unchanged
+    #     1W        0.13pp    -0.07pp     0.991          84%
+    #     1M        0.69pp    -0.48pp     0.971          52%
+    #     3M        2.41pp    -1.96pp     0.944          51%
+    # Bias is negative throughout: the old form OVERSTATED sector returns, worst
+    # over the longest window, exactly as the overlap predicts. This visibly moves
+    # the board on 1M/3M — the new numbers are the correct ones.
     price_sql = f"""
         WITH liq AS (
             SELECT symbol, AVG(turnover_lacs) AS w
             FROM daily_data
             WHERE series IN ('EQ', 'SM', 'ST')
-              AND trade_date >  ?
-              AND trade_date <= ?
+              AND trade_date >  (?::date - 150)   -- ~100 sessions before the
+              AND trade_date <= ?                 -- period opens (not as_of)
             GROUP BY symbol
         ),
         end_prices AS (
@@ -253,6 +299,18 @@ def _build_master_performance(
               AND b.turnover_lacs >= ?
         ),
         start_prices AS (
+            -- The series filter MUST also be on the outer table. The inner
+            -- subquery picks the last EQ/SM/ST date, but without the outer
+            -- filter the join matches EVERY series trading on that date, so a
+            -- non-equity line under the same symbol is returned as the "start
+            -- price" AND duplicates the row. BRITANNIA is the worst case: it has
+            -- a bonus-debenture series (N3) at ~Rs 29 alongside EQ at ~Rs 4,266,
+            -- which produced a +16,917% "return" and dragged the whole FMCG
+            -- sector to +1,025% for a week. end_prices already filters series;
+            -- start_prices did not. Deliberately NOT adding end_prices' turnover
+            -- filter here: that would drop stocks which were illiquid at the
+            -- period open but are liquid now, changing the population rather than
+            -- fixing a defect. The series filter alone removes the artifact.
             SELECT b.symbol, b.close_price
             FROM daily_data b
             INNER JOIN (
@@ -262,7 +320,20 @@ def _build_master_performance(
                   AND series IN ('EQ', 'SM', 'ST')
                 GROUP BY symbol
             ) t ON b.symbol = t.symbol AND b.trade_date = t.td
+            WHERE b.series IN ('EQ', 'SM', 'ST')
         )
+        -- NO winsorize here, deliberately. A +/-60% cap was tried and removed.
+        -- Re-measured AFTER the start_prices series fix (2023-2026, n=47,217
+        -- stock-3M-periods) it still binds asymmetrically -- 2.69% of periods
+        -- above +60% vs 0.63% below -60% -- so it would BIAS 3M sector returns
+        -- DOWNWARD by clipping genuine multi-baggers. p99.9 of a real 3M move is
+        -- +165%; a cap low enough to matter would cut deep into real data.
+        -- It also fails at its stated job: an unadjusted 1:2 split reads as -50%
+        -- and sits INSIDE any sane cap, so the cap never catches it.
+        -- Listing pops are excluded structurally instead: start_prices requires a
+        -- close at/before the period open, and a stock listed later has none.
+        -- Unadjusted corporate actions remain a known open issue on this column,
+        -- exactly as they did before this fix -- not made better, not made worse.
         SELECT s.sector{gs},
             SUM(
                 CASE WHEN sp.close_price > 0
@@ -295,8 +366,10 @@ def _build_master_performance(
               AND b.trade_date <= ?
             GROUP BY s.sector{gb}
         """
+        # liq window is now anchored on `start` (the period open), not as_of_date,
+        # so each label gets a weight that is fully known before its return begins.
         p_df = query_dataframe(
-            price_sql, [cutoff_100d, as_of_date, as_of_date, min_turnover_lacs, start]
+            price_sql, [start, start, as_of_date, min_turnover_lacs, start]
         )
         p_df.columns = grp_cols + [f"{label}_price_chg_pct"]
 
