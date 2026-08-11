@@ -117,6 +117,32 @@ def cached_forward_tilt(trade_date: date, min_turnover_lacs: float = 1.0,
 
 
 @st.cache_data(ttl=_TTL)
+def cached_tilt_replay(as_of: date, horizon_days: int = 10,
+                       min_turnover_lacs: float = 1.0, today: date | None = None) -> dict:
+    """Replay the tilt as of a past date and score what followed. See module docstring."""
+    from src.analytics.sector_forward_tilt import get_tilt_replay
+    return get_tilt_replay(as_of, horizon_days=horizon_days,
+                           min_turnover_lacs=min_turnover_lacs, today=today)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_operator_footprint(trade_date: date, min_notional_cr: float = 5.0) -> dict:
+    """Unusual single-stock F&O positioning. DESCRIPTIVE - no measured forward edge."""
+    from src.analytics.operator_footprint import get_operator_footprint
+    return get_operator_footprint(trade_date, min_notional_cr=min_notional_cr)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_clock_replay(as_of: date, window: int = 5,
+                        min_turnover_lacs: float = 1.0,
+                        today: date | None = None) -> dict:
+    """Replay the Rotation Clock as of a past date and score what followed."""
+    from src.analytics.sector_rotation import get_clock_replay
+    return get_clock_replay(as_of, window_trading_days=window,
+                            min_turnover_lacs=min_turnover_lacs, today=today)
+
+
+@st.cache_data(ttl=_TTL)
 def cached_clock_stock_detail(sector: str, trade_date: date, min_turnover_lacs: float = 1.0,
                               lookback_days: int = 10):
     """

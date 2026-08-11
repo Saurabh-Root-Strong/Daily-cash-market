@@ -863,3 +863,175 @@ def get_mtf_trend(as_of_date: date) -> dict:
                posture=posture, entry=entry, flips=flips,
                evidence=ev, detail=detail)
     return out
+
+
+# ── replay: "what did this tab say on date X, and what happened?" ─────────────
+def get_tilt_replay(as_of_date: date, horizon_days: int = 10,
+                    min_turnover_lacs: Optional[float] = None,
+                    today: Optional[date] = None) -> dict:
+    """
+    Re-run the tilt as it stood on `as_of_date` and score what followed.
+
+    TWO DIFFERENT QUESTIONS, BOTH RETURNED, DELIBERATELY NOT MERGED:
+
+      `horizon`  as_of -> as_of + horizon_days. This is the ONLY fair scorecard,
+                 because it is the window the call was actually making. If that
+                 window has not elapsed yet the block is returned with
+                 status="OPEN" and no return figures — a partial window is not a
+                 result.
+      `to_today` as_of -> today. This answers "what would I have if I bought
+                 then and still held", which is a legitimate P&L question but is
+                 NOT the signal's claim. Scoring a 2-week call over 6 months is a
+                 category error, so the two are kept apart and labelled.
+
+    Every return is reported three ways, because a raw number is meaningless:
+      abs        the basket's own compound return
+      vs_basket  minus the equal-weight ALL-sector basket (what the tilt claims)
+      vs_nifty   minus Nifty 50 (what you could have held instead)
+
+    CAUSALITY: the tilt inputs are as-of by construction (verified: sector panel
+    and Nifty both stop at as_of_date; six repeated runs give identical tilt
+    labels, ranks and OVERWEIGHT sets — residual float noise is ~1e-14 from
+    DuckDB's parallel SUM and cannot move a decision).
+
+    KNOWN, UNFIXABLE CAVEAT: `v_sector_master` has no as-of column, so a sector's
+    history is measured on the stocks in it TODAY. A name that later joined the
+    sector is treated as having always been there. That is constituent
+    look-ahead and it flatters every historical sector return here.
+    """
+    if min_turnover_lacs is None:
+        min_turnover_lacs = get_min_turnover_filter()
+    out: dict = {"ok": False, "as_of": as_of_date, "horizon_days": int(horizon_days)}
+
+    sess = query_dataframe(
+        "SELECT DISTINCT trade_date FROM daily_data ORDER BY trade_date", [])
+    if sess.empty:
+        out["error"] = "no sessions in the archive"
+        return out
+    days = pd.to_datetime(sess["trade_date"]).dt.date.tolist()
+    last = days[-1]
+    today = today or last
+
+    # snap a weekend/holiday pick back to the previous real session
+    prior = [d for d in days if d <= as_of_date]
+    if not prior:
+        out["error"] = f"no session on or before {as_of_date} (archive starts {days[0]})"
+        return out
+    anchor = prior[-1]
+    out["anchor"] = anchor
+    out["snapped"] = anchor != as_of_date
+    if anchor >= today:
+        out["error"] = "pick a date before the latest session — nothing has happened yet"
+        return out
+
+    try:
+        tilt, regime = get_forward_tilt(anchor, min_turnover_lacs,
+                                        horizon_days=int(horizon_days))
+    except Exception as exc:                                    # noqa: BLE001
+        out["error"] = f"tilt unavailable for {anchor}: {exc}"
+        return out
+    if tilt is None or tilt.empty:
+        out["error"] = (f"not enough history on {anchor} to build a "
+                        f"{horizon_days}-day tilt (longer horizons need more)")
+        return out
+
+    i = days.index(anchor)
+    h_idx = i + int(horizon_days)
+    h_end = days[h_idx] if h_idx < len(days) else None
+    # When the window has not finished, say HOW FAR IN it is. "Still open" alone
+    # leaves the user unable to tell whether it ends tomorrow or in three months.
+    _elapsed = max(0, min(int(horizon_days), len(days) - 1 - i))
+    out["sessions_elapsed"] = _elapsed
+    out["sessions_remaining"] = max(0, int(horizon_days) - _elapsed)
+
+    # daily sector returns, then compound between two dates
+    # The LAG must see sessions BEFORE the window opens. Computing it inside a
+    # `trade_date > anchor` filter leaves the first session of the window with a
+    # NULL w_lag, and `w_lag IS NOT NULL` then deletes that whole session — so a
+    # 10-session window silently measured 9, dropping the first day's move (and a
+    # 1-session window returned nothing at all). Pull a 30-calendar-day buffer so
+    # the lag is defined even across a long holiday cluster, then filter to the
+    # real window in the OUTER query.
+    panel = query_dataframe(
+        f"""
+        WITH base AS (
+            SELECT b.trade_date, s.sector,
+                   GREATEST(LEAST((b.close_price - b.prev_close)
+                            / NULLIF(b.prev_close,0) * 100, 25), -25) AS r,
+                   LAG(b.turnover_lacs) OVER (PARTITION BY b.symbol
+                                              ORDER BY b.trade_date) AS w_lag,
+                   b.turnover_lacs
+            FROM daily_data b
+            INNER JOIN v_sector_master s ON b.symbol = s.symbol
+            WHERE b.series IN ('EQ','SM','ST')
+              AND s.sector IS NOT NULL AND s.sector NOT IN ('ETF','Others')
+              AND b.trade_date > (?::date - 30) AND b.trade_date <= ?
+        )
+        SELECT sector, trade_date,
+               SUM(w_lag * r) / NULLIF(SUM(CASE WHEN r IS NOT NULL THEN w_lag END),0) AS ret
+        FROM base
+        WHERE turnover_lacs >= ? AND w_lag IS NOT NULL
+          AND trade_date > ?
+        GROUP BY sector, trade_date
+        """, [anchor, today, min_turnover_lacs, anchor])
+    if panel.empty:
+        out["error"] = "no forward sector data"
+        return out
+    panel["trade_date"] = pd.to_datetime(panel["trade_date"])
+    wide = panel.pivot(index="trade_date", columns="sector", values="ret").sort_index()
+
+    nf = query_dataframe(
+        "SELECT trade_date, close_val FROM index_data WHERE index_name='Nifty 50' "
+        "AND trade_date >= ? AND trade_date <= ? ORDER BY trade_date",
+        [anchor, today])
+    nf["trade_date"] = pd.to_datetime(nf["trade_date"])
+    nser = nf.set_index("trade_date")["close_val"].astype(float)
+
+    def compound(upto: date) -> pd.Series:
+        seg = wide[wide.index <= pd.Timestamp(upto)]
+        return (np.expm1(np.log1p(seg / 100.0).sum(axis=0)) * 100.0) if len(seg) else pd.Series(dtype=float)
+
+    def nifty_ret(upto: date) -> float:
+        seg = nser[nser.index <= pd.Timestamp(upto)]
+        return float(seg.iloc[-1] / seg.iloc[0] - 1.0) * 100.0 if len(seg) >= 2 else float("nan")
+
+    ow = tilt.loc[tilt["tilt"] == "OVERWEIGHT", "sector"].tolist()
+    uw = tilt.loc[tilt["tilt"] == "UNDERWEIGHT", "sector"].tolist()
+
+    def block(upto: Optional[date], label: str) -> dict:
+        if upto is None:
+            return {"status": "OPEN", "label": label}
+        rets = compound(upto)
+        if rets.empty:
+            return {"status": "NO_DATA", "label": label}
+        basket = float(rets.mean())
+        nif = nifty_ret(upto)
+        # a suggested sector that has no forward series is reported, never dropped:
+        # silently dropping would bias the result upward if the missing one fell.
+        ow_have = [s for s in ow if s in rets.index]
+        uw_have = [s for s in uw if s in rets.index]
+        ow_r = float(rets[ow_have].mean()) if ow_have else float("nan")
+        uw_r = float(rets[uw_have].mean()) if uw_have else float("nan")
+        return {
+            "status": "DONE", "label": label, "end": upto,
+            "sessions": int((wide.index <= pd.Timestamp(upto)).sum()),
+            "ow_abs": ow_r, "uw_abs": uw_r, "basket_abs": basket, "nifty_abs": nif,
+            "ow_vs_basket": ow_r - basket, "ow_vs_nifty": ow_r - nif,
+            "uw_vs_basket": uw_r - basket,
+            "ow_minus_uw": ow_r - uw_r,
+            "per_sector": rets.reindex(ow + uw),
+            "missing": [s for s in (ow + uw) if s not in rets.index],
+        }
+
+    out.update(
+        ok=True,
+        tilt=tilt, regime=regime,
+        ow=ow, uw=uw,
+        verdict=regime.get("verdict"), size_hint=regime.get("size_hint"),
+        state=regime.get("state"),
+        horizon=block(h_end, f"over its own {horizon_days}-session horizon"),
+        to_today=block(today, "from then until now"),
+        horizon_end=h_end, today=today,
+        evidence=_HORIZON_EVIDENCE.get(int(horizon_days)),
+    )
+    return out

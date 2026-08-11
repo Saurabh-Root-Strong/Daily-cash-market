@@ -2085,3 +2085,159 @@ def get_sector_stocks_custom_range(
         ORDER BY deliv_value_cr DESC
     """
     return query_dataframe(sql, [sector, from_date, to_date, min_turnover_lacs])
+
+
+# ── replay: "what did the Rotation Clock say on date X, and what happened?" ───
+_CLOCK_ACTION = {
+    "Leading":   ("BUY-LIKE",  True,  "delivery rising AND price leading peers"),
+    "Improving": ("WATCH",     None,  "delivery rising but price still lagging"),
+    "Neutral":   ("NO CALL",   None,  "no clear delivery direction"),
+    "Weakening": ("AVOID",     False, "delivery falling while price still leads"),
+    "Lagging":   ("AVOID",     False, "delivery falling and price lagging"),
+}
+
+
+def get_clock_replay(as_of_date: date, window_trading_days: int = 5,
+                     min_turnover_lacs: Optional[float] = None,
+                     today: Optional[date] = None) -> dict:
+    """
+    Re-run the Rotation Clock as it stood on `as_of_date` and score what followed.
+
+    SCORED SYMMETRICALLY: a clock built on an N-session lookback is judged over
+    the NEXT N sessions. "The 2-week clock, over the next 2 weeks." Any other
+    pairing invites the category error the Forward-Tilt panel already guards
+    against — scoring a short read over a long window.
+
+    PHASES ARE NOT ALL CALLS, and treating them as one buy list would be wrong:
+      Leading    the only buy-like phase (delivery rising, price leading)
+      Improving  explicitly WATCH on this tab, and measured NEGATIVE at both ends
+                 (-10.6%/yr at 1-2wk, t -2.64; -11.7%/yr at 11-12wk, t -2.54 in
+                 scripts/backtest_tilt_vs_clock.py) — it is scored, and shown,
+                 but never counted as a buy
+      Weakening  } avoid-calls: LAGGING the benchmark is the win, same inversion
+      Lagging    } the Forward-Tilt replay uses
+      Neutral    no call — reported for completeness only
+
+    Returns `horizon` (the N-session window) and `to_today` blocks, each carrying
+    per-phase and per-sector returns plus the basket and Nifty benchmarks.
+    Causality, snapping, open windows and missing sectors follow the same rules
+    as get_tilt_replay; see that docstring for the constituent-look-ahead caveat,
+    which applies here identically.
+    """
+    if min_turnover_lacs is None:
+        min_turnover_lacs = get_min_turnover_filter()
+    W = max(2, int(window_trading_days))
+    out: dict = {"ok": False, "as_of": as_of_date, "window": W}
+
+    sess = query_dataframe(
+        "SELECT DISTINCT trade_date FROM daily_data ORDER BY trade_date", [])
+    if sess.empty:
+        out["error"] = "no sessions in the archive"; return out
+    days = pd.to_datetime(sess["trade_date"]).dt.date.tolist()
+    today = today or days[-1]
+    prior = [d for d in days if d <= as_of_date]
+    if not prior:
+        out["error"] = f"no session on or before {as_of_date} (archive starts {days[0]})"
+        return out
+    anchor = prior[-1]
+    out["anchor"] = anchor
+    out["snapped"] = anchor != as_of_date
+    if anchor >= today:
+        out["error"] = "pick a date before the latest session — nothing has happened yet"
+        return out
+
+    try:
+        clock = get_sector_rotation_timeframe(anchor, W, min_turnover_lacs)
+    except Exception as exc:                                    # noqa: BLE001
+        out["error"] = f"clock unavailable for {anchor}: {exc}"; return out
+    if clock is None or clock.empty:
+        out["error"] = (f"not enough history on {anchor} for a {W}-session clock")
+        return out
+
+    i = days.index(anchor)
+    h_end = days[i + W] if i + W < len(days) else None
+    out["sessions_elapsed"] = max(0, min(W, len(days) - 1 - i))
+    out["sessions_remaining"] = max(0, W - out["sessions_elapsed"])
+    out["horizon_end"] = h_end
+    out["today"] = today
+
+    # Forward sector returns MUST use the same definition the clock CLASSIFIES on,
+    # or the panel scores a different quantity than it sorted. get_sector_rotation_
+    # timeframe builds its price axis from the MEDIAN constituent return -- a
+    # deliberate choice (see its SQL comment: turnover weighting uses
+    # contemporaneous volume, which inflated the axis until almost every sector
+    # read "above market"). Scoring with a turnover-weighted mean instead was
+    # measurably inconsistent: rank correlation between the two definitions is
+    # only 0.65-0.77, 6-7 of 24 sectors flip their above/below-basket verdict, and
+    # over 65 sessions the two baskets differ by 11pp (+16.9% vs +5.9%).
+    # So: `ret` is the MEDIAN (matches the clock, drives the tick marks), and
+    # `ret_eq` is the equal-weight mean of the same stocks -- what an actual
+    # basket would have earned -- reported alongside for investability.
+    panel = query_dataframe(
+        """
+        WITH base AS (
+            SELECT b.trade_date, s.sector, b.turnover_lacs,
+                   CASE WHEN b.prev_close > 0
+                        THEN (b.close_price - b.prev_close) / b.prev_close * 100 END AS r_raw,
+                   LAG(b.turnover_lacs) OVER (PARTITION BY b.symbol
+                                              ORDER BY b.trade_date) AS w_lag
+            FROM daily_data b
+            INNER JOIN v_sector_master s ON b.symbol = s.symbol
+            WHERE b.series IN ('EQ','SM','ST')
+              AND s.sector IS NOT NULL AND s.sector NOT IN ('ETF','Others')
+              AND b.trade_date > (?::date - 30) AND b.trade_date <= ?
+        )
+        SELECT sector, trade_date,
+               MEDIAN(r_raw) AS ret,
+               AVG(GREATEST(LEAST(r_raw, 25), -25)) AS ret_eq
+        FROM base
+        WHERE turnover_lacs >= ? AND w_lag IS NOT NULL AND trade_date > ?
+        GROUP BY sector, trade_date
+        """, [anchor, today, min_turnover_lacs, anchor])
+    if panel.empty:
+        out["error"] = "no forward sector data"; return out
+    panel["trade_date"] = pd.to_datetime(panel["trade_date"])
+    wide = panel.pivot(index="trade_date", columns="sector", values="ret").sort_index()
+    wide_eq = panel.pivot(index="trade_date", columns="sector", values="ret_eq").sort_index()
+
+    nf = query_dataframe(
+        "SELECT trade_date, close_val FROM index_data WHERE index_name='Nifty 50' "
+        "AND trade_date >= ? AND trade_date <= ? ORDER BY trade_date", [anchor, today])
+    nf["trade_date"] = pd.to_datetime(nf["trade_date"])
+    nser = nf.set_index("trade_date")["close_val"].astype(float)
+
+    phases = {p: clock.loc[clock["phase"] == p, "sector"].tolist()
+              for p in _CLOCK_ACTION}
+
+    def block(upto: Optional[date], label: str) -> dict:
+        if upto is None:
+            return {"status": "OPEN", "label": label}
+        seg = wide[wide.index <= pd.Timestamp(upto)]
+        if seg.empty:
+            return {"status": "NO_DATA", "label": label}
+        rets = np.expm1(np.log1p(seg / 100.0).sum(axis=0)) * 100.0
+        seg_eq = wide_eq[wide_eq.index <= pd.Timestamp(upto)]
+        rets_eq = (np.expm1(np.log1p(seg_eq / 100.0).sum(axis=0)) * 100.0
+                   if not seg_eq.empty else pd.Series(dtype=float))
+        nseg = nser[nser.index <= pd.Timestamp(upto)]
+        nif = float(nseg.iloc[-1] / nseg.iloc[0] - 1.0) * 100.0 if len(nseg) >= 2 else float("nan")
+        basket = float(rets.mean())
+        per_phase = {}
+        for p, names in phases.items():
+            have = [s for s in names if s in rets.index]
+            per_phase[p] = {
+                "n": len(names), "n_scored": len(have),
+                "ret": float(rets[have].mean()) if have else float("nan"),
+                "missing": [s for s in names if s not in rets.index],
+            }
+        return {"status": "DONE", "label": label, "end": upto,
+                "sessions": int(len(seg)), "basket_abs": basket, "nifty_abs": nif,
+                "basket_eq_abs": float(rets_eq.mean()) if len(rets_eq) else float("nan"),
+                "per_phase": per_phase, "per_sector": rets, "per_sector_eq": rets_eq}
+
+    out.update(ok=True, clock=clock, phases=phases,
+               nifty_window=float(clock["nifty_return"].iloc[0])
+               if "nifty_return" in clock.columns and len(clock) else float("nan"),
+               horizon=block(h_end, f"over the next {W} sessions"),
+               to_today=block(today, "from then until now"))
+    return out

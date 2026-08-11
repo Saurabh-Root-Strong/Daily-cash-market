@@ -11,7 +11,7 @@ Combined with 1W cumulative price direction → four quadrant classification.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
@@ -37,7 +37,10 @@ from src.dashboard.cache.queries import (
     cached_sector_memory_context,
     cached_price_action,
     cached_forward_tilt,
+    cached_clock_replay,
+    cached_operator_footprint,
     cached_clock_stock_detail,
+    cached_tilt_replay,
     cached_sector_month_map,
     cached_month_suggestion,
     cached_seasonality_record,
@@ -2252,6 +2255,17 @@ Ideal entry: sector moving from Improving to Leading (rising delivery + price cr
             "a name just over the line is a marginal call, deep in a quadrant is a clear one."
         )
 
+    # ── RESULTS: what the clock said on a past date, and what followed ────────
+    _rc1, _rc2 = st.columns([3, 1])
+    with _rc2:
+        _show_cres = st.toggle("📊 Results", value=False, key="clock_results",
+                               help="Turn this on to look back: pick any past "
+                                    "date, see which phase each sector was in "
+                                    "that day, and find out what happened next.")
+    if _show_cres:
+        _render_clock_replay(selected_date, min_turnover, int(window), sel)
+        st.markdown("---")
+
     # Sector reference legend — all sectors in a compact color-coded grid
     _render_clock_legend(df)
 
@@ -3974,6 +3988,728 @@ _TILT_HELP = {
 }
 
 
+def _render_operator_footprint(selected_date: date) -> None:
+    """
+    Unusual single-stock F&O positioning — where size is being built, and what
+    the OI/price combination says it was.
+
+    DESCRIPTIVE BY DESIGN. scripts/backtest_operator_footprint.py walked 105k
+    symbol-days over 500 sessions and found no forward edge, so this tab reports
+    what is happening and refuses to imply what happens next.
+    """
+    st.markdown("#### 🕵️ Operator Footprint — unusual F&O positioning")
+    st.caption(
+        "Someone building real size in a stock leaves a trace: open interest "
+        "appearing where it normally does not, at a size that is abnormal **for "
+        "that stock**, with a price direction that says whether it was bought or "
+        "written. This tab finds those traces across every F&O stock."
+    )
+
+    st.warning(
+        "**This is a description, not a forecast — and that is a measured "
+        "statement, not caution.** A 105,000 symbol-day backtest over 500 "
+        "sessions (2024-07 → 2026-08) found **no forward edge**: every "
+        "directional information coefficient sat inside noise (t −0.80 to +0.97), "
+        "and once benchmarked correctly every basket collapsed to ~0 alongside a "
+        "random control. Call BUYING and call WRITING — which imply opposite "
+        "directions — scored **identically** (+0.337 vs +0.334), the signature of "
+        "a shared exposure rather than information.\n\n"
+        "**Scope of that test, stated precisely.** It measured the INGREDIENTS — "
+        "call-buying share, put-writing share, ITM buildup, futures OI — not the "
+        "composite ranking this tab now shows, which was rebuilt afterwards "
+        "(per-moneyness event bars, money-in-bucket-units ranking). No directional "
+        "claim is made for the new ranking either; it has simply not been tested, "
+        "and nothing here should be read as one.\n\n"
+        "**And there is a reason for that.** An option's premium moves with the "
+        "underlying, so the BUYING / WRITING label is mostly restating the day's "
+        "price direction rather than reading order flow — measured, a call's "
+        "premium moved with spot **83%** of the time and a put's against spot "
+        "**94%**. Separating real demand needs the premium move net of delta, "
+        "which this dataset does not carry. Use this to see WHERE size showed up, "
+        "not to predict the stock. `scripts/backtest_operator_footprint.py`",
+        icon="⚠️")
+
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        min_cr = st.slider("Minimum strike size (₹ Cr notional)", 1.0, 50.0, 5.0, 1.0,
+                           key="opf_min_cr",
+                           help="Ignore strikes smaller than this. Percentage jumps "
+                                "in a tiny strike are noise, not a footprint.")
+        # Price band. A linear slider is useless here — the F&O universe runs from
+        # ~Rs 20 to Rs 43,000+, so 95% of names would sit in the first 5% of the
+        # track. These breakpoints are roughly log-spaced so every decade gets
+        # usable travel.
+        _STEPS = [0, 50, 100, 250, 500, 1000, 2000, 3000, 5000,
+                  7500, 10000, 20000, 50000, 1000000]
+        # Labels MUST be unique. select_slider resolves the selection by its
+        # formatted label, so mapping both 0 and 1000000 to "any" collapsed the two
+        # ends onto one option — both handles returned 1000000, the filter became
+        # between(1e6, 1e6), and the tab showed "no stock between Rs 1,000,000 and
+        # Rs 1,000,000" while 16 stocks actually qualified.
+        _lo, _hi = st.select_slider(
+            "Stock price band (₹)", options=_STEPS, value=(0, 1000000),
+            format_func=lambda v: ("no min" if v == 0
+                                   else "no max" if v == 1000000 else f"{v:,}"),
+            key="opf_price_v2",
+            help="Filter by the stock's own price. The F&O list spans about Rs 20 "
+                 "to Rs 43,000, and a Rs 40,000 stock is not actionable for most "
+                 "position sizes.\n\n"
+                 "The filter is applied BEFORE the top-25 cut, so you get the 25 "
+                 "strongest footprints WITHIN your band — not the overall top 25 "
+                 "trimmed down to whatever survives.")
+    with c2:
+        st.caption(
+            "Ranked by **money that arrived today**, measured against what counts "
+            "as large *for that kind of strike* — an at-the-money book is far "
+            "deeper than an in-the-money one, so each is judged on its own scale "
+            "(bar: ITM ₹24 Cr, deep-OTM ₹37 Cr, OTM ₹58 Cr, ATM ₹74 Cr, set from "
+            "prior sessions only). In-the-money strikes are weighted up: ordinary "
+            "flow lives out-of-the-money, so real money appearing in-the-money is "
+            "the harder event to explain away. Standing open interest alone scores "
+            "zero — the question is what just changed.")
+
+    try:
+        rep = cached_operator_footprint(selected_date, float(min_cr))
+    except Exception as exc:                                    # noqa: BLE001
+        st.error(f"Footprint unavailable: {exc}")
+        return
+    if not rep.get("ok"):
+        st.info(rep.get("error", "No F&O data for that date."))
+        return
+
+    meta = rep["meta"]
+    if rep["as_of"] != selected_date:
+        st.caption(f"↪ using the last F&O session on or before {selected_date}: "
+                   f"**{rep['as_of']}**")
+    if not meta.get("has_norm"):
+        st.caption("⚠️ Not enough prior expiry history to normalise — showing raw "
+                   "buildup only.")
+
+    stocks = rep["stocks"]
+    if stocks is None or stocks.empty:
+        st.info("No strike cleared the size filter on this date.")
+        return
+
+    # Only stocks that actually cleared the event bar. Without this the table pads
+    # itself to 25 rows with zero-footprint names — at a Rs 10 Cr strike filter only
+    # 16 stocks qualified, so 9 rows would have been stocks where nothing happened.
+    if "footprint" in stocks.columns:
+        stocks = stocks[stocks["footprint"] > 0]
+    if stocks.empty:
+        st.info("No stock cleared the event bar on this date. Lower the strike-size "
+                "filter to widen the search.")
+        return
+
+    # price band first, THEN the top-25 cut (see the slider's help text)
+    _n_all = len(stocks)
+    if "spot" in stocks.columns:
+        _band = stocks["spot"].between(_lo, _hi) | stocks["spot"].isna()
+        stocks = stocks[_band]
+    stocks = stocks.head(25)
+    if stocks.empty:
+        st.info(f"None of the {_n_all} stocks with a footprint on this date are "
+                f"priced between ₹{_lo:,} and ₹{_hi:,}. Widen the price band.")
+        return
+
+    _band_txt = ("" if (_lo, _hi) == (0, 1000000)
+                 else f" · priced ₹{_lo:,}–₹{_hi:,} "
+                      f"({len(stocks)} of {_n_all} stocks match)")
+    st.markdown(f"##### Where size showed up on {rep['as_of']:%d %b %Y}{_band_txt}")
+    # Never suppress a name silently — say which and why.
+    _ca = rep.get("meta", {}).get("corp_action_symbols") or []
+    _nl = rep.get("meta", {}).get("new_listing_symbols") or []
+    if _ca:
+        st.caption(
+            f"⚠️ **Excluded today: {', '.join(_ca)}** — NSE re-priced the whole "
+            "strike ladder (ex-dividend, bonus or split), so every position looks "
+            "like it arrived this morning when it is the same money under a new "
+            "contract name. Flow is not measurable for these on such a day. "
+            "Happens roughly 66 times a year across the universe, mostly in "
+            "dividend season.")
+    if _nl:
+        st.caption(
+            f"⚠️ **Excluded today: {', '.join(_nl)}** — listed in F&O within the "
+            "last 30 days. Every strike is new because the contract itself is new, "
+            "so there is no positioning history to be abnormal against.")
+    show = stocks.copy()
+    show["Spot"] = show["spot"].round(2)
+    show["Biggest strike"] = (show["top_type"] + " " +
+                              show["top_strike"].round(1).astype(str))
+    show["₹ Cr added"] = show["top_add_cr"].round(0)
+    show["vs own normal"] = show["top_add_vs_norm"].round(1)
+    show["₹ Cr"] = show["top_notional_cr"].round(0)
+    show["Call share of adds"] = show["call_share_of_adds_pct"].round(0)
+    # Spell the direction out next to the act. "PUT WRITING" is bullish and
+    # "CALL WRITING" is bearish — not obvious at a glance, and getting it backwards
+    # inverts the whole read of the row.
+    from src.analytics.operator_footprint import ACTION_LEAN as _LEAN
+    show["What happened"] = [
+        (f"{a} ({_LEAN[a]})" if a in _LEAN else a) + (" · ROLLED" if rl else "")
+        for a, rl in zip(show["top_action"], show["top_is_roll"])]
+    cols = {"symbol": "Stock", "Spot": "Spot", "Biggest strike": "Biggest strike",
+            "top_moneyness": "Where", "What happened": "What happened",
+            "₹ Cr added": "₹ Cr added", "vs own normal": "vs own normal",
+            "₹ Cr": "₹ Cr",
+            "Call share of adds": "Call share of adds %",
+            "fut_action": "Futures", "n_unusual": "Unusual strikes"}
+    have = [c for c in cols if c in show.columns]
+    # Explicit height so every row renders without a NESTED scrollbar. Streamlit
+    # caps a dataframe at ~10 rows by default and scrolls internally; the mouse
+    # wheel then scrolls the PAGE instead, leaving rows 11-25 unreachable.
+    st.dataframe(
+        show[have].rename(columns=cols), hide_index=True, use_container_width=True,
+        height=int(min(len(show), 25)) * 35 + 45,
+        column_config={
+            "vs own normal": st.column_config.NumberColumn(
+                format="%.1fx",
+                help="**Money added today, divided by what a normal day's build is "
+                     "worth here.** 3x = three times the usual daily build. It is a "
+                     "FLOW comparison, not a standing-size one.\n\n"
+                     "'Normal' = the same moneyness bucket at the same point in the "
+                     "expiry cycle, averaged over the last **3 COMPLETED** expiry "
+                     "cycles — cycles that have already ended. Live contracts are "
+                     "excluded on purpose: they used to make up 42% of the baseline, "
+                     "which meant a position an operator spent last week building "
+                     "was sitting inside the 'normal' it was compared against, "
+                     "hiding it.\n\n"
+                     "Blank = no reliable baseline (a normal day's build there is "
+                     "under ₹2 Cr), so no multiple is quoted and the row ranks on "
+                     "money alone. This matters: option flow is mostly zero, so an "
+                     "unfloored ratio explodes — 69% of the old '10x' readings sat "
+                     "on a near-empty baseline and were a median ₹2 Cr trade."),
+            "What happened": st.column_config.TextColumn(
+                help="What was done to the option, and what that implies for the "
+                     "STOCK (in brackets).\n\n"
+                     "OI up + premium up = someone BOUGHT it. OI up + premium down "
+                     "= someone WROTE (sold) it.\n\n"
+                     "**CALL BUYING and PUT WRITING are both bullish. "
+                     "PUT BUYING and CALL WRITING are both bearish.** Writing a put "
+                     "is bullish — the writer keeps the premium as long as the "
+                     "stock stays above the strike.\n\n"
+                     "**· ROLLED** = the same strike was unwound in a nearer expiry "
+                     "the same day, so this is an existing position moving forward, "
+                     "not new conviction. It appears almost only in expiry week "
+                     "(measured: 45% of scored strikes then, ~0% mid-cycle). Still "
+                     "worth seeing — rolling means the operator chose to STAY.\n\n"
+                     "NEW STRIKE = NSE only listed this strike today, so there is "
+                     "no previous premium to compare against. It opened with size "
+                     "already in it — notable, not missing. Stocks whose ENTIRE "
+                     "ladder was re-priced by a corporate action are excluded "
+                     "instead of shown this way, since there the 'new' strike is "
+                     "just an old position renamed.\n\n"
+                     "⚠️ Read this as a description of the DAY, not as order flow. "
+                     "An option's premium moves with the stock, so on a day the "
+                     "stock rose, almost any call with rising OI reads as BUYING. "
+                     "Measured: a call's premium moved with spot 83% of the time, "
+                     "a put's against spot 94%. Separating genuine demand needs "
+                     "the premium move net of delta, which this data lacks."),
+            "Call share of adds %": st.column_config.NumberColumn(
+                format="%d%%",
+                help="Of all the open interest added today across **every liquid "
+                     "strike and every expiry of this stock**, how much went to "
+                     "calls. It is a whole-stock number — it does NOT describe the "
+                     "'Biggest strike' row next to it. Above ~70% means the day's "
+                     "activity was very one-sided.\n\n"
+                     "⚠️ **One-sided is not the same as bullish.** Calls being added "
+                     "can be call WRITING, which is bearish. Read this together with "
+                     "'What happened' — e.g. a 72% call share alongside CALL WRITING "
+                     "is heavy call SELLING, i.e. someone capping the upside."),
+            "Unusual strikes": st.column_config.NumberColumn(
+                help="How many separate strikes in this stock cleared the event bar "
+                     "today — at least ₹15 Cr of fresh open interest with OI rising. "
+                     "It measures BREADTH, not size: 3 means the money landed in a "
+                     "few places, 38 means it was spread across the chain. "
+                     "Concentrated is the more interesting case for a single "
+                     "deliberate position; broad can just be a busy day in an "
+                     "actively traded name."),
+            "₹ Cr added": st.column_config.NumberColumn(
+                format="%.0f",
+                help="Rupee value of the open interest that appeared TODAY in that "
+                     "one strike. This is the most trustworthy number on the row — "
+                     "the money genuinely arrived. The ranking is built on it."),
+            "Futures": st.column_config.TextColumn(
+                help="The same read applied to the near-month future. Here LONG/"
+                     "SHORT BUILDUP carry their usual meaning — long or short the "
+                     "STOCK — because a future has no writing/buying asymmetry."),
+            "₹ Cr": st.column_config.NumberColumn(
+                format="%.0f", help="Total notional already sitting at that strike "
+                                    "(standing size, not today's activity)."),
+        })
+
+    st.markdown("##### Strike-by-strike detail")
+    pick = st.selectbox("Stock", show["symbol"].tolist(), key="opf_symbol",
+                        help="Every liquid strike for this stock, both expiries.")
+    det = rep["strikes"]
+    det = det[det["symbol"] == pick].copy()
+    if det.empty:
+        st.caption("No strikes above the size filter for this stock.")
+    else:
+        det = det.sort_values("footprint", ascending=False).head(20)
+        det["Strike"] = det["option_type"] + " " + det["strike_price"].round(1).astype(str)
+        det["Premium"] = det["close_price"].round(2)
+        det["Prem chg"] = det["prem_chg"].round(2)
+        det["OI"] = det["open_interest"].astype("int64")
+        det["OI added"] = det["chg_in_oi"].astype("int64")
+        # "vs normal" is the BUILD vs a normal day's build, not standing OI vs a
+        # bucket median — the latter printed >=10x on 5.5% of all strike-days and
+        # fired for RELIANCE on every session, so it never meant anything.
+        from src.analytics.operator_footprint import ACTION_LEAN as _LEAN
+        det["action"] = [(f"{a} ({_LEAN[a]})" if a in _LEAN else a)
+                         + (" · ROLLED" if rl else "")
+                         for a, rl in zip(det["action"], det["is_roll"])]
+        det["₹ Cr added"] = det["add_cr"].round(0)
+        det["vs normal"] = det["add_vs_norm"].round(1)
+        det["₹ Cr"] = det["notional_cr"].round(0)
+        det["% of book"] = det["book_share_pct"].round(1)
+        st.dataframe(
+            det[["expiry_date", "Strike", "moneyness", "action", "Premium",
+                 "Prem chg", "OI", "OI added", "₹ Cr added", "vs normal",
+                 "₹ Cr", "% of book"]]
+            .rename(columns={"expiry_date": "Expiry", "moneyness": "Where",
+                             "action": "What happened"}),
+            hide_index=True, use_container_width=True,
+            height=int(min(len(det), 20)) * 35 + 45)
+        st.caption(
+            "**Reading it:** the label says what was done to the option, and the "
+            "direction that implies for the **stock**. `CALL BUYING` and "
+            "`PUT WRITING` are both **bullish**; `PUT BUYING` and `CALL WRITING` "
+            "are both **bearish**. Note `PUT WRITING` is bullish — the writer keeps "
+            "the premium as long as the stock stays above the strike. "
+            "⚠️ **The buy-vs-write read is weak.** It comes from the premium's "
+            "direction, and a premium mostly just follows the stock: measured here, "
+            "a call's premium moved with spot 83% of the time and a put's against "
+            "spot 94%. So on a day the stock rallied, `PUT WRITING` is close to "
+            "restating that rally. Trust the **₹ Cr added** — that money is real; "
+            "treat the buy/write side as a lean, not a fact. "
+            "In-the-money strikes matter more because ordinary flow "
+            "lives out-of-the-money; real money appearing in-the-money is harder "
+            "to explain away — which is why they are weighted higher in the "
+            "ranking, though the backtest found even that carries no forward edge.")
+
+    st.caption(
+        "**This list skews to CALM stocks, not busy ones** — measured, the names "
+        "that score have a median annualised volatility of ~27% against ~39% for "
+        "the whole F&O universe. That is mechanical: a quiet stock has a stable "
+        "open-interest baseline, so a deviation stands out, while a volatile name "
+        "is noisy enough that nothing looks abnormal. Unusual size in a quiet "
+        "stock is arguably the more interesting event — but 'where size showed "
+        "up' is not the same as 'where the action is'.\n\n"
+        f"Scanned {meta['n_symbols']} F&O stocks · {meta['n_strikes_liquid']:,} "
+        f"strikes above ₹{meta['min_notional_cr']:.0f} Cr · normalised against the "
+        f"last {meta['prior_cycles']} expiry cycles at matched days-to-expiry and "
+        f"moneyness. Stock options are monthly, so 3 cycles ≈ 3 months. F&O history "
+        f"starts 2024-07-24, which is the hard limit on any comparison here.")
+
+
+def _render_clock_replay(selected_date: date, min_turnover: float,
+                         window: int, window_label: str) -> None:
+    from src.analytics.sector_rotation import _CLOCK_ACTION
+    """
+    Results panel for the Rotation Clock — what each phase said, and what followed.
+
+    Scored SYMMETRICALLY: an N-session clock is judged over the next N sessions.
+    Phases are not all calls, so they are not all ticked the same way:
+      Leading   buy-like  -> beating the benchmark is the win
+      Weakening } avoid    -> LAGGING the benchmark is the win
+      Lagging   }
+      Improving WATCH, never a buy on this tab, and measured negative at both
+                ends of the horizon range - shown, never scored as a buy
+      Neutral   no call    -> context only
+    """
+    st.markdown("##### 📊 Results — what the clock said, and what followed")
+
+    _c1, _c2 = st.columns([1, 2])
+    with _c1:
+        _as_of = st.date_input(
+            "Signal date", value=selected_date - timedelta(days=90),
+            max_value=selected_date, key="clock_replay_date",
+            help="The day you want to check. Pick a weekend or a holiday and it "
+                 "moves back to the last day the market was open.")
+    with _c2:
+        st.caption(
+            f"Scored over the **same length** as the analysis period you picked "
+            f"above — the {window_label} clock, judged over the next {window} "
+            f"sessions. Change the period to re-run both the phases and the "
+            f"scoring window together.")
+
+    try:
+        rep = cached_clock_replay(_as_of, int(window), float(min_turnover), selected_date)
+    except Exception as exc:                                    # noqa: BLE001
+        st.error(f"Replay unavailable: {exc}")
+        return
+    if not rep.get("ok"):
+        st.info(rep.get("error", "Replay unavailable for that date."))
+        return
+
+    anchor = rep["anchor"]
+    if rep.get("snapped"):
+        st.caption(f"↪ {_as_of} was not a trading day — using **{anchor}**.")
+
+    _bm = st.radio("Judge each sector against", ["Nifty 50", "All-sector basket"],
+                   index=0, horizontal=True, key="clock_replay_bench",
+                   help="Which yardstick the ✅/❌ marks use.\n\n"
+                        "Nifty 50 — could you have just bought the index instead? "
+                        "The practical test.\n\n"
+                        "All-sector basket — did these phases beat owning every "
+                        "sector? The fair test of the sorting itself.")
+    _use_nifty = _bm == "Nifty 50"
+
+    _open = rep["horizon"].get("status") == "OPEN"
+    _src = rep["horizon"] if not _open else rep.get("to_today", {})
+    _ready = _src.get("status") == "DONE"
+    if not _ready:
+        st.info("No forward data for this date yet.")
+        return
+
+    _bask, _nif = _src["basket_abs"], _src["nifty_abs"]
+    _fell = _use_nifty and (_nif is None or _nif != _nif)
+    _base = _bask if (not _use_nifty or _fell) else _nif
+    _lbl = "all-sector basket" if (not _use_nifty or _fell) else "Nifty 50"
+    _ps = _src["per_sector"]
+
+    if _open:
+        _ela, _rem = rep["sessions_elapsed"], rep["sessions_remaining"]
+        st.markdown(f"#### ⏳ Running — {_ela} of {window} sessions done, {_rem} to go"
+                    f" · as at the close of {rep['today']:%d %b %Y}")
+        st.caption(
+            f"The {window_label} clock read on **{anchor:%d %b %Y}** has not "
+            f"finished its window, so these are **running totals to the last "
+            f"close**. They show ▲ahead / ▼behind versus **{_lbl}** "
+            f"({_base:+.2f}% so far) rather than ✅/❌ — nothing is scored until "
+            f"the window closes.")
+    else:
+        _he = rep["horizon_end"]
+        st.markdown(f"#### 📅 Result at the close of {_he:%d %b %Y} ({_he:%a})")
+        _other = _bask if _use_nifty else _nif
+        st.caption(
+            f"Clock read **{anchor:%d %b %Y}** at the close, scored to the close of "
+            f"**{_he:%d %b %Y}** — {_src['sessions']} sessions. Marks judge each "
+            f"sector against **{_lbl}** ({_base:+.2f}%)"
+            + (f"; the other benchmark returned {_other:+.2f}%."
+               if _other is not None and _other == _other else ".")
+            + " For AVOID phases, lagging the benchmark is the win.")
+
+    _ICON = {"Leading": "💰", "Improving": "🔍", "Neutral": "⚖️",
+             "Weakening": "⚠️", "Lagging": "📤"}
+    for phase in ("Leading", "Improving", "Weakening", "Lagging", "Neutral"):
+        names = rep["phases"].get(phase, [])
+        if not names:
+            continue
+        act, want_beat, why = _CLOCK_ACTION[phase]
+        pd_ = _src["per_phase"][phase]
+        head = (f"{_ICON[phase]} **{phase}** · {act} · {pd_['n']} sector"
+                f"{'s' if pd_['n'] != 1 else ''} — _{why}_")
+        if pd_["ret"] == pd_["ret"]:
+            rel = pd_["ret"] - _base
+            if want_beat is None:
+                verdict = f"{pd_['ret']:+.2f}% ({rel:+.2f}pp vs {_lbl})"
+            elif _open:
+                verdict = (f"{pd_['ret']:+.2f}% so far "
+                           f"({'▲ahead' if (rel > 0) == want_beat else '▼behind'})")
+            else:
+                ok = (rel > 0) if want_beat else (rel < 0)
+                verdict = f"{pd_['ret']:+.2f}% ({rel:+.2f}pp) {'✅' if ok else '❌'}"
+            head += f" → **{verdict}**"
+        st.markdown(head)
+        bits = []
+        for n in names:
+            v = _ps.get(n, float("nan"))
+            if v != v:
+                bits.append(f"{n} _(no data)_"); continue
+            col = "#16a34a" if v >= 0 else "#dc2626"
+            if want_beat is None:
+                mk = ""
+            elif _open:
+                mk = " ▲" if ((v - _base > 0) == want_beat) else " ▼"
+            else:
+                mk = " ✅" if (((v > _base) if want_beat else (v < _base))) else " ❌"
+            bits.append(f"{n} <span style='color:{col}'>({v:+.2f}%"
+                        f"{' so far' if _open else ''})</span>{mk}")
+        st.markdown("&nbsp;&nbsp;" + " · ".join(bits), unsafe_allow_html=True)
+
+    _eq = _src.get("basket_eq_abs", float("nan"))
+    st.caption(
+        f"Benchmarks over the same window: all-sector basket **{_bask:+.2f}%**, "
+        f"Nifty 50 **{_nif:+.2f}%**."
+        + (f"  Sector returns here are the **median stock** in each sector — the "
+           f"same definition the clock's own price axis uses, so the marks judge "
+           f"the call on the basis it was made. An equal-weight basket of those "
+           f"stocks would have returned **{_eq:+.2f}%** on average; the two differ "
+           f"because a few large movers pull a mean around and the median ignores "
+           f"them." if _eq == _eq else "")
+        + (" _(Nifty unavailable — fell back to the basket for the marks.)_" if _fell else "")
+        + "  **Improving is deliberately not ticked.** This tab calls it WATCH, not a "
+        "buy, and a 2018-2026 backtest measured it NEGATIVE at both ends of the "
+        "range (−10.6%/yr at 1-2wk, t −2.64; −11.7%/yr at 11-12wk, t −2.54), so a "
+        "green mark there would be actively misleading. Neutral is not a call either."
+        "\n\n**One date is one observation.** The Signal Validation section below "
+        "carries the walk-forward record across many past windows — that is the "
+        "number to judge the clock on, not this one."
+    )
+
+
+def _render_tilt_replay(selected_date: date, min_turnover: float,
+                        horizon_days: int, horizon_label: str) -> None:
+    """
+    Replay panel: what the tilt said on a chosen past date, and what followed.
+
+    Two outcome blocks are shown side by side and NEVER merged:
+      - over the call's OWN horizon  -> the only fair scorecard
+      - from then until now          -> a P&L question the signal never claimed
+    Scoring a 2-week call over 6 months is a category error; the panel says so
+    rather than letting the bigger number flatter the signal.
+    """
+    st.markdown("##### 📊 Results — what this tab said, and what followed")
+
+    _c1, _c2 = st.columns([1, 2])
+    with _c1:
+        _default = selected_date - timedelta(days=90)
+        _as_of = st.date_input(
+            "Signal date", value=_default, max_value=selected_date,
+            key="tilt_replay_date",
+            help="The day you want to check. Pick a weekend or a holiday and it "
+                 "moves back to the last day the market was open.")
+    with _c2:
+        st.caption(
+            f"Scored at the **{horizon_label}** horizon selected above. Change the "
+            f"horizon radio to re-score the same date over a different window — the "
+            f"suggestion itself changes too, because the ranking lookback scales "
+            f"with the horizon.")
+
+    try:
+        rep = cached_tilt_replay(_as_of, int(horizon_days), float(min_turnover),
+                                 selected_date)
+    except Exception as exc:                                    # noqa: BLE001
+        st.error(f"Replay unavailable: {exc}")
+        return
+    if not rep.get("ok"):
+        st.info(rep.get("error", "Replay unavailable for that date."))
+        return
+
+    anchor = rep["anchor"]
+    if rep.get("snapped"):
+        st.caption(f"↪ {_as_of} was not a trading day — using **{anchor}**.")
+
+    st.markdown(
+        f"**On {anchor} this tab said:** `{rep['verdict']}` · backdrop "
+        f"`{rep['state']}` · suggested size **{int(round((rep['size_hint'] or 0)*100))}%**")
+    # Per-sector outcome inline, measured over the CALL'S OWN horizon (not to
+    # today). A bare "+1.1%" cannot be judged on its own — in a tape where every
+    # sector gained 3% it is a miss — so each name also carries a tick against the
+    # all-sector basket. For an OVERWEIGHT, beating the basket is the win; for an
+    # UNDERWEIGHT, LAGGING it is the win, because the call was "avoid this".
+    _hb = rep["horizon"]
+    _open = _hb.get("status") == "OPEN"
+    # When the window is still running, fall back to the RUNNING numbers (anchor
+    # -> last EOD) so the user can see where it stands. These are shown WITHOUT a
+    # win/lose tick: ticking an unfinished call would flatter or damn it by
+    # accident, which is the whole reason the scorecard waits for the close.
+    _src = _hb if not _open else rep.get("to_today", {})
+    _ps = _src.get("per_sector") if _src.get("status") == "DONE" else None
+
+    # WHICH BENCHMARK the tick marks judge against. The two answer different
+    # questions and a rotation call can pass one and fail the other:
+    #   Nifty 50   - what you could actually have bought instead. The investable
+    #                alternative, and the honest "was this worth doing at all".
+    #   basket     - equal-weight across every sector. Not investable, but it IS
+    #                what the tilt's published edge is measured against, so it
+    #                answers "was the ROTATION right, among sectors".
+    _bm_choice = st.radio(
+        "Judge each sector against", ["Nifty 50", "All-sector basket"],
+        index=0, horizontal=True, key="tilt_replay_bench",
+        help="Which yardstick the ✅/❌ marks use.\n\n"
+             "Nifty 50 — could you have just bought the index instead? The "
+             "practical test.\n\n"
+             "All-sector basket — did picking these sectors beat owning all of "
+             "them? The fair test of the picking itself, and the one this tab's "
+             "track record is based on.\n\n"
+             "A sector can pass one and fail the other, so it is worth checking "
+             "both.")
+    _use_nifty = _bm_choice == "Nifty 50"
+    _bask = _src.get("basket_abs") if _src.get("status") == "DONE" else None
+    _nif = _src.get("nifty_abs") if _src.get("status") == "DONE" else None
+    # Nifty can be missing (no index rows in range) — fall back rather than mark
+    # every sector against NaN, which would silently turn every call into a miss.
+    _bm_fellback = _use_nifty and (_nif is None or _nif != _nif)
+    _base = (_bask if (not _use_nifty or _bm_fellback) else _nif)
+    _base_lbl = ("all-sector basket" if (not _use_nifty or _bm_fellback) else "Nifty 50")
+
+    def _inline(names: list, want_beat: bool) -> str:
+        if not names:
+            return "_none_"
+        if _ps is None:
+            return ", ".join(f"{n} _(no data yet)_" for n in names)
+        out = []
+        for n in names:
+            v = _ps.get(n, float("nan")) if hasattr(_ps, "get") else float("nan")
+            if v != v:                                   # NaN → sector had no data
+                out.append(f"{n} _(no data)_"); continue
+            col = "#16a34a" if v >= 0 else "#dc2626"
+            if _open:
+                # running: direction vs benchmark only, never a verdict
+                ahead = (v > _base) if want_beat else (v < _base)
+                mark = ("<span style='color:#8a8f98'>▲ahead</span>" if ahead
+                        else "<span style='color:#8a8f98'>▼behind</span>")
+                out.append(f"**{n}** <span style='color:{col}'>({v:+.2f}% so far)</span> {mark}")
+            else:
+                mark = "✅" if ((v > _base) if want_beat else (v < _base)) else "❌"
+                out.append(f"**{n}** <span style='color:{col}'>({v:+.2f}%)</span> {mark}")
+        return " · ".join(out)
+
+    # Headline the OUTCOME DATE. "10-session window" is precise but nobody reads a
+    # session count as a date; the user needs to see WHEN this was settled. When
+    # the window is still running, show how far in it is instead of a fake date.
+    if _open:
+        _rem = rep.get("sessions_remaining", 0)
+        _ela = rep.get("sessions_elapsed", 0)
+        _run_end = rep.get("today")
+        st.markdown(
+            f"#### ⏳ Running — {_ela} of {horizon_days} sessions done"
+            f"{f', {_rem} to go' if _rem else ''}"
+            + (f" · as at the close of {_run_end:%d %b %Y}" if _run_end else ""))
+        st.caption(
+            f"The {horizon_label} call made on **{anchor:%d %b %Y}** has not finished "
+            f"its window, so the numbers below are **running totals to the last "
+            f"close**, not the result. They carry ▲ahead / ▼behind versus "
+            f"**{_base_lbl}** ({_base:+.2f}% so far) rather than ✅/❌ — a call is "
+            f"only scored once its window closes, because a mid-window read flatters "
+            f"or damns it by accident. Expect these to move."
+            if _ps is not None else
+            f"The {horizon_label} call made on **{anchor:%d %b %Y}** has not finished "
+            f"its window, and no sessions have elapsed yet — nothing to show.")
+    else:
+        _he = rep["horizon_end"]
+        _sess = _hb.get("sessions", horizon_days)
+        st.markdown(f"#### 📅 Result at the close of {_he:%d %b %Y} ({_he:%a})")
+        _gap = (f" — {_sess} sessions of data across the {horizon_days}-session "
+                f"window (one session had no sector data)"
+                if _sess != horizon_days else
+                f" — {_sess} sessions")
+        _other = (_bask if _use_nifty else _nif)
+        _bits = [
+            f"Signal given **{anchor:%d %b %Y}** at the close, held to the close of "
+            f"**{_he:%d %b %Y}**{_gap}.",
+            f" Tick marks judge each sector against **{_base_lbl}** ({_base:+.2f}%)",
+        ]
+        if _bm_fellback:
+            _bits.append(" _(Nifty unavailable for this window - fell back to the basket)_")
+        if _other is not None and _other == _other:
+            _bits.append(f"; the other benchmark returned {_other:+.2f}%")
+        _bits.append(f". For an avoid-call, lagging the {_base_lbl} is the win.")
+        if _use_nifty and not _bm_fellback:
+            _bits.append(" Beating Nifty is the practical test - it is what you could",
+                         )
+            _bits.append(" have held instead. Beating the basket is the rotation test,")
+            _bits.append(" and it is the one this tab's headline edge is measured on.")
+        st.caption("".join(_bits))
+    _o1, _o2 = st.columns(2)
+    with _o1:
+        st.markdown("🟢 **Overweight (the buy list)**")
+        st.markdown(_inline(rep["ow"], want_beat=True), unsafe_allow_html=True)
+    with _o2:
+        st.markdown("🔴 **Underweight (avoid / trim)**")
+        st.markdown(_inline(rep["uw"], want_beat=False), unsafe_allow_html=True)
+    if _ps is not None and _open:
+        _ow_ah = sum(1 for n in rep["ow"] if _ps.get(n, float("nan")) > _base)
+        _uw_ah = sum(1 for n in rep["uw"] if _ps.get(n, float("nan")) < _base)
+        _n = len(rep["ow"]) + len(rep["uw"])
+        st.caption(
+            f"**Running position vs {_base_lbl}** (NOT a score — {_rem} session"
+            f"{'s' if _rem != 1 else ''} still to go): buy list {_ow_ah}/"
+            f"{len(rep['ow'])} ahead · avoid list {_uw_ah}/{len(rep['uw'])} behind "
+            f"(which is the win) · {_ow_ah + _uw_ah}/{_n} currently on the right "
+            f"side. This will change before the window closes.")
+    elif not _open and _ps is not None:
+        _ow_hit = sum(1 for n in rep["ow"] if _ps.get(n, float("nan")) > _base)
+        _uw_hit = sum(1 for n in rep["uw"] if _ps.get(n, float("nan")) < _base)
+        _n_ow, _n_uw = len(rep["ow"]), len(rep["uw"])
+        st.caption(
+            f"**Scorecard vs {_base_lbl}:** buy list {_ow_hit}/{_n_ow} beat it · "
+            f"avoid list {_uw_hit}/{_n_uw} lagged it (which is the win) · "
+            f"{_ow_hit + _uw_hit}/{_n_ow + _n_uw} calls correct overall. "
+            f"With {_n_ow + _n_uw} names, coin-flip expectation is "
+            f"{(_n_ow + _n_uw) / 2:.1f} — one date cannot separate skill from luck. "
+            f"Switching the benchmark above can move individual marks, because the "
+            f"two differ by "
+            f"{abs((_bask or 0) - (_nif or 0)):.2f}pp over this window.")
+
+    def _block(b: dict, primary: bool) -> None:
+        if b["status"] == "OPEN":
+            st.info(f"**{b['label'].capitalize()}** — still open. The "
+                    f"{horizon_days}-session window has not finished yet, so there "
+                    f"is no result to show. A partial window is not a result.")
+            return
+        if b["status"] != "DONE":
+            st.caption(f"{b['label']}: no data"); return
+        tag = "the fair scorecard" if primary else "P&L only — NOT the signal's claim"
+        st.markdown(f"**{b['label'].capitalize()}** · {b['sessions']} sessions · _{tag}_")
+        m1, m2, m3 = st.columns(3)
+        m1.metric("Buy list", f"{b['ow_abs']:+.2f}%",
+                  delta=f"{b['ow_vs_basket']:+.2f}pp vs all sectors",  # buy list MINUS basket
+                  help="What the sectors it told you to BUY returned over this "
+                       "window, splitting your money equally between them.\n\n"
+                       "The small number below compares that to buying every "
+                       "sector instead. Green means the picking helped; red means "
+                       "you'd have done better not picking at all.")
+        m2.metric("All-sector basket", f"{b['basket_abs']:+.2f}%",
+                  help="What you'd have made splitting your money equally across "
+                       "ALL sectors — the 'don't pick anything' result.\n\n"
+                       "This is the fair test of the picking itself. If the buy "
+                       "list can't beat this, choosing sectors added nothing.")
+        # The delta is buy-list MINUS Nifty. Labelling it "vs buy list" under the
+        # Nifty tile read as "Nifty is -1.22pp vs the buy list", i.e. the opposite
+        # of the truth. Name the subject explicitly instead.
+        m3.metric("Nifty 50", f"{b['nifty_abs']:+.2f}%",
+                  delta=f"buy list {b['ow_vs_nifty']:+.2f}pp vs this", delta_color="off",
+                  help="What the Nifty 50 index did over the same window — what "
+                       "you'd have made just buying an index fund and doing "
+                       "nothing else.\n\n"
+                       "The number below says how the buy list did against it. "
+                       "Negative means the index beat your picks.\n\n"
+                       "All three figures are price only — dividends are not "
+                       "included in any of them, so they are compared fairly.")
+        # One plain sentence stating who won, because three tiles + two deltas is
+        # a lot to parse and the sign of a relative number is easy to misread.
+        _win = max([("the buy list", b["ow_abs"]), ("the all-sector basket", b["basket_abs"]),
+                    ("Nifty 50", b["nifty_abs"])], key=lambda x: x[1] if x[1] == x[1] else -1e9)
+        _bl = "beat" if b["ow_vs_basket"] > 0 else "lagged"
+        _nl = "beat" if b["ow_vs_nifty"] > 0 else "lagged"
+        st.caption(
+            f"**Over this window the buy list returned {b['ow_abs']:+.2f}%, the "
+            f"all-sector basket {b['basket_abs']:+.2f}% and Nifty 50 "
+            f"{b['nifty_abs']:+.2f}% — so the buy list {_bl} the basket by "
+            f"{abs(b['ow_vs_basket']):.2f}pp and {_nl} Nifty by "
+            f"{abs(b['ow_vs_nifty']):.2f}pp. Best of the three: {_win[0]}.**")
+        st.caption(
+            f"Buy-minus-avoid spread **{b['ow_minus_uw']:+.2f}pp** "
+            f"(underweight basket {b['uw_abs']:+.2f}%). "
+            + (f"⚠️ {len(b['missing'])} suggested sector(s) had no forward data and are "
+               f"excluded: {', '.join(b['missing'])}. " if b.get("missing") else "")
+            + "Gross of cost.")
+
+    st.markdown("")
+    _b1, _b2 = st.columns(2)
+    with _b1:
+        _block(rep["horizon"], True)
+    with _b2:
+        _block(rep["to_today"], False)
+
+    ev = rep.get("evidence") or {}
+    st.caption(
+        "**One date is one observation — do not generalise from it.** For scale, the "
+        f"{horizon_label} horizon's full record is "
+        + (f"**{ev.get('net_yr', float('nan')):+.1f}%/yr** net of cost "
+           f"(t {ev.get('net_t', float('nan')):.2f}) across the whole 2018-2026 sample"
+           if ev else "shown in the evidence box above")
+        + ". A single good or bad replay says almost nothing; the aggregate does.\n\n"
+        "**Two caveats on these numbers.** They are GROSS of cost — a real basket pays "
+        "~0.5% a round trip. And `v_sector_master` has no as-of column, so each sector's "
+        "history is measured on the stocks in it *today*; a name that joined later is "
+        "treated as always having been there, which flatters every historical sector "
+        "return shown here."
+    )
+
+
 def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
     """Cross-sectional momentum sector tilt, regime-gated, at a user-selected
     forward horizon (1-2 .. 11-12 weeks). The RS lookback scales with the horizon;
@@ -4009,6 +4745,17 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
     )
     _hd = dict(TILT_HORIZONS)[_pick]
     _ev = _HORIZON_EVIDENCE.get(_hd, {})
+
+    # ── RESULTS: what did this tab say on a past date, and what followed? ──────
+    _rc1, _rc2 = st.columns([3, 1])
+    with _rc2:
+        _show_res = st.toggle("📊 Results", value=False, key="tilt_results",
+                              help="Turn this on to look back: pick any past date, "
+                                   "see which sectors this tab suggested that day, "
+                                   "and find out whether they actually went up.")
+    if _show_res:
+        _render_tilt_replay(selected_date, min_turnover, _hd, _pick)
+        st.markdown("---")
 
     # Every factor label below must follow the radio. The VALUES were already
     # horizon-scaled; leaving the labels fixed at "rs2w / 2-week / 10-day" meant a
@@ -4606,12 +5353,14 @@ def _render_month_seasonality(selected_date: date) -> None:
 def render(selected_date: date, min_turnover: float, all_dates: list | None = None) -> None:
     st.subheader("🔄 Sector Rotation — Smart Money Tracker")
 
-    tab_smart, tab_tilt, tab_clock, tab_rs, tab_season = st.tabs([
+    (tab_smart, tab_tilt, tab_clock, tab_rs, tab_season,
+     tab_oper) = st.tabs([
         "🎯 Smart Money (Daily Signal)",
         "🧭 Forward Tilt",
         "📅 Rotation Clock",
         "📈 vs Nifty50",
         "🗓️ Month-Wise Best/Worst",
+        "🕵️ Operator Footprint",
     ])
 
     with tab_smart:
@@ -4628,3 +5377,6 @@ def render(selected_date: date, min_turnover: float, all_dates: list | None = No
 
     with tab_season:
         _render_month_seasonality(selected_date)
+
+    with tab_oper:
+        _render_operator_footprint(selected_date)
