@@ -4059,14 +4059,15 @@ def _render_operator_footprint(selected_date: date) -> None:
                  "trimmed down to whatever survives.")
     with c2:
         st.caption(
-            "Ranked by **money that arrived today**, measured against what counts "
-            "as large *for that kind of strike* — an at-the-money book is far "
-            "deeper than an in-the-money one, so each is judged on its own scale "
-            "(bar: ITM ₹24 Cr, deep-OTM ₹37 Cr, OTM ₹58 Cr, ATM ₹74 Cr, set from "
-            "prior sessions only). In-the-money strikes are weighted up: ordinary "
-            "flow lives out-of-the-money, so real money appearing in-the-money is "
-            "the harder event to explain away. Standing open interest alone scores "
-            "zero — the question is what just changed.")
+            "Ranked by **money that arrived today**, compared with what counts as "
+            "a lot *for that kind of strike*. At-the-money strikes are always busy, "
+            "in-the-money ones rarely are, so each is judged on its own scale — "
+            "otherwise the at-the-money names would fill the whole list.\n\n"
+            "In-the-money strikes count for more: everyday trading happens "
+            "out-of-the-money, so big money showing up in-the-money is the harder "
+            "thing to explain.\n\n"
+            "Open interest that is just *sitting* there scores nothing. The "
+            "question is what changed today.")
 
     try:
         rep = cached_operator_footprint(selected_date, float(min_cr))
@@ -4138,7 +4139,15 @@ def _render_operator_footprint(selected_date: date) -> None:
     show["₹ Cr added"] = show["top_add_cr"].round(0)
     show["vs own normal"] = show["top_add_vs_norm"].round(1)
     show["₹ Cr"] = show["top_notional_cr"].round(0)
-    show["Call share of adds"] = show["call_share_of_adds_pct"].round(0)
+    # A lone "call share %" forces the reader to work out the put side and to hold
+    # a 50% threshold in their head. Name the side that actually won instead.
+    def _side_txt(v):
+        if v != v:
+            return "—"
+        return ("CALLS %.0f%%" % v if v >= 55 else
+                "PUTS %.0f%%" % (100 - v) if v <= 45 else
+                "even %.0f/%.0f" % (v, 100 - v))
+    show["New OI went to"] = [_side_txt(v) for v in show["call_share_of_adds_pct"]]
     # Spell the direction out next to the act. "PUT WRITING" is bullish and
     # "CALL WRITING" is bearish — not obvious at a glance, and getting it backwards
     # inverts the whole read of the row.
@@ -4150,7 +4159,7 @@ def _render_operator_footprint(selected_date: date) -> None:
             "top_moneyness": "Where", "What happened": "What happened",
             "₹ Cr added": "₹ Cr added", "vs own normal": "vs own normal",
             "₹ Cr": "₹ Cr",
-            "Call share of adds": "Call share of adds %",
+            "New OI went to": "New OI went to",
             "fut_action": "Futures", "n_unusual": "Unusual strikes"}
     have = [c for c in cols if c in show.columns]
     # Explicit height so every row renders without a NESTED scrollbar. Streamlit
@@ -4160,80 +4169,78 @@ def _render_operator_footprint(selected_date: date) -> None:
         show[have].rename(columns=cols), hide_index=True, use_container_width=True,
         height=int(min(len(show), 25)) * 35 + 45,
         column_config={
-            "vs own normal": st.column_config.NumberColumn(
+            "Stock": _htc(
+                help="Pick this name in the 'Strike-by-strike detail' box below to "
+                     "see every strike behind the row."),
+            "Spot": _hnc(
+                format="%.2f", help="The stock's closing price on this date."),
+            "Biggest strike": _htc(
+                help="The single strike where the most notable money arrived today. "
+                     "CE = call, PE = put. Every other column on this row that says "
+                     "'strike' refers to this one."),
+            "Where": _htc(
+                help="Where that strike sits against the current price.\n\n"
+                     "**ITM** (in the money) — already has real value: a call below "
+                     "the price, or a put above it.\n"
+                     "**ATM** (at the money) — within 2% of the price.\n"
+                     "**OTM** (out of the money) — only pays off if the stock moves "
+                     "further.\n\n"
+                     "Most everyday trading is OTM, so big money appearing ITM is "
+                     "the more unusual event and is weighted higher here."),
+            "vs own normal": _hnc(
                 format="%.1fx",
-                help="**Money added today, divided by what a normal day's build is "
-                     "worth here.** 3x = three times the usual daily build. It is a "
-                     "FLOW comparison, not a standing-size one.\n\n"
-                     "'Normal' = the same moneyness bucket at the same point in the "
-                     "expiry cycle, averaged over the last **3 COMPLETED** expiry "
-                     "cycles — cycles that have already ended. Live contracts are "
-                     "excluded on purpose: they used to make up 42% of the baseline, "
-                     "which meant a position an operator spent last week building "
-                     "was sitting inside the 'normal' it was compared against, "
-                     "hiding it.\n\n"
-                     "Blank = no reliable baseline (a normal day's build there is "
-                     "under ₹2 Cr), so no multiple is quoted and the row ranks on "
-                     "money alone. This matters: option flow is mostly zero, so an "
-                     "unfloored ratio explodes — 69% of the old '10x' readings sat "
-                     "on a near-empty baseline and were a median ₹2 Cr trade."),
-            "What happened": st.column_config.TextColumn(
-                help="What was done to the option, and what that implies for the "
-                     "STOCK (in brackets).\n\n"
-                     "OI up + premium up = someone BOUGHT it. OI up + premium down "
-                     "= someone WROTE (sold) it.\n\n"
-                     "**CALL BUYING and PUT WRITING are both bullish. "
-                     "PUT BUYING and CALL WRITING are both bearish.** Writing a put "
-                     "is bullish — the writer keeps the premium as long as the "
-                     "stock stays above the strike.\n\n"
-                     "**· ROLLED** = the same strike was unwound in a nearer expiry "
-                     "the same day, so this is an existing position moving forward, "
-                     "not new conviction. It appears almost only in expiry week "
-                     "(measured: 45% of scored strikes then, ~0% mid-cycle). Still "
-                     "worth seeing — rolling means the operator chose to STAY.\n\n"
-                     "NEW STRIKE = NSE only listed this strike today, so there is "
-                     "no previous premium to compare against. It opened with size "
-                     "already in it — notable, not missing. Stocks whose ENTIRE "
-                     "ladder was re-priced by a corporate action are excluded "
-                     "instead of shown this way, since there the 'new' strike is "
-                     "just an old position renamed.\n\n"
-                     "⚠️ Read this as a description of the DAY, not as order flow. "
-                     "An option's premium moves with the stock, so on a day the "
-                     "stock rose, almost any call with rising OI reads as BUYING. "
-                     "Measured: a call's premium moved with spot 83% of the time, "
-                     "a put's against spot 94%. Separating genuine demand needs "
-                     "the premium move net of delta, which this data lacks."),
-            "Call share of adds %": st.column_config.NumberColumn(
-                format="%d%%",
-                help="Of all the open interest added today across **every liquid "
-                     "strike and every expiry of this stock**, how much went to "
-                     "calls. It is a whole-stock number — it does NOT describe the "
-                     "'Biggest strike' row next to it. Above ~70% means the day's "
-                     "activity was very one-sided.\n\n"
-                     "⚠️ **One-sided is not the same as bullish.** Calls being added "
-                     "can be call WRITING, which is bearish. Read this together with "
-                     "'What happened' — e.g. a 72% call share alongside CALL WRITING "
-                     "is heavy call SELLING, i.e. someone capping the upside."),
-            "Unusual strikes": st.column_config.NumberColumn(
-                help="How many separate strikes in this stock cleared the event bar "
-                     "today — at least ₹15 Cr of fresh open interest with OI rising. "
-                     "It measures BREADTH, not size: 3 means the money landed in a "
-                     "few places, 38 means it was spread across the chain. "
-                     "Concentrated is the more interesting case for a single "
-                     "deliberate position; broad can just be a busy day in an "
-                     "actively traded name."),
-            "₹ Cr added": st.column_config.NumberColumn(
+                help="How big today's build is next to a normal day's build at this "
+                     "kind of strike. 3x = three times normal.\n\n"
+                     "'Normal' comes from the last 3 expiry cycles that have already "
+                     "finished.\n\n"
+                     "Blank = this strike is normally too quiet to have a reliable "
+                     "normal, so no multiple is shown and the row is ranked on money "
+                     "alone."),
+            "What happened": _htc(
+                help="What was done to the option, and what it means for the STOCK "
+                     "(in brackets).\n\n"
+                     "Open interest up + premium up = someone BOUGHT it.\n"
+                     "Open interest up + premium down = someone SOLD (wrote) it.\n\n"
+                     "**Bullish:** CALL BUYING, PUT WRITING.\n"
+                     "**Bearish:** PUT BUYING, CALL WRITING.\n\n"
+                     "Writing a put is bullish — the seller keeps the premium as "
+                     "long as the stock stays above the strike.\n\n"
+                     "**· ROLLED** = an old position moved into a later expiry, not "
+                     "new conviction. Mostly seen in expiry week.\n\n"
+                     "**NEW STRIKE** = listed today, so there is no earlier premium "
+                     "to compare and we cannot say bought or sold.\n\n"
+                     "⚠️ Treat bought-vs-sold as a hint, not a fact. An option's "
+                     "premium mostly follows the stock, so on an up day almost any "
+                     "call with rising open interest looks 'bought'. The ₹ Cr added "
+                     "is the number to trust."),
+            "New OI went to": _htc(
+                help="Which side today's new open interest went to, across ALL "
+                     "strikes and expiries of this stock. 'CALLS 72%' means 72% of "
+                     "the new open interest was in calls and 28% in puts.\n\n"
+                     "This is a whole-stock number — it does not describe the "
+                     "'Biggest strike' next to it.\n\n"
+                     "⚠️ Calls busy does NOT mean bullish. Those calls may be "
+                     "getting SOLD, which is bearish. Check 'What happened' for the "
+                     "side."),
+            "Unusual strikes": _hnc(
+                help="How many separate strikes in this stock saw big new money "
+                     "today.\n\n"
+                     "This is about SPREAD, not size. A low number means the money "
+                     "landed in a few places, which is more interesting — it looks "
+                     "like one deliberate position. A high number is usually just a "
+                     "busy day."),
+            "₹ Cr added": _hnc(
                 format="%.0f",
-                help="Rupee value of the open interest that appeared TODAY in that "
-                     "one strike. This is the most trustworthy number on the row — "
-                     "the money genuinely arrived. The ranking is built on it."),
-            "Futures": st.column_config.TextColumn(
-                help="The same read applied to the near-month future. Here LONG/"
-                     "SHORT BUILDUP carry their usual meaning — long or short the "
-                     "STOCK — because a future has no writing/buying asymmetry."),
-            "₹ Cr": st.column_config.NumberColumn(
-                format="%.0f", help="Total notional already sitting at that strike "
-                                    "(standing size, not today's activity)."),
+                help="Rupee value of the new open interest that appeared TODAY in "
+                     "that one strike. The most reliable number here — this money "
+                     "really did arrive. The list is ranked on it."),
+            "Futures": _htc(
+                help="The same read on the near-month future. Here LONG BUILDUP and "
+                     "SHORT BUILDUP mean what they normally do — long or short the "
+                     "STOCK — because a future has no buying/selling asymmetry."),
+            "₹ Cr": _hnc(
+                format="%.0f", help="Total money already sitting at that strike, "
+                                    "built up over time — not today's activity."),
         })
 
     st.markdown("##### Strike-by-strike detail")
@@ -4261,44 +4268,93 @@ def _render_operator_footprint(selected_date: date) -> None:
         det["vs normal"] = det["add_vs_norm"].round(1)
         det["₹ Cr"] = det["notional_cr"].round(0)
         det["% of book"] = det["book_share_pct"].round(1)
+        # Expiry rendered as "2026-08-25 00:00:00" — a midnight timestamp on a
+        # contract that has no time component. Format it as a date.
+        det["Expiry"] = pd.to_datetime(det["expiry_date"]).dt.strftime("%d %b %Y")
         st.dataframe(
-            det[["expiry_date", "Strike", "moneyness", "action", "Premium",
+            det[["Expiry", "Strike", "moneyness", "action", "Premium",
                  "Prem chg", "OI", "OI added", "₹ Cr added", "vs normal",
                  "₹ Cr", "% of book"]]
-            .rename(columns={"expiry_date": "Expiry", "moneyness": "Where",
-                             "action": "What happened"}),
+            .rename(columns={"moneyness": "Where", "action": "What happened"}),
             hide_index=True, use_container_width=True,
-            height=int(min(len(det), 20)) * 35 + 45)
+            height=int(min(len(det), 20)) * 35 + 45,
+            column_config={
+                "Expiry": _htc(
+                    help="When this contract settles. Stock options are monthly, so "
+                         "up to three are live at once — near, next and far."),
+                "Strike": _htc(
+                    help="CE = call, PE = put, followed by the strike price."),
+                "Where": _htc(
+                    help="Where the strike sits against the current price.\n\n"
+                         "**ITM** (in the money) — already has real value: a call "
+                         "below the price, or a put above it.\n"
+                         "**ATM** (at the money) — within 2% of the price.\n"
+                         "**OTM** (out of the money) — only pays off if the stock "
+                         "moves further.\n\n"
+                         "Most everyday trading is OTM, so big money appearing ITM "
+                         "is the more unusual event."),
+                "What happened": _htc(
+                    help="What was done to this option, and what it means for the "
+                         "STOCK (in brackets).\n\n"
+                         "**Bullish:** CALL BUYING, PUT WRITING.\n"
+                         "**Bearish:** PUT BUYING, CALL WRITING.\n\n"
+                         "⚠️ Bought-vs-sold is a hint, not a fact — an option's "
+                         "premium mostly just follows the stock."),
+                "Premium": _hnc(
+                    format="%.2f", help="What one unit of this option costs today."),
+                "Prem chg": _hnc(
+                    format="%.2f",
+                    help="How much the premium moved today. Its direction is what "
+                         "decides the bought-vs-sold label."),
+                "OI": _hnc(
+                    format="%,d",
+                    help="Open interest: how many shares' worth of this option are "
+                         "currently held open. Total size, built up over time."),
+                "OI added": _hnc(
+                    format="%,d",
+                    help="How much open interest appeared TODAY, in shares."),
+                "₹ Cr added": _hnc(
+                    format="%.0f",
+                    help="The same as 'OI added' but in rupees. **The most reliable "
+                         "number here** — this money really did arrive today, and "
+                         "the ranking is built on it."),
+                "vs normal": _hnc(
+                    format="%.1fx",
+                    help="How big today's build is next to a normal day's build at "
+                         "this kind of strike. 3x = three times normal.\n\n"
+                         "Blank means this strike is normally too quiet to have a "
+                         "reliable normal, so no multiple is shown."),
+                "₹ Cr": _hnc(
+                    format="%.0f",
+                    help="Total money sitting at this strike, built up over time — "
+                         "not today's activity."),
+                "% of book": _hnc(
+                    format="%.1f%%",
+                    help="This strike's share of ALL the open interest in this "
+                         "stock's options. A high number means the stock's "
+                         "positioning is concentrated right here."),
+            })
         st.caption(
-            "**Reading it:** the label says what was done to the option, and the "
-            "direction that implies for the **stock**. `CALL BUYING` and "
-            "`PUT WRITING` are both **bullish**; `PUT BUYING` and `CALL WRITING` "
-            "are both **bearish**. Note `PUT WRITING` is bullish — the writer keeps "
-            "the premium as long as the stock stays above the strike. "
-            "⚠️ **The buy-vs-write read is weak.** It comes from the premium's "
-            "direction, and a premium mostly just follows the stock: measured here, "
-            "a call's premium moved with spot 83% of the time and a put's against "
-            "spot 94%. So on a day the stock rallied, `PUT WRITING` is close to "
-            "restating that rally. Trust the **₹ Cr added** — that money is real; "
-            "treat the buy/write side as a lean, not a fact. "
-            "In-the-money strikes matter more because ordinary flow "
-            "lives out-of-the-money; real money appearing in-the-money is harder "
-            "to explain away — which is why they are weighted higher in the "
-            "ranking, though the backtest found even that carries no forward edge.")
+            "**How to read it:** bullish = `CALL BUYING` or `PUT WRITING`. "
+            "Bearish = `PUT BUYING` or `CALL WRITING`. Selling a put is bullish — "
+            "the seller keeps the premium while the stock holds above the strike.\n\n"
+            "⚠️ **Bought-vs-sold is a hint, not a fact.** It is worked out from the "
+            "premium's direction, and a premium mostly just follows the stock — so "
+            "on a day the stock rallied, `PUT WRITING` is close to simply repeating "
+            "that the stock rallied. **Trust the ₹ Cr added**: that money really "
+            "arrived. Treat the side as a lean.")
 
     st.caption(
-        "**This list skews to CALM stocks, not busy ones** — measured, the names "
-        "that score have a median annualised volatility of ~27% against ~39% for "
-        "the whole F&O universe. That is mechanical: a quiet stock has a stable "
-        "open-interest baseline, so a deviation stands out, while a volatile name "
-        "is noisy enough that nothing looks abnormal. Unusual size in a quiet "
-        "stock is arguably the more interesting event — but 'where size showed "
-        "up' is not the same as 'where the action is'.\n\n"
+        "**This list leans towards CALM stocks, not busy ones.** A quiet stock has "
+        "a steady baseline, so anything unusual stands out; a wild stock is noisy "
+        "enough that nothing looks unusual. Big money in a quiet stock is arguably "
+        "the more interesting event — but 'where size showed up' is not the same "
+        "as 'where the action is'.\n\n"
         f"Scanned {meta['n_symbols']} F&O stocks · {meta['n_strikes_liquid']:,} "
-        f"strikes above ₹{meta['min_notional_cr']:.0f} Cr · normalised against the "
-        f"last {meta['prior_cycles']} expiry cycles at matched days-to-expiry and "
-        f"moneyness. Stock options are monthly, so 3 cycles ≈ 3 months. F&O history "
-        f"starts 2024-07-24, which is the hard limit on any comparison here.")
+        f"strikes above ₹{meta['min_notional_cr']:.0f} Cr · compared with the last "
+        f"{meta['prior_cycles']} finished expiry cycles at the same point in the "
+        f"cycle and the same distance from the price. Stock options are monthly, so "
+        f"3 cycles ≈ 3 months. F&O data starts 2024-07-24.")
 
 
 def _render_clock_replay(selected_date: date, min_turnover: float,
