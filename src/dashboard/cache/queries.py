@@ -647,11 +647,14 @@ def cached_next_month_context(as_of: date) -> dict:
 
 
 @st.cache_data(ttl=_TTL)
-def cached_analogues(as_of: date) -> dict:
+def cached_analogues(as_of: date, mode: str = "price") -> dict:
     """Past setups resembling `as_of` and what followed. Descriptive — the
-    analogue vote tested null/inverted; see src/analytics/market_context.py."""
+    analogue vote tested null/inverted; see src/analytics/market_context.py.
+
+    `mode`: "price" (price structure, 2013+) or "price+fii" (adds FII
+    positioning, 2018+). Neither beats the base rate; see the module note."""
     from src.analytics.market_context import get_analogues
-    return get_analogues(as_of)
+    return get_analogues(as_of, mode=mode)
 
 
 @st.cache_data(ttl=_TTL)

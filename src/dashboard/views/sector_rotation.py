@@ -5553,8 +5553,29 @@ def _render_market_next_month(selected_date: date) -> None:
 
     # ── ANALOGUES — past setups that looked like today, and what followed ───
     st.markdown("##### Days that looked like today, and what happened next")
+    _mode_lbl = st.radio(
+        "Match on", ["Price structure (2013+)", "Price + FII positioning (2018+)",
+                     "FII positioning only (2018+)"],
+        horizontal=True, key="mnm_ana_mode", label_visibility="collapsed",
+        help="What has to look similar for a past day to count as a match.\n\n"
+             "**PRICE STRUCTURE** — the chart. How much the market has moved "
+             "recently, where it sits versus its 50- and 200-day averages, how "
+             "jumpy it has been, how far below its 12-month high. Example: today "
+             "is 2% above its 50-day average, mildly choppy, 6% off its high — it "
+             "finds past days that looked like that. Goes back to 2013.\n\n"
+             "**PRICE + FII** — the same chart test, plus FII positioning has to "
+             "be similar too. Back to 2018 only.\n\n"
+             "**FII POSITIONING ONLY** — the chart is ignored completely. It asks: "
+             "when have FIIs been positioned the way they are today? Example: "
+             "today they are net long futures, leaning bullish in options and "
+             "trading at normal volume — it finds past days matching THAT, even if "
+             "the market looked nothing like today. Back to 2018.\n\n"
+             "The three give different answers because they ask different "
+             "questions. See the note under the table for how accurate each is.")
+    _mode = ("fii" if _mode_lbl.startswith("FII")
+             else "price+fii" if "FII" in _mode_lbl else "price")
     try:
-        ana = cached_analogues(selected_date)
+        ana = cached_analogues(selected_date, _mode)
     except Exception as exc:                                    # noqa: BLE001
         ana = {"ok": False, "error": str(exc)}
     if not ana.get("ok"):
@@ -5579,43 +5600,115 @@ def _render_market_next_month(selected_date: date) -> None:
             height=int(len(show)) * 35 + 45,
             column_config={
                 "Match": _hnc(format="%.2f",
-                    help="Distance from today's setup — lower is a closer match. "
-                         "Built from trend, momentum, volatility, drawdown from the "
-                         "52-week high, and the 50-day slope."),
-                "Nifty then": _hnc(format="%,.0f", help="Where Nifty closed that day."),
-                "1 week": _hnc(format="%+.2f%%", help="What Nifty did over the next week."),
-                "2 weeks": _hnc(format="%+.2f%%", help="What Nifty did over the next 2 weeks."),
-                "1 month": _hnc(format="%+.2f%%", help="What Nifty did over the next month."),
+                    help="How closely that day resembled today. **Lower = more "
+                         "alike.** 0.4 is a very close match; 1.5 is loose.\n\n"
+                         "Example: a day scoring 0.45 had almost the same setup as "
+                         "today. A day scoring 1.4 was in the same broad ballpark "
+                         "but noticeably different.\n\n"
+                         "⚠️ **A closer match is NOT a more reliable one.** Checked "
+                         "against what actually happened afterwards: the closest "
+                         "quarter of matches called the direction right 55% of the "
+                         "time, the furthest quarter 63%. So do not trust the top "
+                         "row more than the bottom one — use this only to see "
+                         "WHICH days are being compared."),
+                "Nifty then": _hnc(format="%,.0f",
+                    help="Where Nifty closed on that day.\n\n"
+                         "The level itself is ignored when matching — only the "
+                         "SHAPE of the setup counts. That is why 2015 at 8,400 can "
+                         "match today at 24,400: both can be, say, 2% above their "
+                         "50-day average and 6% off their 12-month high."),
+                "1 week": _hnc(format="%+.2f%%",
+                    help="How much Nifty moved in the 5 trading days after that "
+                         "day. Example: +2.11% means someone buying that close was "
+                         "up 2.11% a week later."),
+                "2 weeks": _hnc(format="%+.2f%%",
+                    help="The move over the 10 trading days after that day."),
+                "1 month": _hnc(format="%+.2f%%",
+                    help="The move over the 21 trading days after that day. "
+                         "Example: 2020-10-20 matched today's setup and Nifty was "
+                         "+8.75% a month later — while 2024-12-09 also matched and "
+                         "was −3.78%. Same-looking setups, opposite outcomes: that "
+                         "spread is the point of this table."),
             })
         st.caption(
-            f"**These are {am['k']} separate episodes, not {am['k']} adjacent days.** "
-            f"Matches must be at least {am['min_sep']} sessions apart. Without that "
-            f"rule the closest matches sit a median of {am['median_gap_no_guard']} "
-            f"sessions apart — the same week counted {am['k']} times, which would "
-            f"invent a confident consensus from one observation. With it, the median "
-            f"gap is {am['median_gap_guard']} sessions.")
-        st.warning(
-            "⚠️ **A lopsided vote here is NOT evidence of direction.** Tested "
-            f"walk-forward over {am['walk_forward_days']:,} days: when at least 70% "
-            "of analogues had risen, Nifty then rose "
-            f"**{am['bull_hit'][0]:.1f}% / {am['bull_hit'][1]:.1f}% / "
-            f"{am['bull_hit'][2]:.1f}%** of the time at 1 week / 2 weeks / 1 month, "
-            f"against base rates of **{am['base_hit'][0]:.1f}% / "
-            f"{am['base_hit'][1]:.1f}% / {am['base_hit'][2]:.1f}%** — slightly "
-            "better at one week, the same at two, **worse at one month**. A sign "
-            "that flips with the horizon is noise, not a weak signal. Rank "
-            f"correlation with what actually happened: {am['ic_1w']:+.3f} / "
-            f"{am['ic_2w']:+.3f} / {am['ic_1m']:+.3f} — essentially zero. "
-            "**Use the SPREAD, not the vote** — the value is seeing how differently "
-            "the market resolved from setups that looked alike.")
+            f"**These are {am['k']} separate episodes, not {am['k']} days from the "
+            f"same week.** Matches have to be at least {am['min_sep']} sessions "
+            f"apart. Without that rule the closest matches land a median of "
+            f"{am['median_gap_no_guard']} days apart — one week counted "
+            f"{am['k']} times, which would look like strong agreement but is really "
+            f"a single observation. With the rule, the typical gap is "
+            f"{am['median_gap_guard']} sessions.")
         st.caption(
-            "One oddity worth knowing rather than trading: when analogues leaned "
-            f"BEARISH (≤30% up), Nifty rose {am['bear_hit'][0]:.1f}% / "
-            f"{am['bear_hit'][1]:.1f}% / {am['bear_hit'][2]:.1f}% of the time — "
-            "above the base rate at every horizon. But that rests on only "
-            f"{am['bear_n'][0]}/{am['bear_n'][1]}/{am['bear_n'][2]} heavily "
-            "overlapping days, which is a handful of independent episodes. Not "
-            "claimed as a signal.")
+            f"**Matching on {am['n_features']} things · history from "
+            f"{am['history_from']:%b %Y}.** {am['mode_note']}")
+        if am.get("mode") == "fii":
+            _c = am["fii_only_cal"]
+            st.caption(
+                "**Price is ignored here — the match is on FII positioning alone.** "
+                "Six areas: futures long share, day change in net futures, options "
+                "tilt, total net position, traded volume, and index-futures rupee "
+                "flow. Each has 99% coverage since 2018.")
+            st.caption(
+                f"**What it is worth, measured over {_c['n_days']:,} days.** When "
+                f"70% or more of the FII-matched days had risen, Nifty then rose "
+                f"**{_c['bull'][0]:.0f}% / {_c['bull'][1]:.0f}% / "
+                f"{_c['bull'][2]:.0f}%** of the time, against base rates of "
+                f"{_c['base'][0]:.0f}% / {_c['base'][1]:.0f}% / "
+                f"{_c['base'][2]:.0f}%. That is **{_c['edge'][0]:+.1f} / "
+                f"{_c['edge'][1]:+.1f} / {_c['edge'][2]:+.1f} points** better than "
+                f"normal, and all three point the same way — unusual in this data.")
+            st.caption(
+                f"⚠️ **It still does not clear the bar.** Testing all three horizons "
+                f"together gives **p = {_c['perm_p']:.2f}** — about a 1-in-5 chance "
+                f"of seeing this from random data, where the accepted threshold is "
+                f"1-in-20. What IS different: the result ({_c['obs_best']:.1f} pts) "
+                f"beats what shuffled data typically produces "
+                f"({_c['null_median']:.1f} pts), which no other test on this page "
+                f"managed. Treat it as the most promising negative result here, not "
+                f"as a signal to trade.")
+        else:
+            st.caption(
+                f"**Adding FII data does not make this more accurate — measured.** "
+                f"On the same 2018+ window, a bullish table beat the normal odds by "
+                f"{am['price_edge_1w']:+.1f} / {am['price_edge_2w']:+.1f} / "
+                f"{am['price_edge_1m']:+.1f} points on price alone, and "
+                f"{am['fii_edge_1w']:+.1f} / {am['fii_edge_2w']:+.1f} / "
+                f"{am['fii_edge_1m']:+.1f} with FII added. The short horizons look "
+                f"better with FII, but every version turns negative at one month, "
+                f"and testing them all together gives p = {am['mode_perm_p']:.2f} — "
+                f"the best result ({am['mode_best_edge']:.1f} points) is smaller "
+                f"than what random data throws up ({am['mode_null_median']:.1f}). "
+                f"Use FII matching because it answers a different question, not a "
+                f"better one.")
+        st.caption(
+            f"**The exact percentage moves if you change the settings.** Asking for "
+            f"8 or 20 matches instead of {am['k']}, or spacing them differently, "
+            f"moves today's one-month figure between **{am['sens_up_lo']}%** and "
+            f"**{am['sens_up_hi']}%**. Treat it as roughly two-thirds, not as a "
+            f"precise number.")
+        st.warning(
+            "⚠️ **Most of these being green does not mean the market is going up.** "
+            f"Checked over {am['walk_forward_days']:,} days: when 70% or more of "
+            "past matches had risen, Nifty went on to rise "
+            f"**{am['bull_hit'][0]:.0f}% / {am['bull_hit'][1]:.0f}% / "
+            f"{am['bull_hit'][2]:.0f}%** of the time over 1 week / 2 weeks / "
+            "1 month. But it rises **"
+            f"{am['base_hit'][0]:.0f}% / {am['base_hit'][1]:.0f}% / "
+            f"{am['base_hit'][2]:.0f}%** of the time anyway. So a bullish-looking "
+            "table matched the normal odds at one week and did **worse** than "
+            "normal at one month.\n\n"
+            "**What to use instead: the SPREAD.** Days that looked almost identical "
+            "to today went on to do very different things — that range is the real "
+            "information here, and it tells you what to be prepared for rather than "
+            "what to expect.")
+        st.caption(
+            "One oddity, worth knowing rather than trading: when past matches leaned "
+            f"BEARISH, Nifty actually rose {am['bear_hit'][0]:.0f}% / "
+            f"{am['bear_hit'][1]:.0f}% / {am['bear_hit'][2]:.0f}% of the time — "
+            "better than normal. But that comes from only "
+            f"{am['bear_n'][0]}/{am['bear_n'][1]}/{am['bear_n'][2]} days, and days "
+            "close together share the same market move, so it is a handful of real "
+            "episodes. Not a signal.")
 
     st.divider()
 

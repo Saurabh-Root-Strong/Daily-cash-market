@@ -144,7 +144,105 @@ def _formation(s: pd.Series) -> pd.DataFrame:
     return F[list(_ANALOGUE_FEATURES)]
 
 
-def get_analogues(as_of: date, k: int = _ANALOGUE_K) -> dict:
+def _fii_formation(as_of: date, full: bool = False) -> pd.DataFrame:
+    """FII positioning features for analogue matching. 2018+ only.
+
+    Levels are z-scored on their own 60-session window rather than used raw,
+    because SEBI's Nov-2024 lot-size change cut FII contract counts several-fold
+    — a raw level would partly encode a rule change rather than positioning.
+    FII CASH FLOW IS DELIBERATELY EXCLUDED: it starts 2024-06 and covers ~16% of
+    sessions, so including it would silently discard 84% of the matchable history.
+    """
+    p = query_dataframe(
+        """SELECT * FROM fao_participant
+           WHERE client_type='FII' AND data_type='OI' AND trade_date <= ?
+           ORDER BY trade_date""", [as_of])
+    if p.empty:
+        return pd.DataFrame()
+    p["trade_date"] = pd.to_datetime(p["trade_date"])
+    p = p.drop_duplicates("trade_date").set_index("trade_date")
+    tot = p["fut_idx_long"] + p["fut_idx_short"]
+    F = pd.DataFrame(index=p.index)
+    F["fii_fut_share"] = np.where(tot > 0, p["fut_idx_long"] / tot * 100, np.nan)
+    F["fii_opt_bull"] = (p["opt_idx_call_long"] + p["opt_idx_put_short"]
+                         - p["opt_idx_call_short"] - p["opt_idx_put_long"])
+    F["fii_net_all"] = p["total_long"] - p["total_short"]
+    if full:
+        # The remaining FII areas, for matching on POSITIONING ALONE. Kept out of
+        # the price+fii blend on purpose: that mode's calibration was measured with
+        # three, and silently widening it would make the quoted numbers describe a
+        # model that no longer runs — the drift bug already caught twice here.
+        F["fii_fut_net_chg"] = (p["fut_idx_long"] - p["fut_idx_short"]).diff()
+        v = query_dataframe(
+            """SELECT trade_date, total_long, total_short FROM fao_participant
+               WHERE client_type='FII' AND data_type='Vol' AND trade_date <= ?
+               ORDER BY trade_date""", [as_of])
+        if not v.empty:
+            v["trade_date"] = pd.to_datetime(v["trade_date"])
+            v = v.drop_duplicates("trade_date").set_index("trade_date")
+            F["fii_vol_intensity"] = v["total_long"] + v["total_short"]
+        ds = query_dataframe(
+            """SELECT trade_date, buy_value_cr, sell_value_cr
+               FROM fii_derivatives_stats
+               WHERE category='INDEX FUTURES' AND trade_date <= ?
+               ORDER BY trade_date""", [as_of])
+        if not ds.empty:
+            ds["trade_date"] = pd.to_datetime(ds["trade_date"])
+            ds = ds.drop_duplicates("trade_date").set_index("trade_date")
+            F["fii_stats_net"] = ds["buy_value_cr"] - ds["sell_value_cr"]
+    for c in list(F.columns):
+        F[c] = ((F[c] - F[c].rolling(60, min_periods=30).mean())
+                / F[c].rolling(60, min_periods=30).std())
+    return F
+
+
+# Measured 2026-08-14 on the SAME 2018+ window for both modes, so the comparison
+# is like-for-like rather than confounded by a shorter history.
+#   bull-vote edge over base rate:   1wk / 2wk / 1mo
+#     price only (7 features)      -2.9 / -6.0 / +0.9 pp
+#     price + FII (10 features)    +2.6 / +4.0 / -2.4 pp
+# Adding FII flips the short horizons positive — but a max-statistic block
+# permutation across all 9 candidates (3 feature sets x 3 horizons) returns
+# p = 0.695: the best edge (+6.3pp) sits BELOW the null median (7.4pp). Every set
+# also flips sign at one month. So FII matching is offered because it answers a
+# different question, NOT because it predicts better.
+_ANALOGUE_MODE_NOTE = {
+    "price": "Matches on price structure alone. Reaches back to 2013.",
+    "price+fii": ("Matches on price structure AND FII positioning. Only reaches "
+                  "back to 2018, since that is when participant data starts."),
+    "fii": ("Matches on FII POSITIONING ONLY — price is ignored entirely. Six "
+            "areas: futures long share, day change in net futures, options tilt, "
+            "total net position, traded volume, and index-futures rupee flow. "
+            "2018+, and every area has 99% coverage."),
+}
+
+# Measured 2026-08-14 on the 6-feature FII-only matcher, CORRECTED CALENDAR,
+# 1,503 walk-forward days:
+#   1wk base 57.4% / bull-vote 62.1% (edge +4.7pp) / IC +0.024
+#   2wk base 59.1% / bull-vote 68.2% (edge +9.1pp) / IC +0.086
+#   1mo base 63.6% / bull-vote 67.2% (edge +3.6pp) / IC +0.118
+#
+# THESE REPLACE EARLIER NUMBERS MEASURED ON A BROKEN CALENDAR (+1.2/+1.8/-0.8 with
+# negative ICs). The participant file carries 82 dates that are not exchange
+# sessions — 2018-03-02, 2018-05-01, 2018-08-15 and other holidays — so reindexing
+# prices onto participant dates and taking shift(-h) ROWS meant "21 rows" equalled
+# 21 real sessions only 45% of the time, and ffill invented prices for non-trading
+# days. Fixing it flipped every horizon from ~0/negative to positive with a
+# consistent sign.
+#
+# STILL NOT SIGNIFICANT, and that matters more than the sign: a max-statistic block
+# permutation over the three horizons gives **p = 0.196**. It is nonetheless the
+# only result in this whole line of work whose observed best (9.1pp) EXCEEDS the
+# null median (6.6pp) — every other search this session came in below its own noise
+# floor. Treat as the most promising negative result here, not as an edge.
+_FII_ONLY_CAL = {"base": (57.4, 59.1, 63.6), "bull": (62.1, 68.2, 67.2),
+                 "edge": (4.7, 9.1, 3.6), "ic": (0.024, 0.086, 0.118),
+                 "n_days": 1503, "ratio": 0.082,
+                 "perm_p": 0.196, "null_median": 6.6, "obs_best": 9.1}
+
+
+def get_analogues(as_of: date, k: int = _ANALOGUE_K,
+                  mode: str = "price") -> dict:
     """
     Past days whose market FORMATION most resembles `as_of`, and what followed.
 
@@ -156,24 +254,36 @@ def get_analogues(as_of: date, k: int = _ANALOGUE_K) -> dict:
     and it manufactures a confident consensus out of nothing. Analogues here must be
     >= _ANALOGUE_MIN_SEP sessions apart, which lifts the median gap to 70 sessions.
 
-    CALIBRATION — READ BEFORE TRUSTING AGREEMENT. Measured on THIS feature set
-    (an earlier measurement used an 8-feature variant including market breadth and
-    did not describe this model — different features give different neighbours).
-    Walk-forward over 2,476 days:
+    CALIBRATION — READ BEFORE TRUSTING AGREEMENT. Re-measured on the MAHALANOBIS
+    matcher (switching the metric changes the neighbours, so the previous
+    Euclidean numbers no longer described this model). Walk-forward, 2,477 days:
 
-        base rate                    57.8% / 60.1% / 64.0%   (1wk / 2wk / 1mo)
-        >=70% of analogues rose ->   59.3% / 60.0% / 59.9%
-        <=30% of analogues rose ->   63.9% / 74.1% / 76.5%   (n=133 / 81 / 51)
+        base rate                    57.9% / 60.1% / 64.0%   (1wk / 2wk / 1mo)
+        >=70% of analogues rose ->   58.8% / 59.1% / 57.7%
+        <=30% of analogues rose ->   76.0% / 75.5% / 83.3%   (n=96 / 49 / 18)
         Spearman IC of analogue median vs actual:
-                                     +0.009 / -0.027 / -0.034
+                                     +0.013 / -0.014 / -0.067
 
-    The vote carries no usable direction: it beats the base rate slightly at one
-    week, matches it at two, and trails it at one month — an inconsistent sign is
-    the signature of noise, not of a weak effect. The bearish tail sits above the
-    base rate at every horizon, but on few independent episodes and with heavily
-    overlapping windows, so it is not claimed as a signal either. What IS
-    informative is the SPREAD — how differently the market resolved from setups
-    that looked alike.
+    The vote carries no usable direction: a bullish consensus lands ON the base
+    rate at one week and BELOW it at one month. The bearish tail sits far above
+    base — but on 18 heavily overlapping days at one month, which is a couple of
+    independent episodes, so it is not claimed as a signal.
+
+    TWO MORE THINGS THE AUDIT ESTABLISHED, both of which limit how the output
+    should be read:
+
+    * MATCH DISTANCE DOES NOT RANK RELIABILITY. Bucketing by distance, the
+      direction hit-rate at one month was 55.1% for the CLOSEST quartile and 62.8%
+      for the FARTHEST. Absolute error is mildly better for close matches (2.09 vs
+      2.53) but not monotonic. A tighter match is not a more trustworthy one.
+    * THE OUTPUT MOVES WITH THE PARAMETERS. Across defensible k (8-20) and
+      separation (10-42) settings, today's one-month up-share ranges 58%-75%.
+      Quoting a single figure as if it were precise would be false. (Mahalanobis
+      narrowed this from the 45%-75% the Euclidean metric produced — evidence the
+      metric fix was right, not merely different.)
+
+    What IS informative is the SPREAD — how differently the market resolved from
+    setups that looked alike.
 
     Causal: standardisation uses only prior data, matching only looks backwards,
     and a candidate is skipped unless its own forward window has closed.
@@ -189,6 +299,28 @@ def get_analogues(as_of: date, k: int = _ANALOGUE_K) -> dict:
         return out
 
     F = _formation(s)
+    if mode in ("price+fii", "fii"):
+        fx = _fii_formation(as_of, full=(mode == "fii"))
+        if fx.empty:
+            out["error"] = "No FII participant data for FII matching."
+            return out
+        # mode "fii" drops price entirely — the match is on POSITIONING ONLY,
+        # which is a different question from "what did the chart look like".
+        F = fx.copy() if mode == "fii" else F.join(fx, how="left")
+        F = F[F.index >= pd.Timestamp("2018-01-01")]
+        # CALENDAR: the participant file and the index do not share a session list.
+        # Reindexing prices onto participant dates and taking shift(-h) ROWS was a
+        # real bug — measured 2026-08-14, 13 of 36 displayed forward returns were
+        # wrong (2019-09-27 one-month showed +0.62% against a true +3.17%, and one
+        # match, 2019-03-04, was not an index session at all). Two causes: ffill
+        # invented prices for non-trading dates, and h rows stopped meaning h
+        # sessions wherever the calendars diverged. Fix: keep only dates that are
+        # genuine index sessions, and compute forward returns on the TRUE index
+        # calendar, joined BY DATE (below) rather than by position.
+        F = F[F.index.isin(s.index)]
+        if len(F) < 700:
+            out["error"] = "Not enough 2018+ history for FII matching."
+            return out
 
     i = len(F) - 1
     cur = F.iloc[i]
@@ -196,14 +328,38 @@ def get_analogues(as_of: date, k: int = _ANALOGUE_K) -> dict:
     if cur.isna().any() or len(hist) < 500:
         out["error"] = "Formation features incomplete for this date."
         return out
+    # MAHALANOBIS, not plain Euclidean. Audited 2026-08-14: 5 of the 7 features are
+    # trend/momentum and they are heavily correlated (ret_21d~vs_ma50 0.87,
+    # vs_ma200~dd_52w 0.86; mean |corr| 0.53 among the trend block). Only TWO
+    # eigenvalues exceed 1 and the first component carries 60% of the variance, so
+    # unweighted Euclidean distance counts momentum ~5x and volatility once —
+    # "closest setup" would really mean "closest momentum". Mahalanobis divides out
+    # the covariance so each independent direction counts once. It matters: the two
+    # metrics agree on only 4 of 12 matches for the same day.
     mu, sd = hist.mean(), hist.std().replace(0, np.nan)
-    dist = np.sqrt((((hist - mu) / sd - (cur - mu) / sd) ** 2).sum(axis=1)).sort_values()
+    zh = ((hist - mu) / sd).values
+    zc = ((cur - mu) / sd).values
+    _cov = np.cov(zh, rowvar=False)
+    VI = np.linalg.pinv(_cov)               # pinv: safe if features are collinear
+    _d = zh - zc
+    dist = pd.Series(np.sqrt(np.clip(np.einsum("ij,jk,ik->i", _d, VI, _d), 0, None)),
+                     index=hist.index).sort_values()
 
-    fwd = {h: (s.shift(-h) / s - 1) * 100 for h in HORIZONS.values()}
+    # Forward returns on the TRUE index calendar, indexed BY DATE. `s` is the full
+    # index series regardless of which feature calendar F uses, so shift(-h) here
+    # always means h genuine trading sessions. Looked up by date below — never by
+    # position into F, which is what produced wrong numbers in fii mode.
+    fwd = {h: ((s.shift(-h) / s - 1) * 100) for h in HORIZONS.values()}
+    _last_ok = s.index[-1] - pd.Timedelta(days=0)
     picked: list[tuple[int, float]] = []
     for dt_ in dist.index:
         pos = F.index.get_loc(dt_)
-        if pos > i - max(HORIZONS.values()):        # forward window must have closed
+        # the candidate's own forward window must have completed on the INDEX
+        # calendar, not merely be N rows back in the feature frame
+        if dt_ not in s.index:
+            continue
+        _spos = s.index.get_loc(dt_)
+        if _spos + max(HORIZONS.values()) >= len(s):
             continue
         if any(abs(pos - p) < _ANALOGUE_MIN_SEP for p, _ in picked):
             continue
@@ -213,10 +369,12 @@ def get_analogues(as_of: date, k: int = _ANALOGUE_K) -> dict:
 
     rows = []
     for pos, dd in picked:
-        rec = {"date": F.index[pos].date(), "distance": dd,
-               "close": float(s.iloc[pos])}
+        dt_ = F.index[pos]
+        # BY DATE, not by position: F may be on the participant calendar while the
+        # price series is on the exchange calendar.
+        rec = {"date": dt_.date(), "distance": dd, "close": float(s.loc[dt_])}
         for name, h in HORIZONS.items():
-            rec[name] = float(fwd[h].iloc[pos])
+            rec[name] = float(fwd[h].loc[dt_])
         rows.append(rec)
     df = pd.DataFrame(rows)
 
@@ -236,13 +394,27 @@ def get_analogues(as_of: date, k: int = _ANALOGUE_K) -> dict:
                 # Measured on THIS feature set — see the docstring. If the features
                 # change, these must be re-measured or they describe a dead model.
                 "meta": {"k": len(df), "min_sep": _ANALOGUE_MIN_SEP,
-                         "median_gap_no_guard": 2, "median_gap_guard": 72,
-                         "walk_forward_days": 2476,
-                         "ic_1w": 0.009, "ic_2w": -0.027, "ic_1m": -0.034,
-                         "bull_hit": (59.3, 60.0, 59.9),
-                         "bear_hit": (63.9, 74.1, 76.5),
-                         "bear_n": (133, 81, 51),
-                         "base_hit": (57.8, 60.1, 64.0)}})
+                         "median_gap_no_guard": 2, "median_gap_guard": 74,
+                         "walk_forward_days": 2477,
+                         "ic_1w": 0.013, "ic_2w": -0.014, "ic_1m": -0.067,
+                         "bull_hit": (58.8, 59.1, 57.7),
+                         "bear_hit": (76.0, 75.5, 83.3),
+                         "bear_n": (96, 49, 18),
+                         "base_hit": (57.9, 60.1, 64.0),
+                         # audit: closest-quartile matches were NOT more accurate
+                         "dist_hit_closest_1m": 55.1, "dist_hit_farthest_1m": 62.8,
+                         # audit: today's 1-month up-share across k=8..20, sep=10..42
+                         "sens_up_lo": 58, "sens_up_hi": 75,
+                         "mode": mode, "mode_note": _ANALOGUE_MODE_NOTE.get(mode, ""),
+                         "n_features": int(F.shape[1]),
+                         "history_from": F.index.min().date(),
+                         # like-for-like on 2018+; permutation over all 9 candidates
+                         "fii_edge_1w": 2.6, "fii_edge_2w": 4.0, "fii_edge_1m": -2.4,
+                         "price_edge_1w": -2.9, "price_edge_2w": -6.0,
+                         "price_edge_1m": 0.9,
+                         "mode_perm_p": 0.695, "mode_best_edge": 6.3,
+                         "mode_null_median": 7.4,
+                         "fii_only_cal": dict(_FII_ONLY_CAL)}})
     return out
 
 
