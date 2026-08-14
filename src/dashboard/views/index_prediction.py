@@ -19,6 +19,7 @@ import streamlit as st
 
 from src.analytics.index_prediction import IndexPrediction, IndexSignal, MarketContext
 from src.dashboard.cache.queries import cached_index_predictions
+from src.dashboard.column_help import nc as _hnc, tc as _htc
 from src.dashboard.constants import GRID_COLOR, PAPER_BG, PLOT_BG
 
 # ── Colour palette ────────────────────────────────────────────────────────────
@@ -1233,94 +1234,15 @@ def _market_map_box(pred: IndexPrediction, acc: dict, cov: dict) -> str:
         t_parts.append(_lbl(pred.breakout_dn_end, f"break&lt;{pred.breakout_dn_end:,.0f}", "#ff5252", above=True))
     bars.append(_bar("Tomorrow", "#40c4ff", "".join(t_parts), h=24, mt=22))
 
-    # ── KEY LEVELS bar — the measured levels, evidence-ranked ─────────────────
-    # Level-strength audit (distance-controlled, 3 rounds): pivot 🤝 wall
-    # confluence = +10pp rejection (the only level still working in the current
-    # regime); naked pivots decayed to ~0 in 2026; walls/max-pain = mild
-    # friction; everything is placement, nothing is a fade signal. The map now
-    # shows them ON the price axis instead of hiding them in another tab.
-    lv = pred.levels
-    chain_ok = getattr(pred, "opt_chain_liquid", True)
-    lv_items = []   # (price, kind, label, color, tooltip, above)
-    cw = lv.top_call_strike if (lv and chain_ok) else None
-    pw = lv.top_put_strike if (lv and chain_ok) else None
-    mp = lv.max_pain if (lv and chain_ok) else None
-    pr, pr_t = pred.sr_resistance, pred.sr_resistance_touches
-    ps, ps_t = pred.sr_support, pred.sr_support_touches
-
-    def _near(a, b):
-        return a and b and abs(a - b) / b * 100 <= 0.6
-    # confluence: pivot ON a wall = the strongest level on the page
-    conf_res = _near(pr, cw) or _near(pr, lv.second_call_strike if lv and chain_ok else None)
-    conf_sup = _near(ps, pw) or _near(ps, lv.second_put_strike if lv and chain_ok else None)
-    if pr:
-        if conf_res:
-            lv_items.append((pr, f"🤝 {pr:,.0f}", "#ffd54f",
-                             f"CONFLUENCE RESISTANCE (strongest level on the page): a {pr_t}-touch price pivot "
-                             f"WITH the call wall on the same line. Measured: rejects +10pp above chance in the "
-                             f"current regime — best short-strike / exit placement. Still not a fade signal: "
-                             f"if a CLOSE gets through, it continues 61%.", True))
-        else:
-            lv_items.append((pr, f"P {pr:,.0f} ({pr_t}t)", "#b39ddb",
-                             f"Price pivot resistance ({pr_t} touches). Honest note: a pivot WITHOUT a wall on it "
-                             f"has decayed to ~no edge in 2026 — treat as weak reference unless a wall joins it. "
-                             f"5+ touches makes it MORE likely to break, not less.", True))
-    if ps:
-        if conf_sup:
-            lv_items.append((ps, f"🤝 {ps:,.0f}", "#ffd54f",
-                             f"CONFLUENCE SUPPORT: {ps_t}-touch pivot + put wall on one line. Warning: measured "
-                             f"support-side confluence adds ~nothing — structure works OVERHEAD only. "
-                             f"Never trust a floor.", False))
-        else:
-            lv_items.append((ps, f"P {ps:,.0f} ({ps_t}t)", "#b39ddb",
-                             f"Price pivot support ({ps_t} touches). Measured: support levels barely beat chance "
-                             f"(down moves do not respect structure — the previous low is dead too). Reference only.", False))
-    # Suppress the standalone wall tick only when the confluence is with THAT wall —
-    # a pivot on the SECOND wall must not hide the primary wall, which is a distinct level.
-    if cw and not _near(pr, cw):
-        lv_items.append((cw, f"CW {cw:,.0f}", "#ff8a65",
-                         "CALL WALL — biggest call-writer position above spot. Mild friction on touch (+5pp). "
-                         "If it ever lines up with a pivot (🤝) it becomes the strongest level here.", True))
-    if pw and not _near(ps, pw):
-        lv_items.append((pw, f"PW {pw:,.0f}", "#4db6ac",
-                         "PUT WALL — biggest put-writer position below spot. Mild friction on touch (+6pp), "
-                         "but remember: floors are weaker than ceilings in every audit.", False))
-    # Fresh-writing walls (COI basis): the strongest measured single-basis level —
-    # writers defending positions they wrote TODAY. Fresh put wall +10.1pp (the one
-    # exception to "floors are weak"); fresh call wall +5.9pp.
-    # getattr-defensive: st.cache_data can serve IndexKeyLevels objects pickled
-    # BEFORE these fields existed (until the TTL expires after a deploy).
-    fc = getattr(lv, "fresh_call_strike", None) if (lv and chain_ok) else None
-    fp = getattr(lv, "fresh_put_strike", None) if (lv and chain_ok) else None
-    if fc and fc != cw:
-        lv_items.append((fc, f"fCW {fc:,.0f}", "#ffab40",
-                         "TODAYS MOST-WRITTEN CALL STRIKE (change in OI). Honest read after the placebo "
-                         "test: the +6pp rejection here is STRIKE PINNING — an adjacent plain strike "
-                         "measures the same, so fresh writing adds no extra defense. Marks todays "
-                         "battleground, weak-form only: closes PARK at strikes, they do not bounce.", True))
-    if fp and fp != pw:
-        lv_items.append((fp, f"fPW {fp:,.0f}", "#00e5cc",
-                         "TODAYS MOST-WRITTEN PUT STRIKE (change in OI). Placebo-tested: the +10pp weak-form "
-                         "rejection is generic near-money STRIKE PINNING — the adjacent plain strike shows "
-                         "the same, and strict rejection (0.15 pct margin) is NEGATIVE: the close tends to "
-                         "PARK ON the strike, not bounce off it. Use as a pin/settle magnet zone, "
-                         "not a defended floor.", False))
-    if mp:
-        lv_items.append((mp, f"MP {mp:,.0f}", "#9e9e9e",
-                         "MAX PAIN — the strike where option writers lose least. It does NOT pull price "
-                         "(measured ~48%, coin-flip); it is mild friction only when price actually touches it.", False))
-    lv_items = [x for x in lv_items if ax_lo <= x[0] <= ax_hi]
-    if lv_items:
-        k_parts = []
-        for price, label, color, tip, above in lv_items:
-            wpx = 3 if label.startswith("🤝") else 1
-            k_parts.append(f"<div title='{tip}' style='position:absolute;left:{_pos(price):.2f}%;"
-                           f"top:-2px;bottom:-2px;width:7px;background:transparent;"
-                           f"transform:translateX(-50%);cursor:help'>"
-                           f"<div style='width:{wpx}px;height:100%;margin:0 auto;background:{color}'></div></div>")
-            k_parts.append(_lbl(price, label, color, above=above))
-        k_parts.append(_tick(spot, "#ffffff", 2))
-        bars.append(_bar("Key levels", "#ffd54f", "".join(k_parts), h=14, mt=20, mb=18))
+    # ── (no KEY LEVELS bar here — deliberate) ─────────────────────────────────
+    # A levels row used to sit between TOMORROW and WEEK. Removed: it plotted
+    # pivots, call/put walls, fresh-writing walls and max pain, and the
+    # level-strength audit says every one of those except pivot-on-call-wall
+    # confluence has decayed to ~no edge (max pain is an outright coin-flip).
+    # The map's own help text and the 🎯 plan line already call those levels
+    # noise, so drawing them on the price axis contradicted the card and, at
+    # tight axes, the tick labels collided with the break-tick labels. All of
+    # them still live — with room to render — in the "Key Levels" tab.
 
     # ── WEEK bar ──────────────────────────────────────────────────────────────
     if pred.wk_range_low is not None and pred.wk_range_high is not None:
@@ -2107,7 +2029,280 @@ def _render_market_context(pred: IndexPrediction) -> None:
 
 # ── Main render ───────────────────────────────────────────────────────────────
 
+def _render_fii_only(selected_date: date) -> None:
+    """FII-ONLY view — the read built from FII data and nothing else.
+
+    Ships with its own measured track record on the page, because the honest
+    numbers are the point: most of the apparent next-day edge is the overnight
+    gap, which is untradeable here (the participant file publishes after the
+    close), and what remains is below the cost floor. See
+    src/analytics/fii_only.py for the full measurement.
+    """
+    from src.dashboard.cache.queries import cached_fii_only_view
+    try:
+        v = cached_fii_only_view(selected_date)
+    except Exception as exc:                                    # noqa: BLE001
+        st.error(f"FII-only view unavailable: {exc}")
+        return
+    if not v.get("ok"):
+        st.info(v.get("error", "No FII data for that date."))
+        return
+
+    t = v["track"]
+    stance = v["stance"]
+    colour = {"BULLISH": "#00c853", "BEARISH": "#ff5252", "NEUTRAL": "#ffab40"}[stance]
+    arrow = {"BULLISH": "▲", "BEARISH": "▼", "NEUTRAL": "↔"}[stance]
+
+    st.markdown(
+        f"<div style='border:2px solid {colour};border-radius:10px;padding:14px 18px;"
+        f"margin:6px 0;background:rgba(255,255,255,0.02)'>"
+        f"<span style='font-size:13px;opacity:0.75'>FII-ONLY STANCE · "
+        f"{v['as_of']:%d %b %Y}</span><br>"
+        f"<span style='font-size:30px;font-weight:700;color:{colour}'>{arrow} {stance}"
+        f"</span><span style='font-size:15px;opacity:0.8'>&nbsp;&nbsp;score "
+        f"{v['score']:+.2f}σ · {v['n_live']} of 5 components live · FII activity "
+        f"{v['conviction']}</span></div>", unsafe_allow_html=True)
+
+    # ── the measured record, immediately, not buried ────────────────────────
+    st.warning(
+        f"**What this stance is actually worth — measured, not claimed.** "
+        f"Walk-forward over {t['n']:,} sessions since {t['since']}:\n\n"
+        f"* **Next day, tradeable (enter at tomorrow's open):** hit "
+        f"**{t['next_day_oc_hit']:.1f}%** against **{t['next_day_naive']:.1f}%** for "
+        f"always making the same call. IC {t['next_day_oc_ic']:+.3f}.\n"
+        f"* **The bearish side is the one that works:** a bearish reading precedes "
+        f"a down day **{t['bear_down_rate']:.1f}%** of the time, mean "
+        f"**{t['bear_mean_pct']:+.3f}%**. Bullish readings are a coin flip "
+        f"({t['bull_up_rate']:.1f}% up, mean {t['bull_mean_pct']:+.3f}%).\n"
+        f"* **But it is below the cost floor.** {abs(t['bear_mean_pct'])*100:.0f}bps "
+        f"against roughly {t['cost_floor_bps']}bps for a round trip. Statistically "
+        f"real (t≈3.6) and still unprofitable — those are not contradictory.\n"
+        f"* **Do not extend it past a day.** At 1 and 2 weeks the stance scores "
+        f"**{t['wk1_hit']:.1f}%** and **{t['wk2_hit']:.1f}%**, *below* the "
+        f"{t['wk1_naive']:.1f}% / {t['wk2_naive']:.1f}% you get from always saying "
+        f"'up'.")
+    st.caption(
+        f"⚠️ **Why the close-to-close number is not quoted as the headline.** "
+        f"Measured close-to-close this stance hits {t['next_day_cc_hit']:.1f}% "
+        f"(IC {t['next_day_cc_ic']:+.3f}), which looks far better. But the base "
+        f"up-rate is {t['next_day_cc_base']:.1f}% close-to-close versus "
+        f"{t['next_day_oc_base']:.1f}% open-to-close — that gap IS the overnight "
+        f"move, and NSE publishes the FII participant file AFTER the close, so you "
+        f"cannot be positioned for it. The tradeable number is the honest one.")
+
+    # ── FII SIZE, WHERE THE WALLS ARE, AND ROLLOVER ─────────────────────────
+    from src.dashboard.cache.queries import cached_fii_footprint
+    _sym = st.selectbox("Index", ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"],
+                        key="fii_only_sym",
+                        help="Which index chain to read. FIIs trade Nifty most "
+                             "heavily, so that is the default.")
+    try:
+        fp = cached_fii_footprint(selected_date, _sym)
+    except Exception as exc:                                    # noqa: BLE001
+        fp = {"ok": False, "error": str(exc)}
+    if fp.get("ok"):
+        f1, f2, f3 = st.columns(3)
+        f1.metric("FII share of index option OI", f"{fp['fii_share_pct']:.0f}%",
+                  f"{fp['fii_opt_contracts']:,.0f} contracts", delta_color="off",
+                  help="FII index-option open interest as a share of the whole "
+                       "index option book.\n\nUNITS MATTER HERE: the participant "
+                       "file reports CONTRACTS, the bhavcopy reports UNITS. "
+                       "Comparing them raw says 0.5%, which is wrong by the lot "
+                       "factor. Verified against fii_derivatives_stats, which "
+                       "publishes both and matches the participant number exactly.")
+        f2.metric("FII index futures OI", f"{fp['fii_fut_contracts']:,.0f}",
+                  "contracts", delta_color="off",
+                  help="FII open interest in index futures, long plus short.")
+        f3.metric(f"Rolled to later expiries", f"{fp['rollover_pct']:.0f}%",
+                  f"{fp['dte']}d to {fp['near_expiry']:%d %b}", delta_color="off",
+                  help="Share of index-futures open interest sitting in expiries "
+                       "BEYOND the nearest one. Low early in a cycle is normal; it "
+                       "climbs as expiry approaches. This is market-wide — NSE does "
+                       "not publish FII open interest split by expiry.")
+
+        st.markdown(f"###### Where the option walls are — {_sym}, expiry "
+                    f"{fp['near_expiry']:%d %b %Y}")
+        wc1, wc2 = st.columns(2)
+        with wc1:
+            st.caption("**Call walls** — where upside gets sold into")
+            for w in fp["call_walls"]:
+                st.markdown(f"- **{w['strike']:,.0f}** · {w['oi']/1e6:.1f}M OI "
+                            f"({w['chg']/1e6:+.1f}M today)")
+        with wc2:
+            st.caption("**Put walls** — where downside gets supported")
+            for w in fp["put_walls"]:
+                st.markdown(f"- **{w['strike']:,.0f}** · {w['oi']/1e6:.1f}M OI "
+                            f"({w['chg']/1e6:+.1f}M today)")
+        st.info(
+            f"⚠️ **These walls are MARKET-WIDE, not FII levels.** NSE publishes FII "
+            f"open interest only as a total — never by strike. So the exact strike "
+            f"FIIs are sitting on **cannot be derived from any available data**, and "
+            f"anything claiming otherwise is invented. What can honestly be said: "
+            f"FIIs are about **{fp['fii_share_pct']:.0f}%** of this book, so roughly "
+            f"a third of the money at these strikes is theirs — but which third is "
+            f"unknowable.")
+
+    # ── WHAT FIIs DID — six legs, read directly, not inferred ───────────────
+    from src.dashboard.cache.queries import cached_fii_actions
+    try:
+        act = cached_fii_actions(selected_date)
+    except Exception as exc:                                    # noqa: BLE001
+        act = {"ok": False, "error": str(exc)}
+    if act.get("ok"):
+        at = act["track"]
+        st.markdown("##### What FIIs actually did")
+        n1, n5 = act["net_1d"], act["net_5d"]
+        def _tone(x):
+            return ("bullish" if x >= 5 else "bearish" if x <= -5 else "mixed")
+        cA, cB = st.columns(2)
+        cA.metric("Today, net across all six legs", f"{n1:+.1f}",
+                  _tone(n1), delta_color="off",
+                  help="Sum of the six leg changes, each as a % of that leg's own "
+                       "normal open interest, signed so + is bullish. Above +5 or "
+                       "below −5 is a decisive day.")
+        cB.metric("This week (5 sessions)", f"{n5:+.1f}", _tone(n5),
+                  delta_color="off",
+                  help="The same measure over five sessions — steadier than a "
+                       "single day.")
+
+        legs = act["legs"].copy()
+        legs["Action"] = legs["action"]
+        legs["Lean"] = legs["lean"].str.upper()
+        legs["Open interest"] = legs["oi_now"].round(0)
+        legs["Today"] = legs["chg_1d"].round(0)
+        legs["Today %"] = legs["pct_1d"].round(1)
+        legs["Week %"] = legs["pct_5d"].round(1)
+        st.dataframe(
+            legs[["leg", "Action", "Lean", "Open interest", "Today", "Today %",
+                  "Week %"]].rename(columns={"leg": "Leg"}),
+            hide_index=True, use_container_width=True,
+            height=int(len(legs)) * 35 + 45,
+            column_config={
+                "Leg": _htc(help="The six positions NSE reports for FIIs: index "
+                                 "futures long and short, and index calls and puts, "
+                                 "each long and short."),
+                "Action": _htc(
+                    help="Read directly from open interest, not inferred.\n\n"
+                         "Futures: long OI up = LONG BUILDUP, long OI down = LONG "
+                         "UNWINDING, short OI up = SHORT BUILDUP, short OI down = "
+                         "SHORT COVERING.\n\n"
+                         "Options: long OI up = BUYING that option, short OI up = "
+                         "WRITING it."),
+                "Lean": _htc(help="What that action would normally imply for the "
+                                  "index. See the warning below — for FII shorts it "
+                                  "does NOT hold."),
+                "Open interest": _hnc(format="%,.0f",
+                    help="Current open interest in that leg, in shares."),
+                "Today": _hnc(format="%+,.0f", help="Change in open interest today."),
+                "Today %": _hnc(format="%+.1f%%",
+                    help="Today's change as a % of that leg's own 60-session "
+                         "average open interest. Normalised this way because SEBI's "
+                         "Nov-2024 lot-size change shrank raw contract counts "
+                         "several-fold — an unnormalised number would partly be "
+                         "measuring that rule change."),
+                "Week %": _hnc(format="%+.1f%%",
+                    help="Same, over the last five sessions."),
+            })
+
+        st.error(
+            "🚨 **'SHORT BUILDUP' here does NOT mean bearish — this is the single "
+            "biggest trap on this page.** FIIs hold index futures shorts largely to "
+            "HEDGE their long cash holdings, not to bet on a fall. Measured over "
+            f"{at['n']:,} sessions: when these legs leaned bearish, Nifty was "
+            f"actually DOWN only **{at['bear_down_1wk']:.1f}%** of the time after a "
+            f"week and **{at['bear_down_2wk']:.1f}%** after two — meaning it ROSE "
+            "about 60% of the time. Reading FII shorting as a bearish signal "
+            "inverts it.")
+        st.warning(
+            f"**What this section is worth, measured.** As a next-day directional "
+            f"signal it scores **{at['d1_oc_hit']:.1f}%** (tradeable, entering at "
+            f"the next open) against **{at['d1_oc_naive']:.1f}%** for always making "
+            f"the same call — i.e. worse than doing nothing. At 1 and 2 weeks: "
+            f"**{at['wk1_hit']:.1f}%** vs {at['wk1_naive']:.1f}% and "
+            f"**{at['wk2_hit']:.1f}%** vs {at['wk2_naive']:.1f}%. Individual legs "
+            f"have information coefficients of {at['leg_ic_range']} — noise. "
+            f"The one asymmetry: bullish leg activity preceded a "
+            f"**{at['bull_up_2wk']:.1f}%** two-week up-rate against a "
+            f"{at['base_up_2wk']:.1f}% base — a real but small tilt.\n\n"
+            "**Use this to see what FIIs are doing, which is solid and directly "
+            "observed. Do not use it to call direction.**")
+
+    # ── components ──────────────────────────────────────────────────────────
+    st.markdown("##### What each part of the FII data says")
+    comp = v["components"].copy()
+    comp["Reading"] = comp["z"].round(2)
+    comp["Lean"] = comp["lean"].str.upper()
+    st.dataframe(
+        comp[["component", "Reading", "Lean", "why"]]
+            .rename(columns={"component": "Component", "why": "What it measures"}),
+        hide_index=True, use_container_width=True,
+        height=int(len(comp)) * 35 + 45,
+        column_config={
+            "Reading": _hnc(format="%+.2f",
+                help="Standard deviations from this component's own 60-session "
+                     "normal. Beyond ±1 is unusual; ±0.5 is what turns it "
+                     "bullish or bearish here."),
+            "Lean": _htc(help="Bullish above +0.5σ, bearish below −0.5σ, "
+                              "otherwise neutral."),
+        })
+    st.caption(
+        "The stance is the average of the live components. FII **volume** is "
+        "deliberately not one of them — heavy volume says conviction, not "
+        "direction, so it is shown as the activity level above instead.")
+
+    # ── per-index FII futures flow ──────────────────────────────────────────
+    pi = v["per_index"]
+    if pi is not None and not pi.empty:
+        st.markdown("##### FII futures flow, per index")
+        show = pi.copy()
+        show["Net today (₹Cr)"] = show["net_cr"].round(0)
+        show["vs own normal"] = show["net_z"].round(2)
+        show["Net 5 days (₹Cr)"] = show["net_5d_cr"].round(0)
+        show["Open interest (₹Cr)"] = show["oi_cr"].round(0)
+        show["OI change (₹Cr)"] = show["oi_chg_cr"].round(0)
+        st.dataframe(
+            show[["index", "Net today (₹Cr)", "vs own normal", "Net 5 days (₹Cr)",
+                  "Open interest (₹Cr)", "OI change (₹Cr)"]]
+                .rename(columns={"index": "Index"}),
+            hide_index=True, use_container_width=True,
+            height=int(len(show)) * 35 + 45,
+            column_config={
+                "Net today (₹Cr)": _hnc(format="%+,.0f",
+                    help="FII futures buy value minus sell value in this index today. "
+                         "Positive = net buying."),
+                "vs own normal": _hnc(format="%+.2f",
+                    help="That net flow against its own 20-session normal, in "
+                         "standard deviations."),
+                "Net 5 days (₹Cr)": _hnc(format="%+,.0f",
+                    help="Cumulative net flow over the last 5 sessions — steadier "
+                         "than any single day."),
+                "Open interest (₹Cr)": _hnc(format="%,.0f",
+                    help="Value of FII futures open interest in this index."),
+                "OI change (₹Cr)": _hnc(format="%+,.0f",
+                    help="Change in that open interest today. Rising OI with net "
+                         "buying = fresh longs; rising OI with net selling = fresh "
+                         "shorts."),
+            })
+        st.caption(
+            "Per-index FII futures data begins 2023-01-31, so it is shallower than "
+            "the market-wide components above. It is shown as flow, not as a "
+            "verdict — no per-index hit-rate has been measured.")
+
+
 def render(selected_date: date) -> None:
+    _t1, _t2 = st.columns([0.72, 0.28])
+    with _t1:
+        st.subheader("Index Prediction — Institutional Market-Structure Read")
+    with _t2:
+        _fii_only = st.toggle(
+            "🌏 FII only", value=False, key="idxpred_fii_only",
+            help="Rebuild the read from FII data ALONE — cash flow, index-futures "
+                 "positioning and its day change, index-option tilt, and futures "
+                 "buy/sell value — ignoring every other signal on this page. "
+                 "Ships with its own measured hit-rate, which is the point.")
+    if _fii_only:
+        _render_fii_only(selected_date)
+        return
     st.subheader("Index Prediction — Institutional Market-Structure Read")
 
     # ── Honest track record (radical transparency) ────────────────────────────
