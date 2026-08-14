@@ -2,7 +2,9 @@
 Big Players F&O Tracker — institutional positioning via participant-wise OI & Volume.
 
 Morgan Stanley-style analysis framework:
-  • Tomorrow's Market Verdict  — composite of 9 institutional signals
+  • What FIIs Did Today        — contemporaneous OI + Volume + ₹-flow (the trustworthy read)
+  • F&O-Positioning Lean       — next-day tilt from 9 signals, DEMOTED to context only:
+                                 walk-forward ~41% directional (below coin-flip), no edge
   • Positioning Scorecard      — FII / DII / Pro / Retail with role interpretation
   • Full Derivative Matrix     — Index Futures | Index Options | Stock Futures | Stock Opts
   • Signal Intelligence Engine — 9 signals sorted by impact magnitude
@@ -196,25 +198,37 @@ def _tomorrow_verdict_hero(mi) -> None:
 
     v = mi.tomorrow_verdict
     dir_icon = {"UP": "▲", "DOWN": "▼", "SIDEWAYS": "↔"}.get(v.direction, "?")
-    conf_icon = {"HIGH": "🔴", "MEDIUM": "🟡", "LOW": "⚪"}.get(v.confidence, "")
 
     c_verdict, c_score = st.columns([3, 2])
 
+    # DEMOTED (2026-06-20): walk-forward measured this next-day arrow at ~41%
+    # directional (below coin-flip) with HIGH-conviction LESS accurate than LOW, so the
+    # arrow is no longer the page's hero. The panel now leads with the honest reality
+    # check and renders the direction as a small CONTEXT lean (neutral grey, no
+    # traffic-light confidence). The trustworthy, contemporaneous half — "what FIIs did
+    # today" — is the FIITodaySnapshot rendered below. The verdict engine is kept only
+    # as low-trust positioning context, not a forecast.
     with c_verdict:
         st.markdown(
-            f"<div style='border:2px solid {v.direction_color}88;border-radius:14px;"
-            f"padding:20px 24px;background:{v.direction_color}0e'>"
+            f"<div style='border:1px solid rgba(255,255,255,0.12);border-radius:14px;"
+            f"padding:18px 22px;background:rgba(255,255,255,0.02)'>"
             f"<div style='font-size:9px;font-weight:700;color:rgba(255,255,255,0.3);"
-            f"letter-spacing:2.5px;margin-bottom:10px'>TOMORROW'S EXPECTED MARKET MOVE</div>"
-            f"<div style='display:flex;align-items:center;gap:16px;margin-bottom:12px'>"
-            f"<div style='font-size:56px;font-weight:900;color:{v.direction_color};"
-            f"line-height:1;letter-spacing:-3px'>{dir_icon}</div>"
-            f"<div>"
-            f"<div style='font-size:36px;font-weight:900;color:{v.direction_color};"
-            f"line-height:1;letter-spacing:-1px'>{v.direction}</div>"
-            f"<div style='font-size:11px;font-weight:700;color:{v.direction_color};"
-            f"opacity:0.85;margin-top:2px'>{conf_icon} {v.confidence} CONFIDENCE</div>"
-            f"</div>"
+            f"letter-spacing:2.5px;margin-bottom:10px'>F&amp;O-POSITIONING LEAN — CONTEXT, NOT A FORECAST</div>"
+            f"<div style='font-size:10px;color:#ffb74d;background:#ffb74d14;"
+            f"border-radius:6px;padding:7px 10px;margin-bottom:12px;line-height:1.45'>"
+            f"⚖ <b>Reality check:</b> walk-forward, this next-day arrow hits ~41% "
+            f"directional (BELOW a 50% coin-flip) and HIGH-conviction calls are no more "
+            f"accurate than LOW — the F&O-positioning data has <b>no measured next-day "
+            f"directional edge</b>. Read it as positioning context only; the trustworthy "
+            f"part of this page is what FIIs actually DID today (below).</div>"
+            f"<div style='display:flex;align-items:center;gap:10px;margin-bottom:10px'>"
+            f"<div style='font-size:22px;font-weight:800;color:{v.direction_color};"
+            f"opacity:0.7;line-height:1'>{dir_icon}</div>"
+            f"<div style='font-size:16px;font-weight:700;color:rgba(255,255,255,0.7);"
+            f"line-height:1'>{v.direction}</div>"
+            f"<div style='font-size:10px;font-weight:600;color:rgba(255,255,255,0.35);"
+            f"border:1px solid rgba(255,255,255,0.15);border-radius:10px;padding:1px 8px'>"
+            f"lean only · not validated</div>"
             f"</div>"
             f"<div style='font-size:13px;font-weight:600;color:rgba(255,255,255,0.9);"
             f"margin-bottom:10px;line-height:1.4'>{v.headline}</div>"
@@ -2363,16 +2377,20 @@ def render(selected_date: date) -> None:
     if mi.market_view == "No Data":
         st.info("Run F&O backfill first to enable market intelligence signals.")
     else:
-        # Hero verdict panel
-        _tomorrow_verdict_hero(mi)
-        st.markdown("")
-
         # Alerts
         for alert in mi.alerts:
             st.warning(f"🚨 {alert}")
 
-        # ── FII Today Activity Panel (3-layer: OI + Volume + Rupee Flow) ──────
+        # ── LEAD with the factual, contemporaneous read: what FIIs actually DID
+        #    today (3-layer: OI + Volume + Rupee Flow). This is the trustworthy half
+        #    of the page. The next-day positioning LEAN follows it, demoted, because
+        #    walk-forward it has no measured directional edge (~41% < coin-flip).
         _fii_today_panel(mi)
+        st.markdown("")
+
+        # Positioning-lean panel (demoted from hero → context only)
+        _tomorrow_verdict_hero(mi)
+        st.markdown("")
 
         # Signal Intelligence Engine
         st.markdown(

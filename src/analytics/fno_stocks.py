@@ -12,9 +12,12 @@ Price direction uses near-month FUTSTK: close_price vs settle_price
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
+from functools import lru_cache
+from pathlib import Path
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 
 from src.data.repository import query_dataframe
@@ -25,6 +28,7 @@ __all__ = [
     "get_fno_positioning_by_symbol",
     "get_sector_fno_aggregate",
     "get_fno_expiry_breakdown_by_symbol",
+    "get_expiry_oi_trend",
 ]
 
 _SIGNAL_SCORE = {
@@ -916,11 +920,669 @@ def get_fno_expiry_breakdown_by_symbol(as_of_date: date) -> pd.DataFrame:
     df["far_pcr"]       = (far_put / far_call.replace(0, float("nan"))).round(2)
     df["far_opt_label"] = df["far_pcr"].apply(_compact_pcr_label)
 
+    # ── Expiry-cycle trend per expiry: futures, then options ─────────────────
+    # Label columns must always be strings. A symbol present here but absent from a
+    # trend frame would otherwise render as NaN in the table instead of "—".
+    _LABEL_COLS = ["near_trend_label", "next_trend_label", "far_trend_label",
+                   "near_opt_trend_label", "next_opt_trend_label", "far_opt_trend_label"]
+    for extra in (get_expiry_oi_trend(as_of_date), get_expiry_opt_trend(as_of_date)):
+        if not extra.empty:
+            df = df.merge(extra, on="symbol", how="left")
+    for c in _LABEL_COLS:
+        if c in df.columns:
+            df[c] = df[c].fillna("—").astype(str)
+
     keep = [
         "symbol", "post_expiry",
         "near_fut_label", "next_fut_label", "far_fut_label",
         "near_oi_chg_pct", "next_oi_chg_pct", "far_oi_chg_pct",
         "near_opt_label", "next_opt_label", "far_opt_label",
         "near_call_sig", "near_put_sig", "next_call_sig", "next_put_sig",
+        "near_trend_label", "next_trend_label", "far_trend_label",
+        "near_oi_trend_pct", "next_oi_trend_pct", "far_oi_trend_pct",
+        "near_opt_trend_label", "next_opt_trend_label", "far_opt_trend_label",
+        "near_opt_bull_z", "next_opt_bull_z",
+        "trend_window",
     ]
     return df[[c for c in keep if c in df.columns]].reset_index(drop=True)
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# MULTI-DAY OI TREND PER EXPIRY  (near / next / far)
+# ═══════════════════════════════════════════════════════════════════════════════
+#
+# WHY this is not simply "the 1-day signal with a bigger number".
+#
+# Measured over all 503 F&O sessions (310,099 symbol-expiry-days, 2026-08-05):
+#
+# 1. The 1-day label is not a trend. It changes on 70.9% of sessions and outright
+#    REVERSES (LB<->SB / SC<->LU) on 22.1%. A 5-session version of the identical
+#    matrix flips 41.2% / reverses 7.4%; normalised (below) 36.6% / 3.4%.
+#
+# 2. A raw OI % change is only meaningful for the NEAR month. Median |OI 5d| is
+#    10.4% near, but 97.3% next and 81.8% far — because next/far contracts are in
+#    their FILL-UP phase, so a raw % measures the contract's age, not conviction.
+#    Fix: subtract that day's cross-sectional median for the SAME expiry rank, and
+#    scale by its MAD. Every contract at the same rank shares the same lifecycle
+#    stage, so the common drift cancels and what is left is this stock's build
+#    RELATIVE to its peers. One |z| deadband then works for all three buckets
+#    (|z|<=0.5 -> ~26% Neutral in each).
+#
+# 3. Monthly rollover corrupts a fixed 5-session window on the NEAR contract:
+#    median |OI 5d| is 7.63x higher when the window spans a roll (everyone rolls
+#    at once). Normalisation alone only cuts that to 3.57x — not enough. Fix: when
+#    the roll is k<W sessions back, ANCHOR the window to the roll and trend over k
+#    sessions instead, reporting the shorter window. NEXT is unaffected (0.83x) and
+#    a brand-new FAR contract simply has too little history and is blanked.
+#
+# 4. FAR is barely traded: median 33 contracts/day vs 4,192 near, and only 24.3%
+#    of far rows clear 100 contracts. It gets an OI-only read behind a volume gate,
+#    never a directional colour (its price is stale).
+#
+# NOTE ON EXPECTATIONS: this makes the panel stable and honest, NOT predictive.
+# The same matrix at 1 / 5 / 10 days separates 5-day forward returns by under
+# 0.08pp — there is no edge here to harvest, only a description to get right.
+
+_TREND_MAX_LOOKBACK = 26  # sessions to pull; the longest observed cycle is 25
+_SEQ_N          = 4      # daily steps shown in the comma-separated sequence
+_TREND_MIN_DAYS = 1      # cycle days needed before a cumulative read means anything
+_TREND_Z        = 0.5    # |z| deadband on peer-relative OI change
+_TREND_PX_PCT   = 0.5    # % price deadband over the cycle
+_FAR_MIN_VOL    = 100    # median contracts/day required to label the far month
+_VOL_WINDOW     = 5      # sessions the liquidity median is taken over (fixed, see below)
+_SEQ_CLIP       = 999    # daily % steps are clipped for display (OI can go 0 -> inf)
+# Sessions before expiry where the near-month cumulative stops meaning anything.
+# Measured across all 25 cycles, median near-month cumulative OI by sessions left:
+#   10 left +1.1% | 7 +0.1% | 5 -2.3% | 4 -6.5% | 3 -29.2% | 2 -55.4% | 1 -78.1% | 0 -91.6%
+# and the share of stocks below -50% goes 0% -> 4% -> 65% -> 89% -> 94%. That is
+# everyone leaving the expiring contract at once, not conviction. The peer-relative
+# z is immune (the grey share holds at ~26% throughout, because the collapse is
+# common to every stock) so the LABEL never lied — but the number on screen would
+# read -80% on nearly every row, so the cumulative is withheld in this window.
+_PRE_EXPIRY_WINDOW = 3
+# The peer-relative z is only as good as the peer set it is ranked against. The
+# fill-up guard masks most next-month names late in a cycle, which on ~15% of
+# sessions left 1-19 valid peers — a median/MAD from five names is noise, not a
+# ranking. Below this count the label is withheld rather than guessed.
+_MIN_PEERS = 20
+# A contract that held under this fraction of its current OI at the start of the
+# window was effectively EMPTY then — it is filling up, not trending. Right after a
+# roll the next/far months routinely print +6,000% or +20,000% because the base was
+# a few hundred lots. Those are lifecycle ramps and get blanked, not labelled.
+_TREND_MIN_BASE = 0.20
+
+_TREND_CODE = {
+    "Long Buildup":   ("🟢", "LB"),
+    "Short Buildup":  ("🔴", "SB"),
+    "Short Covering": ("🔵", "SC"),
+    "Long Unwinding": ("🟠", "LU"),
+    "Neutral":        ("⚪", ""),
+}
+
+
+@lru_cache(maxsize=1)
+def _nse_holidays() -> frozenset:
+    """Weekday trading holidays from config/nse_holidays.yaml (empty set if absent)."""
+    try:
+        import yaml
+        from src.core.config import PROJECT_ROOT
+        path = Path(PROJECT_ROOT) / "config" / "nse_holidays.yaml"
+        raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+        out = set()
+        for _year, entries in (raw.get("holidays") or {}).items():
+            for e in entries or []:
+                d = e.get("date") if isinstance(e, dict) else e
+                if d:
+                    out.add(date.fromisoformat(str(d)))
+        return frozenset(out)
+    except Exception:                       # never let a config problem break the page
+        return frozenset()
+
+
+def _sessions_until(as_of: date, target: date) -> int:
+    """
+    Trading sessions strictly after `as_of` up to and including `target`.
+
+    Counting bare weekdays gets this wrong whenever a holiday falls in the final
+    stretch — across the history that happened on 7 sessions, each reporting 4
+    sessions left when only 3 remained, so the pre-expiry guard fired a day late and
+    showed a rollover-corrupted number for one session.
+
+    Uses the EXCHANGE CALENDAR only (weekdays minus configured holidays), never the
+    tape. An earlier version counted sessions already present in fno_bhavcopy, which is
+    more accurate but reads rows dated AFTER as_of: harmless in live use, where they do
+    not exist, but it made a replayed date behave differently from the live one. The
+    forward trading calendar is public information at any as_of, so estimating it is
+    legitimate; silently depending on how much history the database happens to hold is
+    not.
+
+    This puts weight on `config/nse_holidays.yaml`, which had a phantom holiday
+    (2026-03-20, on which NSE actually traded) and a missing one (2026-06-26) the first
+    time anything read it. Both fixed; keep it current or this guard drifts by a day.
+    """
+    if target <= as_of:
+        return 0
+    hol, n, d = _nse_holidays(), 0, as_of
+    while d < target:
+        d += timedelta(days=1)
+        if d.weekday() < 5 and d not in hol:
+            n += 1
+    return n
+
+
+def _px_band(cycle_days: int) -> float:
+    """
+    Price deadband, widened with the length of the cycle so far.
+
+    A fixed 0.5% band is a real gate on day 1 (27% of stocks sit inside it) but
+    nearly none by day 20 (5%) — over three weeks almost everything has moved more
+    than half a percent, so the price axis silently stops filtering and the label
+    becomes OI-only. Price wanders as ~sqrt(time), so the band follows it.
+    """
+    return _TREND_PX_PCT * float(np.sqrt(max(cycle_days, 1)))
+
+
+def _trend_signal(px_pct: float | None, z: float | None, px_band: float) -> str:
+    """OI-price matrix over the window, on PEER-RELATIVE OI change (z) not raw %."""
+    if px_pct is None or z is None or pd.isna(px_pct) or pd.isna(z):
+        return "Neutral"
+    p_up, p_dn = px_pct > px_band, px_pct < -px_band
+    oi_up, oi_dn = z > _TREND_Z, z < -_TREND_Z
+    if oi_up and p_up:  return "Long Buildup"
+    if oi_up and p_dn:  return "Short Buildup"
+    if oi_dn and p_up:  return "Short Covering"
+    if oi_dn and p_dn:  return "Long Unwinding"
+    return "Neutral"
+
+
+def _seq_str(steps) -> str:
+    """
+    "+2, +3, +1, +0" — the day-by-day path, NEWEST FIRST.
+
+    `steps` arrives in chronological order and is reversed here, so the leftmost
+    figure is today. That puts today's step next to the label and the ⚠ fade flag,
+    which is what ⚠ is about. A missing session shows as "-".
+    """
+    out = []
+    for v in steps:
+        if v is None or pd.isna(v) or np.isinf(v):
+            out.append("-")
+        else:
+            out.append(f"{max(min(v, _SEQ_CLIP), -_SEQ_CLIP):+.0f}")
+    return ", ".join(reversed(out))
+
+
+def _trend_label(signal: str, cum_pct: float | None, fading: bool, seq: str) -> str:
+    """
+    "🟢 LB +8% | +2, -1, +3, +2"
+
+    Left of the dot: the CUMULATIVE OI change since this expiry cycle began (the
+    monthly-expiry basis) — the code is the peer-relative read, the number is raw.
+    Right of the dot: the last few daily steps, so a build that is still running
+    is visually distinct from one that stalled a week ago.
+    "⚠" = TODAY moved against the cycle build.
+    """
+    if cum_pct is None or pd.isna(cum_pct):
+        return f"— | {seq}" if seq else "—"
+    icon, code = _TREND_CODE.get(signal, ("⚪", ""))
+    body = f"{icon} {code} {cum_pct:+.0f}%".replace("  ", " ")
+    if fading and signal != "Neutral":
+        body += "⚠"
+    return f"{body} | {seq}" if seq else body
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# OPTIONS OVER AN EXPIRY CYCLE
+#
+# The futures matrix ports to a 20-day window because a future has one price and no
+# decay. An option does NOT, and porting it naively would have been wrong. Measured
+# on the July 2026 cycle (300,319 option rows, 210 symbols, 20 sessions):
+#
+#   Median premium change from cycle start to expiry, on a FIXED strike:
+#       CE ATM -95.2% (70% of strikes lost value) | CE OTM -98.4% (87%)
+#       PE ATM -93.8% (69%)                       | PE OTM -98.0% (90%)
+#   So "OI up + premium down" over a cycle would classify nearly the whole chain as
+#   WRITING — that is theta running to expiry, not order flow. At ONE day the same
+#   measurement is clean: median premium change +0.0%, only 37-38% losing value.
+#   (Delta matters too: cycle premium change correlates +0.56 CE / -0.44 PE with the
+#   underlying's move, R2 20-31%.)
+#
+# So the classification stays DAILY, where it is valid, and the CYCLE is summarised by
+# COUNTING those daily verdicts. Two further corrections the data forced:
+#
+#   1. Expiry mechanics swamp the daily verdict near the end: with 15 sessions left the
+#      mix is SB 44% / LB 25%, but at 1 session left it is LU 65% / SC 30% — 95% of the
+#      chain "unwinding" because everyone closes out. Sessions inside
+#      _PRE_EXPIRY_WINDOW are excluded from the count.
+#   2. Writing dominates the cross-section: the modal state is SB for 125 of 210 CE and
+#      114 of 210 PE. A raw label would read "short buildup" for most stocks and carry
+#      no information. The directional score is therefore ranked against peers, exactly
+#      as the futures cumulative is.
+#
+# Aggregating OI across strikes IS safe over a cycle: 89% of strikes trading at cycle
+# end already existed at the start, and they hold 98% of end open interest.
+# ═══════════════════════════════════════════════════════════════════════════════
+
+_OPT_OI_DEAD   = 1.0     # |daily OI %| below this is Neutral
+_OPT_PREM_DEAD = 2.0     # |daily premium %| below this is Neutral
+_OPT_MIN_DAYS  = 4       # classified sessions needed before a cycle count is shown
+# A day's verdict is only as good as the chain it was computed from. Measured per
+# symbol-side-day since 2026-05-01: NEAR trades a median of 22 strikes / 7,454
+# contracts, NEXT only 7 strikes / 117 contracts, and FAR a median of ZERO of both
+# (82% of far symbol-side-days have no volume at all; on the latest session just 2 of
+# 207 symbols cleared 100 far contracts). Sessions below these floors are not counted,
+# which is why the far month gets no options column at all — there is no market there
+# to describe, only one or two trades to over-interpret.
+_OPT_MIN_STRIKES = 3     # traded strikes that must contribute to the premium change
+_OPT_MIN_VOL     = 50    # contracts traded on that side that session
+
+# What each daily state means for DIRECTION, per side. Call writing caps upside;
+# put writing supports. Buying is directional the obvious way.
+_OPT_BULL_SIGN = {
+    ("CE", "LB"): +1,   ("CE", "SB"): -1,   ("CE", "SC"): +1,   ("CE", "LU"): -1,
+    ("PE", "LB"): -1,   ("PE", "SB"): +1,   ("PE", "SC"): -1,   ("PE", "LU"): +1,
+}
+_OPT_CODE = {"LB": "Buy", "SB": "Wrt", "SC": "Cov", "LU": "Exit", "Neutral": "—"}
+# Deterministic tie-break when two states held the same number of sessions. Fresh
+# positioning outranks closing, since that is the more informative read.
+_OPT_TIE_ORDER = ["SB", "LB", "SC", "LU"]
+
+
+def _opt_day_state(oi_pct: float | None, prem_pct: float | None) -> str:
+    """
+    One session's OI x PREMIUM verdict for one side of one symbol's chain.
+      OI up   + premium up   -> LB  buyers accumulating
+      OI up   + premium down -> SB  writers accumulating (supply)
+      OI down + premium up   -> SC  writers buying back
+      OI down + premium down -> LU  buyers exiting
+    """
+    if oi_pct is None or prem_pct is None or pd.isna(oi_pct) or pd.isna(prem_pct):
+        return "Neutral"
+    if abs(oi_pct) <= _OPT_OI_DEAD or abs(prem_pct) <= _OPT_PREM_DEAD:
+        return "Neutral"
+    if oi_pct > 0:
+        return "LB" if prem_pct > 0 else "SB"
+    return "SC" if prem_pct > 0 else "LU"
+
+
+def get_expiry_opt_trend(as_of_date: date) -> pd.DataFrame:
+    """
+    Options positioning over the current expiry cycle, per symbol, for the near and
+    next monthly expiries.
+
+    Daily OI x premium verdicts (same strike vs same strike, contracts-weighted) are
+    counted across the cycle; the resulting bull/bear score is ranked against peers.
+
+    Returns one row per symbol:
+        near/next_opt_trend_label   "🔴 Bear · CE Wrt9 PE Buy6 /16d"
+        near/next_opt_bull_z        peer-relative directional score
+    """
+    as_of_date = _as_date(as_of_date)
+
+    # Bind the count to THIS cycle. Without this the window is just "the last N
+    # sessions", which drags the previous cycle's verdicts into the tally — the
+    # near contract was already trading as next month back then.
+    cs = query_dataframe("""
+        WITH near_by_day AS (
+            SELECT trade_date, MIN(expiry_date) AS near_exp FROM fno_bhavcopy
+            WHERE instrument = 'FUTSTK' AND expiry_date >= trade_date AND trade_date <= ?
+            GROUP BY trade_date
+        )
+        SELECT MIN(trade_date) AS cycle_start FROM near_by_day
+        WHERE near_exp = (SELECT near_exp FROM near_by_day WHERE trade_date = ? LIMIT 1)
+    """, [as_of_date, as_of_date])
+    cycle_start = (_as_date(pd.to_datetime(cs["cycle_start"].iloc[0]))
+                   if not cs.empty and pd.notna(cs["cycle_start"].iloc[0]) else as_of_date)
+
+    daily = query_dataframe("""
+        WITH expiries AS (
+            SELECT symbol, expiry_date,
+                   ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY expiry_date) AS exp_rank
+            FROM (SELECT DISTINCT symbol, expiry_date FROM fno_bhavcopy
+                  WHERE trade_date = ? AND instrument = 'FUTSTK' AND expiry_date >= ?) e
+        ),
+        cyc AS (   -- sessions of the CURRENT cycle only, ending at as_of
+            SELECT DISTINCT trade_date FROM fno_bhavcopy
+            WHERE instrument = 'OPTSTK' AND trade_date <= ? AND trade_date >= ?
+        ),
+        o AS (
+            SELECT b.trade_date, b.symbol, x.exp_rank, b.option_type,
+                   b.strike_price, b.open_interest, b.contracts, b.close_price
+            FROM fno_bhavcopy b
+            JOIN expiries x ON b.symbol = x.symbol AND b.expiry_date = x.expiry_date
+            JOIN cyc      c ON c.trade_date = b.trade_date
+            WHERE b.instrument = 'OPTSTK' AND x.exp_rank <= 3
+        ),
+        prev AS (   -- each session's predecessor inside the window
+            SELECT trade_date,
+                   LAG(trade_date) OVER (ORDER BY trade_date) AS prev_dt
+            FROM cyc
+        )
+        SELECT a.trade_date, a.symbol, a.exp_rank, a.option_type,
+               SUM(a.open_interest)                                        AS oi,
+               SUM(p.open_interest)                                        AS prev_oi,
+               SUM(a.contracts)                                            AS side_vol,
+               COUNT(*) FILTER (WHERE p.close_price > 0 AND a.contracts > 0)
+                                                                           AS n_strikes,
+               SUM(CASE WHEN p.close_price > 0
+                        THEN (a.close_price - p.close_price) * a.contracts END)
+                 / NULLIF(SUM(CASE WHEN p.close_price > 0
+                        THEN a.contracts END), 0)                          AS prem_chg,
+               SUM(CASE WHEN p.close_price > 0 THEN p.close_price * a.contracts END)
+                 / NULLIF(SUM(CASE WHEN p.close_price > 0
+                        THEN a.contracts END), 0)                          AS prem_base
+        FROM o a
+        JOIN prev pr ON pr.trade_date = a.trade_date
+        JOIN o    p  ON p.symbol = a.symbol AND p.exp_rank = a.exp_rank
+                    AND p.option_type = a.option_type
+                    AND p.strike_price = a.strike_price
+                    AND p.trade_date = pr.prev_dt
+        GROUP BY 1, 2, 3, 4
+    """, [as_of_date, as_of_date, as_of_date, cycle_start])
+
+    # A frame of "—" for every F&O name, so the columns never vanish from the table
+    # on days when nothing can be said (the roll session, or a cycle too young).
+    universe = query_dataframe("""
+        SELECT DISTINCT symbol FROM fno_bhavcopy
+        WHERE trade_date = ? AND instrument = 'FUTSTK' ORDER BY symbol
+    """, [as_of_date])
+
+    def _blank() -> pd.DataFrame:
+        if universe.empty:
+            return pd.DataFrame()
+        z = universe.copy()
+        for p in ("near", "next", "far"):
+            z[f"{p}_opt_trend_label"] = "—"
+            z[f"{p}_opt_bull_z"] = np.nan
+        return z
+
+    if daily.empty:
+        return _blank()
+
+    daily["trade_date"] = pd.to_datetime(daily["trade_date"])
+    # Drop the expiry-mechanics window: near the end the daily verdict is 95%
+    # "unwinding" for everyone, which is closure, not positioning.
+    near_exp = query_dataframe("""
+        SELECT MIN(expiry_date) AS exp FROM fno_bhavcopy
+        WHERE trade_date = ? AND instrument = 'FUTSTK' AND expiry_date >= ?
+    """, [as_of_date, as_of_date])
+    if not near_exp.empty and pd.notna(near_exp["exp"].iloc[0]):
+        exp_d = _as_date(pd.to_datetime(near_exp["exp"].iloc[0]))
+        # Sessions-left for each cycle session WITHOUT a query per session: it is the
+        # count from as_of, plus the sessions between that session and as_of. Calling
+        # _sessions_until() in a loop cost 2 SQL round-trips per cycle day.
+        cyc_sessions = sorted(daily["trade_date"].unique())
+        left_at_asof = _sessions_until(as_of_date, exp_d)
+        keep = [d for i, d in enumerate(cyc_sessions)
+                if left_at_asof + (len(cyc_sessions) - 1 - i) > _PRE_EXPIRY_WINDOW]
+        daily = daily[daily["trade_date"].isin(keep)]
+    if daily.empty:
+        return _blank()
+
+    daily["oi_pct"] = ((daily["oi"] - daily["prev_oi"])
+                       / daily["prev_oi"].replace(0, np.nan) * 100)
+    daily["prem_pct"] = (daily["prem_chg"]
+                         / daily["prem_base"].replace(0, np.nan) * 100)
+    # Thin-chain gate: a verdict drawn from one or two trades is not a verdict.
+    thin = ((daily["n_strikes"].fillna(0) < _OPT_MIN_STRIKES)
+            | (daily["side_vol"].fillna(0) < _OPT_MIN_VOL))
+    daily["state"] = [_opt_day_state(a, b)
+                      for a, b in zip(daily["oi_pct"], daily["prem_pct"])]
+    daily.loc[thin, "state"] = "Thin"          # excluded from the count entirely
+    daily = daily[daily["state"] != "Thin"]
+    if daily.empty:
+        return pd.DataFrame()
+    daily["bull"] = [_OPT_BULL_SIGN.get((t, s), 0)
+                     for t, s in zip(daily["option_type"], daily["state"])]
+
+    out = pd.DataFrame({"symbol": sorted(daily["symbol"].unique())})
+    for rank, pfx in ((1, "near"), (2, "next"), (3, "far")):
+        R = daily[daily["exp_rank"] == rank]
+        if R.empty:
+            out[f"{pfx}_opt_trend_label"] = "—"
+            out[f"{pfx}_opt_bull_z"] = float("nan")
+            continue
+
+        n_days = R.groupby("symbol")["trade_date"].nunique()
+        score = R.groupby("symbol")["bull"].sum() / n_days.replace(0, np.nan)
+
+        # Dominant non-Neutral state per side, and how many sessions it held.
+        # TIES MUST BREAK DETERMINISTICALLY: with a count of 1 several states tie and
+        # value_counts() ordering is not stable, which made the same input render
+        # "PE Wrt1" on one call and "PE Exit1" on the next. Sort by count, then by a
+        # fixed state order.
+        def _side(sym_grp, side):
+            s = sym_grp[(sym_grp.option_type == side) & (sym_grp.state != "Neutral")]
+            if s.empty:
+                return "—", 0
+            vc = s["state"].value_counts()
+            top = sorted(vc.items(), key=lambda kv: (-kv[1], _OPT_TIE_ORDER.index(kv[0])))[0]
+            return _OPT_CODE.get(top[0], "—"), int(top[1])
+
+        rows = {}
+        for sym, g in R.groupby("symbol"):
+            ce_c, ce_n = _side(g, "CE")
+            pe_c, pe_n = _side(g, "PE")
+            rows[sym] = (ce_c, ce_n, pe_c, pe_n, int(n_days.get(sym, 0)))
+
+        med = score.median()
+        mad = (score - med).abs().median()
+        usable = (score.notna().sum() >= _MIN_PEERS) and pd.notna(mad) and mad > 0
+        z = (score - med) / mad if usable else pd.Series(np.nan, index=score.index)
+
+        def _sides(ce_c, ce_n, pe_c, pe_n) -> str:
+            """Name only the sides that actually had a verdict ('PE —0' reads as noise)."""
+            parts = []
+            if ce_n:
+                parts.append(f"CE {ce_c}{ce_n}")
+            if pe_n:
+                parts.append(f"PE {pe_c}{pe_n}")
+            return " ".join(parts) if parts else "quiet"
+
+        lab = {}
+        for sym, (ce_c, ce_n, pe_c, pe_n, nd) in rows.items():
+            if nd < _OPT_MIN_DAYS:
+                lab[sym] = "—"
+                continue
+            sides = _sides(ce_c, ce_n, pe_c, pe_n)
+            if rank == 3:
+                # Far month: counts only, no Bull/Bear tint. Peer ranking needs a real
+                # cross-section and the far chain rarely has one (on a typical session
+                # only a handful of the 200+ symbols trade a far option at all), so a
+                # ranked verdict there would be a comparison against almost nobody.
+                lab[sym] = f"⚪ {sides} /{nd}d"
+                continue
+            if pd.isna(z.get(sym, np.nan)):
+                lab[sym] = "—"
+                continue
+            zz = z[sym]
+            icon, word = (("🟢", "Bull") if zz > _TREND_Z else
+                          ("🔴", "Bear") if zz < -_TREND_Z else ("⚪", "Bal"))
+            lab[sym] = f"{icon} {word} | {sides} /{nd}d"
+
+        out[f"{pfx}_opt_trend_label"] = out["symbol"].map(lab).fillna("—").astype(str)
+        out[f"{pfx}_opt_bull_z"] = pd.to_numeric(out["symbol"].map(z), errors="coerce")
+
+    # Symbols that trade futures but had no usable option data still need a row, or
+    # the merge downstream leaves NaN where the table expects a string.
+    if not universe.empty:
+        out = universe.merge(out, on="symbol", how="left")
+        for p in ("near", "next", "far"):
+            out[f"{p}_opt_trend_label"] = out[f"{p}_opt_trend_label"].fillna("—").astype(str)
+            out[f"{p}_opt_bull_z"] = pd.to_numeric(out[f"{p}_opt_bull_z"], errors="coerce")
+    return out
+
+
+def get_expiry_oi_trend(as_of_date: date, seq_n: int = _SEQ_N) -> pd.DataFrame:
+    """
+    Per-expiry OI + price trend measured on the MONTHLY EXPIRY CYCLE basis:
+    cumulative from the session the current cycle began (the last monthly roll) to
+    as_of_date, tracked on the SAME contract (matched by expiry_date), plus the
+    last `seq_n` daily steps so the path is visible, not just the endpoint.
+
+    Returns one row per symbol:
+        symbol,
+        near/next/far_oi_trend_pct   cumulative OI change % since the cycle start
+        near/next/far_trend_label    "🟢 LB +8% | +2, -1, +3, +2"
+        trend_window                 cycle days elapsed (the cumulative's basis)
+    """
+    as_of_date = _as_date(as_of_date)
+
+    # Cycle start = the FIRST session on which today's near expiry was the market's
+    # nearest expiry. Derived from the contract's own identity, not by scanning back
+    # for a roll: _trading_days_since_roll() caps its lookback at 12 sessions (right
+    # for its own 3-day post-expiry job) and returns None past cycle day 12, which
+    # would silently anchor the cumulative in the PREVIOUS cycle for the whole second
+    # half of every month. Cycles run 16-25 sessions.
+    cyc = query_dataframe("""
+        WITH near_by_day AS (
+            SELECT trade_date, MIN(expiry_date) AS near_exp
+            FROM fno_bhavcopy
+            WHERE instrument = 'FUTSTK' AND expiry_date >= trade_date AND trade_date <= ?
+            GROUP BY trade_date
+        )
+        SELECT MIN(trade_date) AS cycle_start,
+               COUNT(*) - 1     AS cycle_days
+        FROM near_by_day
+        WHERE near_exp = (SELECT near_exp FROM near_by_day
+                          WHERE trade_date = ? LIMIT 1)
+    """, [as_of_date, as_of_date])
+    cycle_days = (int(cyc["cycle_days"].iloc[0])
+                  if not cyc.empty and pd.notna(cyc["cycle_days"].iloc[0]) else None)
+    lookback = _TREND_MAX_LOOKBACK if cycle_days is None else max(cycle_days + 1, seq_n + 1)
+
+    raw = query_dataframe("""
+        WITH expiries AS (   -- rank as of TODAY; we then follow each contract back
+            SELECT symbol, expiry_date,
+                   ROW_NUMBER() OVER (PARTITION BY symbol ORDER BY expiry_date) AS exp_rank
+            FROM (
+                SELECT DISTINCT symbol, expiry_date
+                FROM fno_bhavcopy
+                WHERE trade_date = ? AND instrument = 'FUTSTK' AND expiry_date >= ?
+            ) e
+        ),
+        win AS (             -- enough sessions to reach back to the cycle start
+            SELECT trade_date FROM (
+                SELECT DISTINCT trade_date FROM fno_bhavcopy
+                WHERE instrument = 'FUTSTK' AND trade_date <= ?
+                ORDER BY trade_date DESC LIMIT ?
+            ) s
+        )
+        SELECT f.trade_date, f.symbol, x.exp_rank,
+               f.open_interest AS oi, f.contracts AS vol, f.close_price
+        FROM fno_bhavcopy f
+        JOIN expiries x ON f.symbol = x.symbol AND f.expiry_date = x.expiry_date
+        JOIN win      w ON w.trade_date = f.trade_date
+        WHERE f.instrument = 'FUTSTK' AND x.exp_rank <= 3
+    """, [as_of_date, as_of_date, as_of_date, int(min(lookback, _TREND_MAX_LOOKBACK))])
+
+    if raw.empty:
+        return pd.DataFrame()
+
+    raw["trade_date"] = pd.to_datetime(raw["trade_date"])
+    sessions = sorted(raw["trade_date"].unique())
+    latest = sessions[-1]
+
+    # Sessions left on the near contract — drives the pre-expiry guard below.
+    near_exp = query_dataframe("""
+        SELECT MIN(expiry_date) AS exp FROM fno_bhavcopy
+        WHERE trade_date = ? AND instrument = 'FUTSTK' AND expiry_date >= ?
+    """, [as_of_date, as_of_date])
+    sessions_left = None
+    if not near_exp.empty and pd.notna(near_exp["exp"].iloc[0]):
+        sessions_left = _sessions_until(
+            as_of_date, _as_date(pd.to_datetime(near_exp["exp"].iloc[0])))
+    pre_expiry = sessions_left is not None and sessions_left <= _PRE_EXPIRY_WINDOW
+    # Cycle start = `cycle_days` sessions back. Clamp to what we actually pulled.
+    n_back = len(sessions) - 1 if cycle_days is None else min(cycle_days, len(sessions) - 1)
+    base_dt = sessions[-(n_back + 1)] if n_back >= _TREND_MIN_DAYS else None
+
+    out = pd.DataFrame({"symbol": sorted(raw["symbol"].unique())})
+    out["trend_window"] = n_back
+
+    for rank, pfx in ((1, "near"), (2, "next"), (3, "far")):
+        R = raw[raw["exp_rank"] == rank]
+        if R.empty:
+            out[f"{pfx}_oi_trend_pct"] = float("nan")
+            out[f"{pfx}_trend_label"] = "—"
+            continue
+
+        now = R[R["trade_date"] == latest].set_index("symbol")
+        # Liquidity is judged over a FIXED recent window, not the cycle so far. Using
+        # the whole cycle made the gate a different statistic on different days — a
+        # 2-session median on cycle day 1 versus a 21-session median on day 20, which
+        # is why the far month's pass rate drifted 13% -> 41% through a cycle.
+        recent = sessions[-_VOL_WINDOW:]
+        med_vol = R[R["trade_date"].isin(recent)].groupby("symbol")["vol"].median()
+        idx = now.index
+        f = pd.DataFrame(index=idx)
+        f["med_vol"] = med_vol.reindex(idx)
+
+        # ── cumulative since the cycle began, same contract ───────────────────
+        if base_dt is not None:
+            was = R[R["trade_date"] == base_dt].set_index("symbol")
+            common = idx.intersection(was.index)
+            b_oi = was["oi"].reindex(idx)
+            b_px = was["close_price"].reindex(idx)
+            f["oi_pct"] = (now["oi"] - b_oi) / b_oi.replace(0, float("nan")) * 100
+            f["px_pct"] = (now["close_price"] / b_px.replace(0, float("nan")) - 1) * 100
+            # Fill-up guard: a contract that held under _TREND_MIN_BASE of its
+            # current OI at the cycle start is RAMPING, not trending. This is what
+            # blanks the next month late in a cycle and the far month nearly always.
+            f.loc[b_oi < _TREND_MIN_BASE * now["oi"], "oi_pct"] = float("nan")
+            f.loc[b_oi.isna(), "oi_pct"] = float("nan")
+            # Pre-expiry guard: in the last few sessions the near contract is being
+            # closed out market-wide, so its cumulative is a rollover artefact.
+            if rank == 1 and pre_expiry:
+                f["oi_pct"] = float("nan")
+        else:
+            f["oi_pct"] = float("nan")
+            f["px_pct"] = float("nan")
+
+        # ── the day-by-day path (always valid, cycle or not) ──────────────────
+        piv = R.pivot_table(index="symbol", columns="trade_date", values="oi",
+                            aggfunc="last").reindex(idx)
+        steps = piv.pct_change(axis=1) * 100
+        tail = steps[steps.columns[-seq_n:]]
+        f["seq"] = [_seq_str(r) for r in tail.to_numpy()]
+
+        # ── peer-relative: strip the day's common lifecycle drift for this rank ─
+        # Withheld when the surviving peer set is too small or degenerate (every
+        # name identical => MAD 0). z stays NaN there, which renders as "—" rather
+        # than "Neutral": we do not know, which is not the same as no build.
+        n_peers = int(f["oi_pct"].notna().sum())
+        med = f["oi_pct"].median()
+        mad = (f["oi_pct"] - med).abs().median()
+        usable = n_peers >= _MIN_PEERS and pd.notna(mad) and mad > 0
+        f["z"] = ((f["oi_pct"] - med) / mad) if usable else float("nan")
+        if not usable and rank != 3:
+            f["oi_pct"] = float("nan")   # no ranking => no cumulative claim either
+
+        # ── is TODAY pushing with the cycle build, or against it? ─────────────
+        last_step = tail[tail.columns[-1]] if len(tail.columns) else pd.Series(np.nan, index=idx)
+        fading = (np.sign(last_step) * np.sign(f["oi_pct"])) < 0
+
+        if rank == 3:
+            # Far month: OI only (its price is stale), and only where it trades.
+            liquid = f["med_vol"] >= _FAR_MIN_VOL
+            f.loc[~liquid, "oi_pct"] = float("nan")
+            f["label"] = [
+                ((f"{'🟢' if v > 0 else '🔴' if v < 0 else '⚪'} {v:+.0f}% | {s}")
+                 if pd.notna(v) else (f"— | {s}" if ok else "—"))
+                for v, s, ok in zip(f["oi_pct"], f["seq"], liquid)
+            ]
+        else:
+            band = _px_band(n_back)
+            sig = [_trend_signal(p, z, band) for p, z in zip(f["px_pct"], f["z"])]
+            f["label"] = [_trend_label(sg, v, bool(fd), s)
+                          for sg, v, fd, s in zip(sig, f["oi_pct"], fading, f["seq"])]
+
+        out = out.merge(
+            f[["oi_pct", "label"]].rename(
+                columns={"oi_pct": f"{pfx}_oi_trend_pct", "label": f"{pfx}_trend_label"}
+            ).rename_axis("symbol").reset_index(),
+            on="symbol", how="left",
+        )
+        out[f"{pfx}_trend_label"] = out[f"{pfx}_trend_label"].fillna("—")
+
+    return out

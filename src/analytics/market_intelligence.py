@@ -122,11 +122,35 @@ class MarketIntelligence:
 # ── Helper: next Thursday expiry ─────────────────────────────────────────────
 
 def _next_thursday(from_date: date) -> date:
-    """Next Thursday (weekly expiry) strictly after from_date."""
+    """Next Thursday (weekly expiry) strictly after from_date.
+
+    DEPRECATED — NSE moved Nifty weekly expiry off Thursday, so a hardcoded
+    weekday is wrong for part of the history. Kept only as a last-resort fallback
+    when fno_bhavcopy is unavailable. Prefer _next_index_expiry (data-driven).
+    """
     days = (3 - from_date.weekday()) % 7
     if days == 0:
         days = 7
     return from_date + timedelta(days=days)
+
+
+def _next_index_expiry(as_of_date: date, symbol: str = "NIFTY") -> Optional[date]:
+    """The nearest index-option expiry on/after as_of_date, read from the AUTHORITATIVE
+    contract calendar in fno_bhavcopy (the same source index_prediction uses). Returns
+    None if F&O data is unavailable, so callers can fall back to _next_thursday."""
+    df = query_dataframe(
+        """
+        SELECT MIN(expiry_date) AS exp FROM fno_bhavcopy
+        WHERE instrument = 'OPTIDX' AND symbol = ?
+          AND trade_date = (SELECT MAX(trade_date) FROM fno_bhavcopy WHERE trade_date <= ?)
+          AND expiry_date > ?
+        """,
+        [symbol, as_of_date, as_of_date],
+    )
+    if df.empty or pd.isna(df["exp"].iloc[0]):
+        return None
+    exp = df["exp"].iloc[0]
+    return exp.date() if hasattr(exp, "date") else exp
 
 
 # ── Helper: safe z-score ──────────────────────────────────────────────────────
@@ -1690,7 +1714,11 @@ def _build_reasoning(signals: list[Signal], score: float, as_of_date: date) -> s
 # ── Weekly Expiry View ────────────────────────────────────────────────────────
 
 def _weekly_expiry_view(oi_df: pd.DataFrame, as_of_date: date) -> WeeklyExpiryView:
-    expiry = _next_thursday(as_of_date)
+    # Data-driven expiry from the real contract calendar (fno_bhavcopy). Falls back
+    # to the legacy Thursday assumption only if F&O data is missing. This fixes the
+    # DTE≤1 expiry-day branch of the verdict firing on the wrong day after NSE moved
+    # the Nifty weekly expiry off Thursday.
+    expiry = _next_index_expiry(as_of_date) or _next_thursday(as_of_date)
     days_to = (expiry - as_of_date).days
 
     # PCR in last 3D before expiry window

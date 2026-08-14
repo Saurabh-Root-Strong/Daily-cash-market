@@ -165,19 +165,20 @@ def cmd_backfill_fno(args) -> int:
     from src.ingestion.orchestrator import run_fno_backfill
     days = int(args.days) if args.days else 50
     print(f"Backfilling F&O Bhavcopy (FNO) data for last {days} trading days...")
-    print("Source: NSE Archives — F&O-Bhavcopy File (DAT). Press Ctrl+C to stop.")
+    print("Source: NSE Archives — UDiFF F&O Bhavcopy (served from 2024-01-01, no expiry). "
+          "Press Ctrl+C to stop.")
     run_fno_backfill(days=days)
     print("FNO backfill complete.")
     return 0
 
 
 def cmd_fill_gaps(args) -> int:
-    """Fill FAO + FII stats gaps for last N trading days (fast, targeted)."""
+    """Fill FAO + FII stats + Index + FNO gaps for last N trading days (targeted)."""
     from src.ingestion.orchestrator import _fill_supplementary_gaps
     from src.ingestion.http_client import NSEHttpClient
     from src.data.repository import get_repository
     days = int(args.days) if args.days else 7
-    print(f"Scanning last {days} trading days for FAO / FII-stats gaps…")
+    print(f"Scanning last {days} trading days for FAO / FII-stats / Index / FNO gaps…")
     client = NSEHttpClient()
     repo   = get_repository()
     _fill_supplementary_gaps(client, repo, lookback_days=days)
@@ -210,6 +211,7 @@ def cmd_fetch_fpi_latest(_args) -> int:
 
 def cmd_data_health(_args) -> int:
     """Show completeness status for all data tables."""
+    from datetime import date
     from src.data.health import run_health_check
     h = run_health_check(lookback_days=10)
     print(f"\nData Health Report — {h.as_of.strftime('%d %b %Y')}")
@@ -235,10 +237,18 @@ def cmd_data_health(_args) -> int:
     if auto_fixable:
         print("ACTION: Run `python -m src.cli fill-gaps 10` to auto-fix the gaps above.")
     if fno_errors:
-        missing = ", ".join(str(d) for s in fno_errors for d in s.critical_missing)
-        print(f"FNO NOTE: {missing} — NSE removes historical FNO files after 7 days.")
-        print("          Download fo*.zip from nseindia.com/all-reports-derivatives and")
-        print("          drop into data/fii_imports/, then run: python -m src.cli import-fno-bhav")
+        missing = sorted(d for s in fno_errors for d in s.critical_missing)
+        span = (date.today() - min(missing)).days if missing else 0
+        missing_str = ", ".join(str(d) for d in missing)
+        print(f"FNO NOTE: {missing_str}")
+        if missing and min(missing) >= date(2024, 1, 1):
+            # UDiFF zips are served for the whole format era — auto-recoverable.
+            reach = max(10, int(span * 5 / 7) + 5)   # calendar span -> weekdays
+            print(f"          Auto-recover: python -m src.cli backfill-fno {reach}")
+        else:
+            print("          Pre-dates the UDiFF format (2024-01-01) — download fo*.zip from")
+            print("          nseindia.com/all-reports-derivatives into data/fii_imports/,")
+            print("          then run: python -m src.cli import-fno-bhav")
     if not h.has_errors:
         print("All data current.")
     return 1 if h.has_errors else 0
@@ -323,8 +333,8 @@ def main() -> int:
     fsp = sub.add_parser("backfill-fii-stats", help="Backfill FII Derivatives Statistics (buy/sell value)")
     fsp.add_argument("days", nargs="?", default=None, help="Number of trading days (default 365)")
 
-    fnop = sub.add_parser("backfill-fno", help="Backfill F&O Bhavcopy DAT data (futures+options)")
-    fnop.add_argument("days", nargs="?", default=None, help="Number of trading days (default 50)")
+    fnop = sub.add_parser("backfill-fno", help="Backfill F&O Bhavcopy (futures+options; UDiFF, up to ~1yr)")
+    fnop.add_argument("days", nargs="?", default=None, help="Number of trading days (default 50; up to ~250 = 1yr)")
 
     gp = sub.add_parser("fill-gaps", help="Fill FAO+FII gaps for recent N days (targeted, fast)")
     gp.add_argument("days", nargs="?", default=None, help="Number of trading days to scan (default 7)")

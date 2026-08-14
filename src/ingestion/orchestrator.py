@@ -36,6 +36,18 @@ log = get_logger(__name__)
 
 _MAX_LOOKBACK_DAYS = 7
 
+# NSE serves date-addressable UDiFF F&O bhavcopy zips
+# (BhavCopy_NSE_FO_..._{YYYYMMDD}_F_0000.csv.zip) on nsearchives. This is NOT a
+# rolling retention window — it is the whole UDiFF era, kept permanently.
+# Bisected 2026-08-05: 2023-12-28 → 404, 2024-01-01 → 200 (1.68 MB), and every
+# probe from there to today returns a full payload (2024-07-24, two years old,
+# serves 1.37 MB). The earlier "~1 year / 330 days" reading was an artifact of
+# only ever probing inside one year; it silently blocked every backfill older
+# than that, which is why 2024-07-24..2024-11-29 stayed empty. The real bound is
+# the format start date below — before it, only the retired FNO_BC*.DAT and
+# fo*.zip formats existed, which need the manual import path.
+_FNO_UDIFF_FIRST_DATE = date(2024, 1, 1)
+
 
 def _weekdays_back(n: int) -> list[date]:
     """Return the n most-recent weekdays (Mon–Fri) before today."""
@@ -106,12 +118,14 @@ def fetch_one_date(
         except Exception as fii_exc:
             log.warning("FII stats fetch failed for %s: %s", trade_date, fii_exc)
 
-        # Fetch FNO Bhavcopy — direct NSE archive URLs work for the last ~7 days.
+        # Fetch FNO Bhavcopy — date-addressable UDiFF zips are served by NSE for
+        # the entire UDiFF era (2024-01-01 onwards), so any date at or after the
+        # format start is fetchable (the daily path only ever hits recent dates;
+        # deeper dates arrive via backfill).
         # The no-date API is skipped for historical dates (fetcher handles this).
         try:
             from datetime import date as _date
-            days_ago = (_date.today() - trade_date).days
-            if 0 <= days_ago <= 6:
+            if _FNO_UDIFF_FIRST_DATE <= trade_date <= _date.today():
                 fno_df = FNOBhavCopyFetcher(client).fetch(trade_date)
                 if not fno_df.empty:
                     repo.upsert_fno_bhavcopy(fno_df)
@@ -137,17 +151,16 @@ def _fill_supplementary_gaps(
 ) -> None:
     """
     Scan last `lookback_days` trading days and fill any gaps in supplementary
-    tables (FAO, FII stats, Index data).  Bhavcopy presence is the gate —
-    we only attempt a fill when bhavcopy already exists for that date.
+    tables (FAO, FII stats, Index data, FNO bhavcopy).  Bhavcopy presence is the
+    gate — we only attempt a fill when bhavcopy already exists for that date.
 
-    FNO bhavcopy is included for dates within the last 6 days — NSE keeps DAT
-    files for ~7 days via direct archive URLs.  Older gaps require manual import.
+    FNO bhavcopy is treated like the other supplementary tables: UDiFF zips are
+    served by NSE for ~1 year, so the whole `lookback_days` scan is recoverable.
+    Holes older than the scan window are recovered on demand via `run_fno_backfill`.
     FPI flows are excluded: NSDL 1-2 day lag is expected — no alert needed.
     """
     target_dates = _weekdays_back(lookback_days)
     bhavcopy_dates = repo.get_dates_present(target_dates)
-
-    fno_window = date.today() - timedelta(days=6)
 
     fao_dates = repo.get_distinct_dates("fao_participant")
     fii_dates = repo.get_distinct_dates("fii_derivatives_stats")
@@ -162,7 +175,7 @@ def _fill_supplementary_gaps(
         needs_fao = d not in fao_dates
         needs_fii = d not in fii_dates
         needs_idx = d not in idx_dates
-        needs_fno = d not in fno_dates and d >= fno_window
+        needs_fno = d not in fno_dates
 
         if not (needs_fao or needs_fii or needs_idx or needs_fno):
             continue
@@ -426,10 +439,12 @@ def run_fno_backfill(
     """
     Fetch F&O Bhavcopy for the last `days` trading days.
 
-    NSE keeps the DAT files on direct archive URLs for ~7 days.
-    For today: uses the no-date API (always available).
-    For past dates (up to 6 days ago): uses direct archive URLs.
-    Older dates are not available from NSE and require manual fo*.zip import.
+    NSE serves date-addressable UDiFF zips for the whole UDiFF era
+    (2024-01-01 onwards, no rolling expiry), so `days` can be large — 620
+    weekdays reaches the format start. Today's file falls back to the no-date
+    API; every other date uses the dated UDiFF URL. Dates already present are
+    skipped, so re-runs are cheap. Only gaps BEFORE 2024-01-01 need the manual
+    fo*.zip import path — those pre-date the UDiFF format entirely.
     """
     from src.data.schema import initialize_schema
 
@@ -454,7 +469,7 @@ def run_fno_backfill(
                 repo.upsert_fno_bhavcopy(df)
                 log.info("  [OK] %d rows stored for %s", len(df), actual_date)
             else:
-                log.info("  [--] No data (NSE archive expired or holiday)")
+                log.info("  [--] No data (holiday, or before the UDiFF era)")
         except Exception as exc:
             log.warning("  [!!] Failed: %s", exc)
         time.sleep(1.0)

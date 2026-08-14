@@ -15,6 +15,7 @@ Columns per file:
 from __future__ import annotations
 
 import io
+import re
 from datetime import date
 
 import pandas as pd
@@ -171,6 +172,15 @@ def _parse_fao_csv(text: str, trade_date: date, data_type: str) -> pd.DataFrame:
 
     df.columns = [c.strip() for c in df.columns]
     df = df.rename(columns=_COL_MAP)
+
+    # Header drift across archive eras — the earliest files (2012-01-02..05) ship
+    # "CLIENT_TYPE", later ones carry stray tabs/case changes. Normalise separators
+    # and case before failing, so the whole 2012→today archive parses.
+    if "client_type" not in df.columns:
+        def _key(c: str) -> str:
+            return re.sub(r"[\s_]+", " ", str(c)).strip().lower()
+        norm = {_key(k): v for k, v in _COL_MAP.items()}
+        df = df.rename(columns=lambda c: norm.get(_key(c), c))
 
     if "client_type" not in df.columns:
         raise ParseError(
