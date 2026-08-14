@@ -27,7 +27,7 @@ from typing import Generator
 
 import duckdb
 
-__all__ = ["ConnectionManager"]
+__all__ = ["ConnectionManager", "is_lock_error"]
 
 
 def _read_only() -> bool:
@@ -48,6 +48,16 @@ def _read_only() -> bool:
 _MAX_RETRIES = int(os.environ.get("DUCKDB_LOCK_RETRIES", "30"))
 _BASE_DELAY  = float(os.environ.get("DUCKDB_LOCK_BASE_DELAY", "0.1"))   # seconds
 _MAX_DELAY   = float(os.environ.get("DUCKDB_LOCK_MAX_DELAY", "0.75"))   # seconds
+
+
+def is_lock_error(exc: Exception) -> bool:
+    """Public alias — callers outside this module need to recognise contention.
+
+    The dashboard uses it to tell "the nightly ingest holds the file" (expected,
+    transient, retry in a moment) apart from a genuine fault. Without that
+    distinction a routine data refresh renders a full traceback to the user.
+    """
+    return _is_lock_error(exc)
 
 
 def _is_lock_error(exc: Exception) -> bool:

@@ -631,3 +631,46 @@ def cached_sector_overlay(selected_date: date, min_turnover: float):
         return apply_memory_overlay(rot, selected_date, regime)
     except Exception:
         return rot
+
+
+@st.cache_data(ttl=_TTL)
+def cached_next_month_context(as_of: date) -> dict:
+    """Conditions monitor for the next 1-4 weeks — base rates + FII positioning
+    state. NOT a forecast; see src/analytics/market_context.py.
+
+    Deliberately NOT named cached_market_context: that name is already taken
+    above and feeds Index Prediction. Appending a second definition would have
+    shadowed it and silently handed Index Prediction the wrong payload.
+    """
+    from src.analytics.market_context import get_market_context
+    return get_market_context(as_of)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_analogues(as_of: date) -> dict:
+    """Past setups resembling `as_of` and what followed. Descriptive — the
+    analogue vote tested null/inverted; see src/analytics/market_context.py."""
+    from src.analytics.market_context import get_analogues
+    return get_analogues(as_of)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_fii_only_view(as_of: date) -> dict:
+    """FII-only market read. Carries its own measured track record — see
+    src/analytics/fii_only.py before treating the stance as a forecast."""
+    from src.analytics.fii_only import get_fii_only_view
+    return get_fii_only_view(as_of)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_fii_actions(as_of: date) -> dict:
+    """What FIIs did per leg — buildup/unwinding/covering, read not inferred."""
+    from src.analytics.fii_only import get_fii_actions
+    return get_fii_actions(as_of)
+
+
+@st.cache_data(ttl=_TTL)
+def cached_fii_footprint(as_of: date, symbol: str = "NIFTY") -> dict:
+    """FII size in the index book + market-wide option walls + rollover."""
+    from src.analytics.fii_only import get_fii_footprint
+    return get_fii_footprint(as_of, symbol)

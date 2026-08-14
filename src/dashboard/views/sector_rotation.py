@@ -39,6 +39,8 @@ from src.dashboard.cache.queries import (
     cached_forward_tilt,
     cached_clock_replay,
     cached_operator_footprint,
+    cached_next_month_context,
+    cached_analogues,
     cached_clock_stock_detail,
     cached_tilt_replay,
     cached_sector_month_map,
@@ -5406,17 +5408,298 @@ def _render_month_seasonality(selected_date: date) -> None:
         )
 
 
+def _plain_level(pct: float) -> tuple[str, str]:
+    """Percentile -> words. A z-score is a statistician's readout; the person
+    reading this wants to know if it is high, low, or ordinary."""
+    if pct != pct:
+        return "—", ""
+    if pct >= 90:
+        return "🔴 Very high", "near the top of its 2-year range"
+    if pct >= 70:
+        return "🟠 High", "above its usual range"
+    if pct >= 30:
+        return "⚪ Normal", "middle of its usual range"
+    if pct >= 10:
+        return "🔵 Low", "below its usual range"
+    return "🟣 Very low", "near the bottom of its 2-year range"
+
+
+def _render_market_next_month(selected_date: date) -> None:
+    """Conditions monitor for the next 1-4 weeks. Emits NO direction — see
+    src/analytics/market_context.py for the audit trail behind that choice."""
+    try:
+        ctx = cached_next_month_context(selected_date)
+    except Exception as exc:                                    # noqa: BLE001
+        st.error(f"Market context unavailable: {exc}")
+        return
+    if not ctx.get("ok"):
+        st.info(ctx.get("error", "No data."))
+        return
+
+    meta = ctx["meta"]
+    br = ctx["base_rates"]
+    one_mo = br.loc[br["horizon"] == "1 month"]
+    up1m = float(one_mo["up_rate_pct"].iloc[0]) if len(one_mo) else float("nan")
+    mv1m = float(one_mo["mean_pct"].iloc[0]) if len(one_mo) else float("nan")
+
+    # ── ONE plain sentence, before any table ────────────────────────────────
+    st.markdown("#### 🧭 Market Next Month")
+    st.markdown(
+        f"### Since 2018, Nifty has been higher a month later **{up1m:.0f}% of the time**, "
+        f"averaging **{mv1m:+.1f}%**.")
+    st.caption(
+        "That is what happens by default, with no view at all. It is the number "
+        "any forecast has to beat — and nothing tested here beats it. So this page "
+        "shows you **where conditions stand**, not where the market is going.")
+
+    st.divider()
+
+    # ── conditions, in words ────────────────────────────────────────────────
+    st.markdown("##### Where things stand right now")
+    stt = ctx["state"]
+    if stt.empty:
+        st.caption("No FII positioning available for this date.")
+    else:
+        cols = st.columns(len(stt))
+        for c, (_, r) in zip(cols, stt.iterrows()):
+            level, phrase = _plain_level(r["pct_2y"])
+            moved = ""
+            if r["z60"] == r["z60"] and r["z60_5d_ago"] == r["z60_5d_ago"]:
+                dz = r["z60"] - r["z60_5d_ago"]
+                if abs(dz) >= 0.4:
+                    moved = "rising" if dz > 0 else "falling"
+            with c:
+                st.metric(
+                    label=r["feature"].replace("FII ", ""),
+                    value=level.split(" ", 1)[1] if " " in level else level,
+                    delta=moved if moved else None,
+                    delta_color="off",
+                    help=r["why"])
+                st.caption(f"{level.split(' ')[0]} {phrase} · {r['pct_2y']:.0f}th percentile")
+
+    st.caption(
+        "**Reading it:** these describe FII positioning only — how they are "
+        "leaning, not what will happen. FIIs run structurally short index futures "
+        "as a hedge, so a low reading is normal there, not bearish.")
+
+    st.divider()
+
+    # ── the RANGE — the honest answer to "what can happen next" ─────────────
+    st.markdown("##### What Nifty and Bank Nifty have actually done from here")
+
+    # where both indices closed and what they did today — shown for BOTH, not just
+    # whichever is selected below, since the pair is the comparison that matters
+    lv = ctx.get("levels")
+    if lv is not None and not lv.empty:
+        lcols = st.columns(len(lv))
+        for c, (_, r) in zip(lcols, lv.iterrows()):
+            c.metric(
+                r["index"],
+                f"{r['close']:,.0f}",
+                f"{r['chg_pts']:+,.0f} pts ({r['chg_pct']:+.2f}%)",
+                help=f"Close on {r['date']:%d %b %Y} versus the previous session "
+                     f"({r['prev_close']:,.0f}).")
+        _stale = lv[lv["is_stale"]]
+        if len(_stale):
+            st.caption("⚠️ " + ", ".join(
+                f"**{r['index']}** last traded {r['date']:%d %b %Y}"
+                for _, r in _stale.iterrows())
+                + " — no session on the selected date, so the close shown is that "
+                  "day's, not the selected one's.")
+
+    rg = ctx.get("ranges")
+    if rg is None or rg.empty:
+        st.caption("Range history unavailable.")
+    else:
+        which = st.radio("Index", ["Nifty 50", "Nifty Bank"], horizontal=True,
+                         key="mnm_idx", label_visibility="collapsed")
+        sub = rg[rg["index"] == which]
+        if len(sub):
+            st.caption(f"**{which} is at {sub['spot'].iloc[0]:,.0f} today.**")
+        for _, r in sub.iterrows():
+            st.markdown(f"**{r['horizon']}**")
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Likely range (1 in 2)",
+                      f"{r['lvl_p25']:,.0f} – {r['lvl_p75']:,.0f}",
+                      f"{r['pts_p25']:+,.0f} to {r['pts_p75']:+,.0f} pts",
+                      delta_color="off")
+            c2.metric("Wider range (8 in 10)",
+                      f"{r['lvl_p10']:,.0f} – {r['lvl_p90']:,.0f}",
+                      f"{r['pts_p10']:+,.0f} to {r['pts_p90']:+,.0f} pts",
+                      delta_color="off")
+            c3.metric("Typical swing", f"±{r['typical_swing_pts']:,.0f} pts",
+                      f"rose {r['up_rate_pct']:.0f}% of the time",
+                      delta_color="off")
+        st.caption(
+            "**This is the reliable part.** Direction is not forecastable from "
+            "anything tested here, but the range is — and it is what you can "
+            "actually plan around: position size, stop distance, whether an option "
+            "premium is rich or cheap.")
+        st.caption(
+            "**These bands adapt to today's volatility.** Each past outcome is "
+            "scaled by the volatility known before it, then rescaled to now — so a "
+            "calm market gives a tighter band than a violent one. Checked over "
+            "~2,800 out-of-sample forecasts: the 8-in-10 band actually contained "
+            "81% of Nifty outcomes and 82% of Bank Nifty's. Raw historical "
+            "percentiles were both wider AND less accurate (84% and 88%), because "
+            "they blend the COVID crash into a quiet week.")
+        st.caption(
+            "⚠️ **The band is not a promise.** 8 in 10 means one month in five "
+            "finishes outside it, and the worst month in this history was about "
+            "−37% for Nifty and −45% for Bank Nifty. Size for the tail, not for "
+            "the middle.")
+
+    st.divider()
+
+    # ── ANALOGUES — past setups that looked like today, and what followed ───
+    st.markdown("##### Days that looked like today, and what happened next")
+    try:
+        ana = cached_analogues(selected_date)
+    except Exception as exc:                                    # noqa: BLE001
+        ana = {"ok": False, "error": str(exc)}
+    if not ana.get("ok"):
+        st.caption(ana.get("error", "Analogue matching unavailable."))
+    else:
+        am = ana["meta"]
+        adf = ana["analogues"].copy()
+        summ = ana["summary"]
+        for _, r in summ.iterrows():
+            st.markdown(
+                f"**{r['horizon']}** — of the {int(r['n'])} closest past setups, "
+                f"**{r['up_share_pct']:.0f}%** were higher after this long. "
+                f"Middle outcome **{r['median_pct']:+.1f}%**, "
+                f"spanning **{r['worst_pct']:+.1f}%** to **{r['best_pct']:+.1f}%**.")
+        show = adf.copy()
+        show["Date"] = pd.to_datetime(show["date"]).dt.strftime("%d %b %Y")
+        show["Nifty then"] = show["close"].round(0)
+        show["Match"] = show["distance"].round(2)
+        st.dataframe(
+            show[["Date", "Nifty then", "Match", "1 week", "2 weeks", "1 month"]],
+            hide_index=True, use_container_width=True,
+            height=int(len(show)) * 35 + 45,
+            column_config={
+                "Match": _hnc(format="%.2f",
+                    help="Distance from today's setup — lower is a closer match. "
+                         "Built from trend, momentum, volatility, drawdown from the "
+                         "52-week high, and the 50-day slope."),
+                "Nifty then": _hnc(format="%,.0f", help="Where Nifty closed that day."),
+                "1 week": _hnc(format="%+.2f%%", help="What Nifty did over the next week."),
+                "2 weeks": _hnc(format="%+.2f%%", help="What Nifty did over the next 2 weeks."),
+                "1 month": _hnc(format="%+.2f%%", help="What Nifty did over the next month."),
+            })
+        st.caption(
+            f"**These are {am['k']} separate episodes, not {am['k']} adjacent days.** "
+            f"Matches must be at least {am['min_sep']} sessions apart. Without that "
+            f"rule the closest matches sit a median of {am['median_gap_no_guard']} "
+            f"sessions apart — the same week counted {am['k']} times, which would "
+            f"invent a confident consensus from one observation. With it, the median "
+            f"gap is {am['median_gap_guard']} sessions.")
+        st.warning(
+            "⚠️ **A lopsided vote here is NOT evidence of direction.** Tested "
+            f"walk-forward over {am['walk_forward_days']:,} days: when at least 70% "
+            "of analogues had risen, Nifty then rose "
+            f"**{am['bull_hit'][0]:.1f}% / {am['bull_hit'][1]:.1f}% / "
+            f"{am['bull_hit'][2]:.1f}%** of the time at 1 week / 2 weeks / 1 month, "
+            f"against base rates of **{am['base_hit'][0]:.1f}% / "
+            f"{am['base_hit'][1]:.1f}% / {am['base_hit'][2]:.1f}%** — slightly "
+            "better at one week, the same at two, **worse at one month**. A sign "
+            "that flips with the horizon is noise, not a weak signal. Rank "
+            f"correlation with what actually happened: {am['ic_1w']:+.3f} / "
+            f"{am['ic_2w']:+.3f} / {am['ic_1m']:+.3f} — essentially zero. "
+            "**Use the SPREAD, not the vote** — the value is seeing how differently "
+            "the market resolved from setups that looked alike.")
+        st.caption(
+            "One oddity worth knowing rather than trading: when analogues leaned "
+            f"BEARISH (≤30% up), Nifty rose {am['bear_hit'][0]:.1f}% / "
+            f"{am['bear_hit'][1]:.1f}% / {am['bear_hit'][2]:.1f}% of the time — "
+            "above the base rate at every horizon. But that rests on only "
+            f"{am['bear_n'][0]}/{am['bear_n'][1]}/{am['bear_n'][2]} heavily "
+            "overlapping days, which is a handful of independent episodes. Not "
+            "claimed as a signal.")
+
+    st.divider()
+
+    # ── the analogue, compressed to one line per horizon ────────────────────
+    st.markdown("##### What has followed conditions like today's")
+    an = ctx["analogue"]
+    if an.empty:
+        st.caption("Not enough comparable history.")
+    else:
+        agg = (an.groupby("horizon")
+                 .agg(rose=("up_rate_pct", "mean"), base=("base_up_pct", "mean"),
+                      diff=("excess_pp", "mean"), n=("n_similar", "sum"))
+                 .reindex([h for h in ("1 week", "2 weeks", "1 month")
+                           if h in an["horizon"].unique()]))
+        for h, r in agg.iterrows():
+            gap = r["rose"] - r["base"]
+            verdict = ("no different from normal" if abs(gap) < 3
+                       else "slightly better than normal" if gap > 0
+                       else "slightly worse than normal")
+            st.markdown(
+                f"**{h}** — after conditions like today's, Nifty rose "
+                f"**{r['rose']:.0f}%** of the time. Normally it rises "
+                f"**{r['base']:.0f}%** of the time. → *{verdict}.*")
+        st.caption(
+            "The gap between those two numbers is the only part that is about "
+            "positioning. Everything else is the market's habit of drifting up.")
+
+    # ── methodology, folded away ────────────────────────────────────────────
+    with st.expander("Why there is no up/down call here (the testing)"):
+        st.markdown(f"""
+A next-week / next-month direction call from FII positioning was tested over
+**{meta['fii_sessions']:,} sessions** ({meta['fii_start']} onward). It is not in
+the data:
+
+* **Continuous signal is noise.** 12 FII features × 3 horizons, Newey-West
+  t-statistics at lag = horizon. Best was **t = 2.13**; with 36 tests you need
+  about **3.2** before it means anything.
+* **The extremes look good until tested honestly.** Using real-time (not
+  hindsight) thresholds, lagging the signal one session because NSE publishes the
+  participant file *after* the close, and running a permutation that prices in
+  having searched **{meta['n_candidates_searched']} candidates**:
+  **p = {meta['reality_check_p']:.3f} — it does not survive.**
+* **The scale of the illusion.** Searching that many candidates on *shuffled*
+  data typically throws up a **{meta['null_max_excess_pp']:.2f}pp** "edge" —
+  larger than the real one that was found.
+* **It decays.** FII index-option positioning in its top decile was worth
+  +1.54pp per 2 weeks in 2018-21, +0.89pp in 2022-24, and **+0.33pp** from
+  Nov-2024 on (51.2% hit rate against a 49.4% base).
+* An earlier 8.5-year re-test of the classic FII long-share read had already
+  returned **IC ≈ 0**.
+
+**Widening the data did not help — it made it worse.** The test was rerun with
+FII open interest *and* FII volume *and* FII derivative rupee flows *and* market
+breadth *and* delivery acceleration *and* sector trend and dispersion:
+**{meta['wide_candidates']} candidates**. Best result **{meta['wide_best_pp']:.2f}pp**, against a
+noise floor whose *median* is **{meta['wide_null_median_pp']:.2f}pp** —
+**p = {meta['wide_p']:.3f}**. The strongest real finding was smaller than what shuffled
+data typically hands you once you search that hard. More inputs mean a bigger
+search, not a better answer.
+
+**A data trap this page avoids.** SEBI raised F&O lot sizes from Nov-2024, so FII
+contract counts fell several-fold (median index-futures long 156,356 → 27,460).
+Any multi-year z-score on raw counts would partly be measuring that rule change,
+so everything here is scored against a rolling {meta['z_window']}-session window
+and never compared across the break.
+""")
+        st.caption(
+            f"FII participant data from {meta['fii_start']} · "
+            f"{meta['fii_sessions']:,} sessions · positioning publishes after the "
+            "close, so the earliest it could be acted on is the next session.")
+
+
 def render(selected_date: date, min_turnover: float, all_dates: list | None = None) -> None:
     st.subheader("🔄 Sector Rotation — Smart Money Tracker")
 
     (tab_smart, tab_tilt, tab_clock, tab_rs, tab_season,
-     tab_oper) = st.tabs([
+     tab_oper, tab_next) = st.tabs([
         "🎯 Smart Money (Daily Signal)",
         "🧭 Forward Tilt",
         "📅 Rotation Clock",
         "📈 vs Nifty50",
         "🗓️ Month-Wise Best/Worst",
         "🕵️ Operator Footprint",
+        "🧭 Market Next Month",
     ])
 
     with tab_smart:
@@ -5436,3 +5719,6 @@ def render(selected_date: date, min_turnover: float, all_dates: list | None = No
 
     with tab_oper:
         _render_operator_footprint(selected_date)
+
+    with tab_next:
+        _render_market_next_month(selected_date)

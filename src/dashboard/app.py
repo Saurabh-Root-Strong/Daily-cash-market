@@ -226,7 +226,30 @@ def main() -> None:
     from src.core.config import get_config
     from src.dashboard.cache.queries import cached_available_dates
 
-    all_dates = cached_available_dates(limit=500)   # full history (date selector + sector rotation)
+    # The nightly `src.cli daily` ingest holds DuckDB's single write lock for
+    # minutes, and DuckDB lets exactly one process hold the file — so every query
+    # here fails for that window. connection.py already retries ~15s, which covers
+    # ordinary contention but not a full ingest. Rather than dumping a traceback
+    # for an expected operational state, say what is happening and offer a retry.
+    from src.data.connection import is_lock_error
+    try:
+        all_dates = cached_available_dates(limit=500)  # full history (date selector + rotation)
+    except Exception as exc:                            # noqa: BLE001 — re-raised below
+        if not is_lock_error(exc):
+            raise
+        st.warning(
+            "**Data refresh in progress.** The nightly market-data update is "
+            "writing to the database right now, and it takes exclusive access "
+            "while it runs. The dashboard will work again as soon as it "
+            "finishes — usually a few minutes."
+        )
+        st.caption(f"Database: `{exc.__class__.__name__}` — waiting on the writer.")
+        # No cache clearing here: st.cache_data does not memoise exceptions, so
+        # the failed call left nothing behind. Clearing would needlessly discard
+        # every good cached result, including the ~20s footprint scan.
+        if st.button("🔄 Try again"):
+            st.rerun()
+        st.stop()
 
     if not all_dates:
         st.error("No data found. Run `setup.bat` or `python -m src.cli backfill 60` to load data.")
