@@ -117,14 +117,13 @@ def _fii() -> pd.DataFrame:
 _ANALOGUE_K = 12
 _ANALOGUE_MIN_SEP = 21     # sessions — see the docstring below
 
-# The formation vector, defined ONCE. The quoted calibration below was measured on
-# exactly these columns; changing them invalidates it. An earlier version of this
+# The formation vector, defined ONCE. The calibration in _ANALOGUE_CAL was measured
+# on exactly these columns; changing them invalidates it. An earlier version of this
 # module quoted numbers measured on an 8-feature variant (it also carried market
 # breadth), which produced entirely different neighbours — the displayed
-# calibration described a model that was not running. Keep this list and the
-# calibration in the docstring in sync, or re-measure with
-# scratchpad/analogue_audit.py, which imports THIS module rather than
-# reimplementing it.
+# calibration described a model that was not running. Change this list and you must
+# re-measure with `python -m scripts.audit_analogues`, which imports THIS module and
+# refuses to print anything until its walk reproduces get_analogues exactly.
 _ANALOGUE_FEATURES = ("ret_5d", "ret_21d", "vs_ma50", "vs_ma200",
                       "vol20", "dd_52w", "ma_slope")
 
@@ -142,6 +141,40 @@ def _formation(s: pd.Series) -> pd.DataFrame:
     F["dd_52w"] = (s / s.rolling(252).max() - 1) * 100
     F["ma_slope"] = s.rolling(50).mean().pct_change(10) * 100
     return F[list(_ANALOGUE_FEATURES)]
+
+
+def _session_breaks(index_name: str = "Nifty 50") -> pd.DatetimeIndex:
+    """Dates where index_data is MISSING one or more sessions immediately before.
+
+    Detected by the exchange's own continuity: NSE publishes prev_close with every
+    snapshot, so if prev_close(t) does not match close(t-1) as stored, at least one
+    session between them never got ingested.
+
+    THIS IS NOT HYPOTHETICAL. Nifty 50 has 14 such breaks over 2013-2026, and one
+    of them is large: May-June 2017 holds 7 and 3 sessions against a normal 21-22,
+    ~30 missing in all. That matters here because forward returns are taken with a
+    POSITIONAL shift — `s.shift(-5)` means "5 stored rows", so across the 2017 hole
+    2017-06-09 + 5 rows lands on 2017-07-04, and a 25-calendar-day move gets
+    labelled "1 week". The values are real prices; it is the horizon label that is
+    wrong, and wrong in the direction that inflates the min/max span.
+
+    CLAUDE.md already warns never to join forward returns by positional shift
+    across calendars. The case not anticipated there is that the index's OWN
+    calendar has holes, so even a within-series shift is unsafe.
+
+    Candidates whose forward window contains a break are dropped in get_analogues.
+    """
+    df = query_dataframe(
+        """SELECT trade_date, close_val, prev_close FROM index_data
+           WHERE index_name = ? AND close_val IS NOT NULL
+             AND prev_close IS NOT NULL ORDER BY trade_date""", [index_name])
+    if df.empty:
+        return pd.DatetimeIndex([])
+    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    df = df.drop_duplicates("trade_date").reset_index(drop=True)
+    prior = df["close_val"].shift(1)
+    rel = ((df["prev_close"] - prior).abs() / prior)
+    return pd.DatetimeIndex(df.loc[(rel > 0.001) & prior.notna(), "trade_date"])
 
 
 def _fii_formation(as_of: date, full: bool = False) -> pd.DataFrame:
@@ -196,16 +229,6 @@ def _fii_formation(as_of: date, full: bool = False) -> pd.DataFrame:
     return F
 
 
-# Measured 2026-08-14 on the SAME 2018+ window for both modes, so the comparison
-# is like-for-like rather than confounded by a shorter history.
-#   bull-vote edge over base rate:   1wk / 2wk / 1mo
-#     price only (7 features)      -2.9 / -6.0 / +0.9 pp
-#     price + FII (10 features)    +2.6 / +4.0 / -2.4 pp
-# Adding FII flips the short horizons positive — but a max-statistic block
-# permutation across all 9 candidates (3 feature sets x 3 horizons) returns
-# p = 0.695: the best edge (+6.3pp) sits BELOW the null median (7.4pp). Every set
-# also flips sign at one month. So FII matching is offered because it answers a
-# different question, NOT because it predicts better.
 _ANALOGUE_MODE_NOTE = {
     "price": "Matches on price structure alone. Reaches back to 2013.",
     "price+fii": ("Matches on price structure AND FII positioning. Only reaches "
@@ -213,32 +236,101 @@ _ANALOGUE_MODE_NOTE = {
     "fii": ("Matches on FII POSITIONING ONLY — price is ignored entirely. Six "
             "areas: futures long share, day change in net futures, options tilt, "
             "total net position, traded volume, and index-futures rupee flow. "
-            "2018+, and every area has 99% coverage."),
+            "2018+, and every area has 98.6% coverage."),
 }
 
-# Measured 2026-08-14 on the 6-feature FII-only matcher, CORRECTED CALENDAR,
-# 1,503 walk-forward days:
-#   1wk base 57.4% / bull-vote 62.1% (edge +4.7pp) / IC +0.024
-#   2wk base 59.1% / bull-vote 68.2% (edge +9.1pp) / IC +0.086
-#   1mo base 63.6% / bull-vote 67.2% (edge +3.6pp) / IC +0.118
+# ─────────────────────────────────────────────────────────────────────────────
+# CALIBRATION — PER MODE. Re-measured 2026-08-15.
 #
-# THESE REPLACE EARLIER NUMBERS MEASURED ON A BROKEN CALENDAR (+1.2/+1.8/-0.8 with
-# negative ICs). The participant file carries 82 dates that are not exchange
-# sessions — 2018-03-02, 2018-05-01, 2018-08-15 and other holidays — so reindexing
-# prices onto participant dates and taking shift(-h) ROWS meant "21 rows" equalled
-# 21 real sessions only 45% of the time, and ffill invented prices for non-trading
-# days. Fixing it flipped every horizon from ~0/negative to positive with a
-# consistent sign.
+# WHY THIS IS NOW A DICT. It used to be a single flat blob emitted for all three
+# modes, so the dashboard quoted the PRICE model's walk-forward numbers under the
+# "Price + FII" and "FII only" buttons as well. That is the third time this exact
+# drift has happened in this module. The structure now makes it impossible: every
+# displayed figure is keyed by the mode that produced it, and a mode with no
+# measurement carries None rather than borrowing its neighbour's.
 #
-# STILL NOT SIGNIFICANT, and that matters more than the sign: a max-statistic block
-# permutation over the three horizons gives **p = 0.196**. It is nonetheless the
-# only result in this whole line of work whose observed best (9.1pp) EXCEEDS the
-# null median (6.6pp) — every other search this session came in below its own noise
-# floor. Treat as the most promising negative result here, not as an edge.
-_FII_ONLY_CAL = {"base": (57.4, 59.1, 63.6), "bull": (62.1, 68.2, 67.2),
-                 "edge": (4.7, 9.1, 3.6), "ic": (0.024, 0.086, 0.118),
-                 "n_days": 1503, "ratio": 0.082,
-                 "perm_p": 0.196, "null_median": 6.6, "obs_best": 9.1}
+# HOW IT WAS MEASURED. Walk-forward over the COMMON window all three modes share,
+# 1,573 sessions 2020-02-28..2026-07-15, rebuilding the matcher from scratch at
+# every date (causal standardisation, same k/sep/metric as ships here).
+# Base rate on that window: 57.0 / 59.2 / 64.3 % up at 1wk / 2wk / 1mo.
+#
+# THE RULE IS TOP-20% OF EACH MODE'S OWN VOTE, NOT AN ABSOLUTE >=70%. The vote can
+# only take 13 values (k=12) and its spread differs by mode — 10 price+FII features
+# disperse the matches and compress the vote toward 0.5. An absolute 70% cut
+# therefore fired on 30% of days in fii mode and 15% in price+fii, and comparing
+# modes at different selectivity is what produced the earlier "price+fii is worst"
+# reading. It reverses at matched selectivity.
+#
+# `t` IS THE HAC t OF THE RETURN DIFFERENCE (return regressed on the signal dummy,
+# Newey-West at lag = horizon) — NOT the t of the signal-day return level, which is
+# just the equity risk premium and reads ~2.6 for buy-and-hold.
+#
+# NOTHING HERE IS SIGNIFICANT. Every |t| < 1.5. A max-statistic block permutation
+# over the 9 mode x horizon candidates gives p = 0.430: the best real result
+# (+4.40pp, fii at two weeks) sits essentially ON the null median (+4.09pp), i.e.
+# it is the size of thing this search produces from shuffled data as a matter of
+# course. The full audit tried ~410 variants in all (thresholds, k/sep grids,
+# regime splits, anchor grids, consensus rules), which puts the required |t| near
+# 3.6. See scripts/audit_analogues.py.
+_ANALOGUE_CAL = {
+    "price": {
+        "bull_hit": (59.2, 58.3, 60.3), "bull_edge": (2.2, -0.9, -4.0),
+        "bull_n": (573, 520, 335), "bull_t": (0.09, -0.09, 0.19),
+        "bear_hit": (60.2, 65.8, 67.4), "bear_edge": (3.3, 6.7, 3.2),
+        "bear_n": (372, 366, 473),
+        "ctl_edge": (-0.2, -0.4, -1.4), "ctl_sd": (1.4, 2.6, 1.8),
+        "ic": (0.037, -0.002, -0.029),
+        "gap_guard": 114, "gap_noguard": 1,
+        "sens_lo": 58, "sens_hi": 80,
+        "span_cov_1m": 85.4, "span_width_1m": 14.34,
+        "span_ic": (0.093, 0.097, -0.004),
+    },
+    "price+fii": {
+        "bull_hit": (57.6, 60.9, 65.8), "bull_edge": (0.7, 1.8, 1.5),
+        "bull_n": (517, 443, 546), "bull_t": (0.01, 0.08, 0.21),
+        "bear_hit": (57.5, 58.1, 64.3), "bear_edge": (0.5, -1.0, 0.0),
+        "bear_n": (381, 430, 588),
+        "ctl_edge": (-0.4, -1.6, -1.6), "ctl_sd": (1.8, 2.0, 1.5),
+        "ic": (0.037, 0.012, -0.010),
+        "gap_guard": 66, "gap_noguard": 2,
+        "sens_lo": 38, "sens_hi": 75,
+        "span_cov_1m": 88.0, "span_width_1m": 15.79,
+        "span_ic": (0.079, 0.055, 0.025),
+    },
+    "fii": {
+        "bull_hit": (57.9, 63.6, 62.2), "bull_edge": (1.0, 4.4, -2.1),
+        "bull_n": (504, 316, 487), "bull_t": (-0.42, 0.70, -1.14),
+        "bear_hit": (61.8, 57.6, 67.3), "bear_edge": (4.8, -1.5, 3.0),
+        "bear_n": (387, 576, 330),
+        "ctl_edge": (-1.0, -0.6, -2.0), "ctl_sd": (1.9, 2.0, 2.0),
+        "ic": (-0.036, -0.005, -0.050),
+        "gap_guard": 74, "gap_noguard": 28,
+        "sens_lo": 35, "sens_hi": 56,
+        "span_cov_1m": 89.8, "span_width_1m": 16.45,
+        "span_ic": (0.035, 0.008, 0.083),
+    },
+}
+
+# Facts that genuinely are shared across the three modes.
+_ANALOGUE_SHARED = {
+    "window_days": 1573, "window": "2020-02-28..2026-07-15",
+    "base_hit": (57.0, 59.2, 64.3),
+    "rule": "top 20% of that mode's own vote",
+    "perm_p": 0.430, "perm_null_median": 4.09, "perm_obs_best": 4.40,
+    "n_candidates": 9, "n_candidates_full": 410,
+    # THE SPAN IS CALIBRATED BUT NOT INFORMATIVE. Coverage lands at 85-90% against
+    # the 84.6% that 12 independent draws imply, so the width is honest. But raced
+    # against 20-day trailing volatility for predicting the realised |move|, the
+    # span carries little: Spearman IC +0.093 / +0.097 / -0.004 for the span
+    # against +0.243 / +0.251 / +0.328 for plain vol20, and in a joint regression
+    # only vol20 survives. The vol-scaled band shown higher up this same tab uses
+    # vol20 directly and is narrower at comparable coverage. Do not present the
+    # span as an independent range product. (price-mode figures; the other two
+    # modes are weaker still — see scripts/audit_analogues.py.)
+    # vol20_ic stays shared: it is the same volatility series in every mode.
+    # The span IC does NOT — it lives per mode in _ANALOGUE_CAL["span_ic"].
+    "vol20_ic": (0.243, 0.251, 0.328),
+}
 
 
 def get_analogues(as_of: date, k: int = _ANALOGUE_K,
@@ -247,46 +339,53 @@ def get_analogues(as_of: date, k: int = _ANALOGUE_K,
     Past days whose market FORMATION most resembles `as_of`, and what followed.
 
     THE GUARD THAT MAKES THIS MEANINGFUL. Nearest neighbours in a price series are
-    usually adjacent days, because markets are autocorrelated. Measured 2026-08-13:
-    without a separation rule the 12 "most similar days in history" sat a median of
-    **2 sessions apart** — twelve consecutive days of one episode, whose forward
-    windows overlap almost entirely. That is one observation presented as twelve,
-    and it manufactures a confident consensus out of nothing. Analogues here must be
-    >= _ANALOGUE_MIN_SEP sessions apart, which lifts the median gap to 70 sessions.
+    usually adjacent days, because markets are autocorrelated. Without a separation
+    rule the 12 "most similar days in history" sit a WALK-FORWARD MEDIAN of 1
+    session apart in price mode — twelve consecutive days of one episode, whose
+    forward windows overlap almost entirely. That is one observation presented as
+    twelve. Analogues must therefore be >= _ANALOGUE_MIN_SEP sessions apart.
 
-    CALIBRATION — READ BEFORE TRUSTING AGREEMENT. Re-measured on the MAHALANOBIS
-    matcher (switching the metric changes the neighbours, so the previous
-    Euclidean numbers no longer described this model). Walk-forward, 2,477 days:
+    The guard's effect is mode-dependent and is now recorded per mode in
+    _ANALOGUE_CAL (`gap_noguard` / `gap_guard`), because a single pair of numbers
+    was being quoted under all three buttons and was wrong under two of them:
 
-        base rate                    57.9% / 60.1% / 64.0%   (1wk / 2wk / 1mo)
-        >=70% of analogues rose ->   58.8% / 59.1% / 57.7%
-        <=30% of analogues rose ->   76.0% / 75.5% / 83.3%   (n=96 / 49 / 18)
-        Spearman IC of analogue median vs actual:
-                                     +0.013 / -0.014 / -0.067
+        price      median gap 1  -> 72 sessions   (guard essential)
+        price+fii  median gap 2  -> 66 sessions   (guard essential)
+        fii        median gap 28 -> 74 sessions   (guard barely binds)
 
-    The vote carries no usable direction: a bullish consensus lands ON the base
-    rate at one week and BELOW it at one month. The bearish tail sits far above
-    base — but on 18 heavily overlapping days at one month, which is a couple of
-    independent episodes, so it is not claimed as a signal.
+    CALIBRATION — READ _ANALOGUE_CAL, NOT THIS DOCSTRING. Every figure the view
+    displays is keyed by mode there, with the measurement window, the selection
+    rule and the HAC t-statistic attached. The short version: on 1,573 common
+    sessions the bull-vote edge over base runs -5.1pp to +2.4pp depending on mode
+    and horizon, every |HAC t| is below 1.5, a max-statistic permutation over the
+    9 mode x horizon candidates returns p = 0.550 with the observed best BELOW the
+    null median, and the full audit's ~410 candidates put the required |t| near
+    3.6. The vote carries no usable direction in any mode.
 
-    TWO MORE THINGS THE AUDIT ESTABLISHED, both of which limit how the output
-    should be read:
+    THREE THINGS THAT LIMIT HOW THE OUTPUT SHOULD BE READ:
 
-    * MATCH DISTANCE DOES NOT RANK RELIABILITY. Bucketing by distance, the
-      direction hit-rate at one month was 55.1% for the CLOSEST quartile and 62.8%
-      for the FARTHEST. Absolute error is mildly better for close matches (2.09 vs
-      2.53) but not monotonic. A tighter match is not a more trustworthy one.
-    * THE OUTPUT MOVES WITH THE PARAMETERS. Across defensible k (8-20) and
-      separation (10-42) settings, today's one-month up-share ranges 58%-75%.
-      Quoting a single figure as if it were precise would be false. (Mahalanobis
-      narrowed this from the 45%-75% the Euclidean metric produced — evidence the
-      metric fix was right, not merely different.)
+    * MATCH DISTANCE DOES NOT RANK RELIABILITY. A tighter match is not a more
+      trustworthy one. The distance is also NOT comparable across modes: it is a
+      Mahalanobis distance in 7 / 10 / 6 dimensions, so the same number means
+      different things on different buttons. Compare it within one mode only.
+    * THE OUTPUT MOVES WITH THE PARAMETERS, more than previously stated. Across
+      defensible k (8-20) and separation (10-42), today's one-month up-share spans
+      58-80% in price mode, 38-75% in price+fii and 35-56% in fii. Quoting a single
+      figure as precise would be false.
+    * THE SPREAD IS CALIBRATED BUT NOT INFORMATIVE. Coverage is 85-90% against the
+      84.6% that 12 independent draws imply, so the width is honest — but raced
+      against 20-day trailing volatility it adds nothing (see _ANALOGUE_SHARED).
+      The vol-scaled band higher up the tab is the better range product.
 
-    What IS informative is the SPREAD — how differently the market resolved from
-    setups that looked alike.
+    Causal: standardisation uses only prior data, matching only looks backwards, a
+    candidate is skipped unless its own forward window has closed, and candidates
+    whose forward window straddles a hole in index_data are skipped as well.
 
-    Causal: standardisation uses only prior data, matching only looks backwards,
-    and a candidate is skipped unless its own forward window has closed.
+    NOT LAGGED. The FII participant file publishes AFTER the close, so the fii and
+    price+fii formations for date D are not knowable at D's close. Forward returns
+    here start at D's close regardless. Shifting entry one session moves the
+    measured edges by up to 5pp with no stable sign, which is one more reason the
+    numbers above are treated as descriptive rather than tradeable.
     """
     out: dict = {"ok": False, "as_of": as_of, "error": ""}
     s = _index("Nifty 50")
@@ -350,17 +449,32 @@ def get_analogues(as_of: date, k: int = _ANALOGUE_K,
     # always means h genuine trading sessions. Looked up by date below — never by
     # position into F, which is what produced wrong numbers in fii mode.
     fwd = {h: ((s.shift(-h) / s - 1) * 100) for h in HORIZONS.values()}
-    _last_ok = s.index[-1] - pd.Timedelta(days=0)
+
+    # Positions whose forward window straddles a hole in index_data — see
+    # _session_breaks. `shift(-h)` counts STORED rows, so across a hole "5 rows"
+    # is not 5 sessions and the displayed horizon label is wrong.
+    _hmax = max(HORIZONS.values())
+    _breaks = _session_breaks()
+    _bad_pos: set[int] = set()
+    for _b in _breaks:
+        if _b in s.index:
+            _bp = s.index.get_loc(_b)
+            _bad_pos.update(range(max(0, _bp - _hmax), _bp))
+    _n_dropped = 0
+
     picked: list[tuple[int, float]] = []
     for dt_ in dist.index:
-        pos = F.index.get_loc(dt_)
         # the candidate's own forward window must have completed on the INDEX
         # calendar, not merely be N rows back in the feature frame
         if dt_ not in s.index:
             continue
         _spos = s.index.get_loc(dt_)
-        if _spos + max(HORIZONS.values()) >= len(s):
+        if _spos + _hmax >= len(s):
             continue
+        if _spos in _bad_pos:
+            _n_dropped += 1
+            continue
+        pos = F.index.get_loc(dt_)
         if any(abs(pos - p) < _ANALOGUE_MIN_SEP for p, _ in picked):
             continue
         picked.append((pos, float(dist[dt_])))
@@ -389,32 +503,36 @@ def get_analogues(as_of: date, k: int = _ANALOGUE_K,
                 "worst_pct": float(v.min()), "best_pct": float(v.max()),
             })
 
-    out.update({"ok": True, "as_of": s.index[-1].date(), "analogues": df,
+    # THE DATE THE FORMATION ACTUALLY CAME FROM, not the last index session.
+    # In "fii" mode F sits on the participant calendar, which is missing 8 index
+    # sessions since 2018 — every Budget special session among them (2024-01-20,
+    # 2024-05-18, 2025-02-01, 2026-02-01 ...). On those dates the matcher reads the
+    # PREVIOUS participant row while the panel used to caption it as today.
+    # "price+fii" already errored out on the same gap; only "fii" served it
+    # silently. Report the real date and let the view flag the staleness, exactly
+    # as the index-level block below already does with `is_stale`.
+    _form_date = F.index[i].date()
+    _last_session = s.index[-1].date()
+    cal = _ANALOGUE_CAL.get(mode, {})
+
+    out.update({"ok": True, "as_of": _last_session, "analogues": df,
                 "summary": pd.DataFrame(summary),
-                # Measured on THIS feature set — see the docstring. If the features
-                # change, these must be re-measured or they describe a dead model.
                 "meta": {"k": len(df), "min_sep": _ANALOGUE_MIN_SEP,
-                         "median_gap_no_guard": 2, "median_gap_guard": 74,
-                         "walk_forward_days": 2477,
-                         "ic_1w": 0.013, "ic_2w": -0.014, "ic_1m": -0.067,
-                         "bull_hit": (58.8, 59.1, 57.7),
-                         "bear_hit": (76.0, 75.5, 83.3),
-                         "bear_n": (96, 49, 18),
-                         "base_hit": (57.9, 60.1, 64.0),
-                         # audit: closest-quartile matches were NOT more accurate
-                         "dist_hit_closest_1m": 55.1, "dist_hit_farthest_1m": 62.8,
-                         # audit: today's 1-month up-share across k=8..20, sep=10..42
-                         "sens_up_lo": 58, "sens_up_hi": 75,
                          "mode": mode, "mode_note": _ANALOGUE_MODE_NOTE.get(mode, ""),
                          "n_features": int(F.shape[1]),
                          "history_from": F.index.min().date(),
-                         # like-for-like on 2018+; permutation over all 9 candidates
-                         "fii_edge_1w": 2.6, "fii_edge_2w": 4.0, "fii_edge_1m": -2.4,
-                         "price_edge_1w": -2.9, "price_edge_2w": -6.0,
-                         "price_edge_1m": 0.9,
-                         "mode_perm_p": 0.695, "mode_best_edge": 6.3,
-                         "mode_null_median": 7.4,
-                         "fii_only_cal": dict(_FII_ONLY_CAL)}})
+                         # formation provenance
+                         "formation_date": _form_date,
+                         "is_stale": _form_date != _last_session,
+                         # candidates skipped because their forward window
+                         # straddled a hole in index_data (see _session_breaks)
+                         "dropped_gap_candidates": _n_dropped,
+                         "n_session_breaks": int(len(_breaks)),
+                         # PER-MODE calibration. Never fall back to another mode's
+                         # numbers — an absent measurement must read as absent.
+                         "cal": dict(cal),
+                         "shared": dict(_ANALOGUE_SHARED),
+                         "has_cal": bool(cal)}})
     return out
 
 
