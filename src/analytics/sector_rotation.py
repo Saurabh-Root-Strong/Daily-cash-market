@@ -1453,34 +1453,12 @@ def get_sector_rotation_history(
     return query_dataframe(sql, [sector, start, as_of_date, min_turnover_lacs])
 
 
-def get_sector_rotation_timeframe(
-    as_of_date: date,
-    window_trading_days: int = 5,
-    min_turnover_lacs: Optional[float] = None,
-) -> pd.DataFrame:
-    """
-    Multi-period sector rotation clock — where is money flowing in vs out?
-
-    Compares two consecutive N-trading-day windows:
-      current  = last N trading days up to as_of_date
-      prior    = N trading days before that
-
-    Returns one row per sector with:
-      phase             — Leading / Improving / Weakening / Lagging / Neutral
-      flow_signal       — human-readable label
-      delivery_slope    — linear slope of daily wtd delivery % (positive = rising conviction)
-      slope_z           — cross-sectional z-score of delivery_slope across all sectors
-      cum_price_ret_pct — cumulative turnover-weighted price return over current window (%)
-      deliv_value_cr    — total delivery value ₹ Cr (current window)
-      deliv_chg_pct     — delivery value change % vs prior equal-length window
-    """
-    if min_turnover_lacs is None:
-        min_turnover_lacs = get_min_turnover_filter()
-
-    lookback_cal = max(window_trading_days * 3 + 45, 200)
-    start_date   = as_of_date - timedelta(days=lookback_cal)
-
-    hist_sql = """
+# Sector-day panel behind the Rotation Clock. ONE definition: the per-date call
+# and the walk-forward in get_rotation_clock_accuracy both read it, so the
+# backtest cannot drift from the clock it claims to be validating. Bounds are
+# (start, end] — the lower bound is STRICT, and any caller slicing this panel in
+# pandas has to reproduce that.
+_ROTATION_PANEL_SQL = """
         SELECT
             s.sector,
             b.trade_date,
@@ -1505,11 +1483,78 @@ def get_sector_rotation_timeframe(
           AND b.trade_date <= ?
         GROUP BY s.sector, b.trade_date
         ORDER BY s.sector, b.trade_date
+"""
+
+
+def get_sector_rotation_timeframe(
+    as_of_date: date,
+    window_trading_days: int = 5,
+    min_turnover_lacs: Optional[float] = None,
+) -> pd.DataFrame:
     """
-    hist = query_dataframe(hist_sql, [min_turnover_lacs, start_date, as_of_date])
+    Multi-period sector rotation clock — where is money flowing in vs out?
+
+    Compares two consecutive N-trading-day windows:
+      current  = last N trading days up to as_of_date
+      prior    = N trading days before that
+
+    Returns one row per sector with:
+      phase             — Leading / Improving / Weakening / Lagging / Neutral
+      flow_signal       — human-readable label
+      delivery_slope    — linear slope of daily wtd delivery % (positive = rising conviction)
+      slope_z           — cross-sectional z-score of delivery_slope across all sectors
+      cum_price_ret_pct — cumulative turnover-weighted price return over current window (%)
+      deliv_value_cr    — total delivery value ₹ Cr (current window)
+      deliv_chg_pct     — delivery value change % vs prior equal-length window
+    """
+    if min_turnover_lacs is None:
+        min_turnover_lacs = get_min_turnover_filter()
+
+    lookback_cal = _rotation_lookback_cal(window_trading_days)
+    start_date   = as_of_date - timedelta(days=lookback_cal)
+
+    hist = query_dataframe(_ROTATION_PANEL_SQL,
+                           [min_turnover_lacs, start_date, as_of_date])
     if hist.empty:
         return pd.DataFrame()
+    return _rotation_clock_from_panel(hist, window_trading_days,
+                                      get_nifty50_custom_return)
 
+
+def _rotation_lookback_cal(window_trading_days: int) -> int:
+    """Calendar days of history the clock needs for a given window.
+
+    Named because get_rotation_clock_accuracy has to slice exactly the same
+    span out of its prefetched panel; a private copy of `max(w*3+45, 200)`
+    there would silently drift from this one.
+    """
+    return max(window_trading_days * 3 + 45, 200)
+
+
+def _rotation_clock_from_panel(
+    hist: pd.DataFrame,
+    window_trading_days: int,
+    nifty_fn,
+) -> pd.DataFrame:
+    """The clock itself, over an ALREADY-FETCHED sector-day panel.
+
+    Split out so the walk-forward in get_rotation_clock_accuracy can run ~42
+    signal dates against one prefetched panel instead of re-querying per date
+    (measured 2026-08-14: 42 dates x 2 queries x 3 windows = ~250 queries and
+    24.6s of that panel's 29.6s). There must be exactly ONE implementation of
+    this arithmetic — a second copy inside the backtest is how a displayed
+    backtest ends up describing a model that no longer runs.
+
+    `hist` must already be restricted to (as_of - lookback, as_of]; this
+    function derives everything else from what it is given. `nifty_fn(from, to)`
+    returns the index return for the window, or None — it is injected so the
+    backtest can answer from a prefetched series instead of a query per date.
+    """
+    # Re-converting an already-converted trade_date was measured at 2.3ms of a
+    # 55ms call (4%), so it is left alone: skipping it needs a dtype sniff on
+    # every entry and the remaining cost here is the per-sector loop below, not
+    # this line.
+    hist = hist.copy()
     hist["trade_date"] = pd.to_datetime(hist["trade_date"]).dt.date
     all_dates          = sorted(hist["trade_date"].unique())
 
@@ -1528,7 +1573,7 @@ def get_sector_rotation_timeframe(
     # a sector lagging Nifty50 = Improving/Lagging). Without this, during bull markets
     # all sectors have positive price returns and Improving/Lagging become empty.
     curr_dates_sorted = sorted(curr_dates)
-    nifty_window_ret  = get_nifty50_custom_return(curr_dates_sorted[0], curr_dates_sorted[-1])
+    nifty_window_ret  = nifty_fn(curr_dates_sorted[0], curr_dates_sorted[-1])
     nifty_threshold   = nifty_window_ret if nifty_window_ret is not None else 0.0
 
     records = []
@@ -1815,6 +1860,37 @@ def get_rotation_clock_accuracy(
     nser = (nif.assign(trade_date=pd.to_datetime(nif["trade_date"]).dt.date)
                .set_index("trade_date")["nret"]) if not nif.empty else None
 
+    # SIGNAL-side panel, prefetched once — the mirror of the forward panel above.
+    # The loop used to call get_sector_rotation_timeframe per signal date, and
+    # each of those issued its own ~200-day sector query plus a Nifty query: ~42
+    # dates x 2 queries x 3 windows on the Rotation Clock tab. Since the signal
+    # dates are only `w` apart while each needs ~200 calendar days, those windows
+    # almost entirely overlap and were re-read every time.
+    _look = _rotation_lookback_cal(w)
+    _sig_lo = min(all_dates[i] for i in sig_idx) - timedelta(days=_look)
+    _spanel = query_dataframe(_ROTATION_PANEL_SQL,
+                              [min_turnover_lacs, _sig_lo, all_dates[max(sig_idx)]])
+    if _spanel.empty:
+        return {}
+    _spanel["trade_date"] = pd.to_datetime(_spanel["trade_date"]).dt.date
+
+    # Nifty closes for the same span, answering get_nifty50_custom_return from
+    # memory. The 7-day floor is NOT cosmetic: the original query starts at
+    # from_date - 7d, so when the index has no session in that pad it returns
+    # None. index_data has 14 known continuity breaks (May-Jun 2017 is missing
+    # ~30 sessions), so dropping the floor and letting an older close answer
+    # would quietly turn those Nones into numbers.
+    _ncl = query_dataframe("""
+        SELECT trade_date, close_val FROM index_data
+        WHERE index_name = 'Nifty 50' AND trade_date >= ? AND trade_date <= ?
+        ORDER BY trade_date
+    """, [_sig_lo - timedelta(days=7), all_dates[max(sig_idx)]])
+    _ncl_s = (_ncl.assign(trade_date=pd.to_datetime(_ncl["trade_date"]).dt.date)
+                  .set_index("trade_date")["close_val"]) if not _ncl.empty else None
+
+    def _nifty_window_ret(from_date: date, to_date: date):
+        return _nifty_ret_from_closes(_ncl_s, from_date, to_date)
+
     from collections import defaultdict
     agg = defaultdict(lambda: {"n": 0, "hit": 0, "exc": 0.0})
     n_pred = n_hit = 0
@@ -1826,7 +1902,13 @@ def get_rotation_clock_accuracy(
         if len(fwd_dates) < max(3, w // 2):
             continue
         try:
-            ph = get_sector_rotation_timeframe(sig_date, w, min_turnover_lacs)
+            # Same span the per-date query used: (sig_date - lookback, sig_date].
+            # The lower bound is STRICT, matching `b.trade_date > ?`.
+            _sl = _spanel[(_spanel["trade_date"] > sig_date - timedelta(days=_look))
+                          & (_spanel["trade_date"] <= sig_date)]
+            if _sl.empty:
+                continue
+            ph = _rotation_clock_from_panel(_sl, w, _nifty_window_ret)
         except Exception:
             continue
         if ph.empty:
@@ -1991,6 +2073,42 @@ def get_sector_rotation_custom_range(
     df["nifty_return"] = nifty_ret_custom
 
     return df.sort_values("slope_z", ascending=False).reset_index(drop=True)
+
+
+def _nifty_ret_from_closes(
+    closes: Optional[pd.Series],
+    from_date: date,
+    to_date: date,
+) -> Optional[float]:
+    """In-memory twin of get_nifty50_custom_return — same rules, same Nones.
+
+    Exists so the walk-forward can answer ~42 window returns from one prefetched
+    series instead of a query per signal date. It must stay behaviourally
+    identical to the query version, including the parts that look accidental:
+
+      * The 7-day floor is load-bearing. The query starts at from_date - 7d, so
+        if the index has NO session in that pad it returns None rather than
+        reaching further back. index_data has 14 prev_close continuity breaks
+        (May-Jun 2017 is missing ~30 sessions), so a full-series lookup without
+        the floor would silently convert those Nones into numbers.
+      * `start` is the last close ON OR BEFORE from_date — i.e. the first day of
+        the window, not the day before it. That makes the return span one fewer
+        session than it looks; it is the shipped definition and is reproduced,
+        not corrected.
+
+    Pinned against get_nifty50_custom_return by tests/test_rotation_clock_batch.py.
+    """
+    if closes is None or closes.empty:
+        return None
+    idx = closes.index
+    win = closes[(idx >= from_date - timedelta(days=7)) & (idx <= to_date)]
+    if win.empty:
+        return None
+    start_rows = win[win.index <= from_date]
+    if start_rows.empty:                    # end_rows is `win`, already non-empty
+        return None
+    start, end = float(start_rows.iloc[-1]), float(win.iloc[-1])
+    return round((end - start) / start * 100, 2) if start > 0 else None
 
 
 def get_nifty50_custom_return(from_date: date, to_date: date) -> Optional[float]:
