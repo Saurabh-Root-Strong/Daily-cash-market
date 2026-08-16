@@ -179,6 +179,31 @@ def _classify(oi_chg: float, px_chg: float, is_new: bool = False,
     return ACTION_LABELS[(_oi, _px)]
 
 
+# SQL twin of _moneyness_bucket, used to bucket the 400-day baseline inside
+# DuckDB. Kept beside the Python one so the two are read together; they are
+# pinned equal over a grid (NaN/0/negative spot included) by
+# tests/test_operator_footprint_sql.py.
+#
+# The NULL-spot behaviour is deliberate and NOT a missing guard: see the note in
+# get_operator_footprint. `not spot or spot <= 0` is both-False for a NaN spot,
+# so Python falls through to comparisons that are all False and returns
+# 'deep OTM'. Here, a NULL spot makes every WHEN unknown and the row lands in
+# the same ELSE. Do not "fix" this by adding a NULL branch.
+_MONEYNESS_SQL = """
+                CASE
+                    WHEN spot <= 0 OR strike_price IS NULL THEN 'n/a'
+                    WHEN (CASE WHEN option_type = 'PE' THEN -(strike_price / spot - 1.0)
+                               ELSE (strike_price / spot - 1.0) END) <= -0.10 THEN 'deep ITM'
+                    WHEN (CASE WHEN option_type = 'PE' THEN -(strike_price / spot - 1.0)
+                               ELSE (strike_price / spot - 1.0) END) <= -0.02 THEN 'ITM'
+                    WHEN (CASE WHEN option_type = 'PE' THEN -(strike_price / spot - 1.0)
+                               ELSE (strike_price / spot - 1.0) END) <   0.02 THEN 'ATM'
+                    WHEN (CASE WHEN option_type = 'PE' THEN -(strike_price / spot - 1.0)
+                               ELSE (strike_price / spot - 1.0) END) <   0.10 THEN 'OTM'
+                    ELSE 'deep OTM'
+                END"""
+
+
 def _moneyness_bucket(strike: float, spot: float, opt: str) -> str:
     """Bucket by how far the strike sits from spot, from the OPTION's point of view."""
     if not spot or spot <= 0 or strike != strike:
@@ -377,11 +402,32 @@ def get_operator_footprint(as_of_date: date,
 
     opt = opt[opt["dte"] > 0].copy()
     opt["dte_b"] = (opt["dte"] // 7).clip(0, 12)
-    hist = query_dataframe(
-        f"""
+    # The baseline is aggregated IN DuckDB, not in pandas. Pulling the raw window
+    # meant 4,660,068 rows crossing into Python (measured 2026-08-14) to be walked
+    # by two list comprehensions and a groupby.apply; the whole function took ~26s,
+    # only 6s of which was SQL. The aggregate is 20,686 rows and the query runs in
+    # ~1.8s. Nothing about WHAT is computed changed — see tests/test_operator_
+    # footprint_baseline.py, which pins this against the pandas implementation.
+    #
+    # Two faithfulness details, both load-bearing:
+    #
+    # 1. The moneyness CASE has NO explicit NULL-spot branch, and must not gain
+    #    one. _moneyness_bucket's guard is `not spot or spot <= 0`, and for a NaN
+    #    spot BOTH are False (`not nan` is False, `nan <= 0` is False), so it
+    #    falls through and every threshold comparison against NaN is False —
+    #    yielding 'deep OTM', not 'n/a'. SQL reproduces that for free: NULL spot
+    #    makes each WHEN unknown and the row lands in ELSE. Adding
+    #    `WHEN spot IS NULL THEN 'n/a'` would look like a tidy-up and would
+    #    silently reclassify those rows.
+    #
+    # 2. dte // 7 is floor division in pandas but truncates toward zero in
+    #    DuckDB. They disagree only for dte in -6..-1, and .clip(0, 12) maps both
+    #    answers to 0, so the results coincide. Guarded by the negative-dte
+    #    assertion in the test rather than left to luck.
+    _BASE_SQL = """
         WITH base AS (
-            SELECT o.trade_date, o.symbol, o.option_type, o.strike_price,
-                   o.expiry_date, o.open_interest, o.chg_in_oi,
+            SELECT o.symbol, o.option_type, o.strike_price, o.expiry_date,
+                   o.open_interest, o.chg_in_oi,
                    date_diff('day', o.trade_date, o.expiry_date) AS dte,
                    d.close_price AS spot
             FROM fno_bhavcopy o
@@ -399,46 +445,67 @@ def get_operator_footprint(as_of_date: date,
               -- "normal" it was being compared against, suppressing the very thing
               -- this tab exists to find. "Last 3 expiries" must mean 3 that ENDED.
               AND o.expiry_date < ?
+        ), tagged AS (
+            SELECT *,
+                """ + _MONEYNESS_SQL + """ AS moneyness,
+                least(greatest(dte // 7, 0), 12) AS dte_b,
+                greatest(chg_in_oi, 0) * spot / 1e7 AS _add_cr
+            FROM base
+        ), kept AS (
+            -- the last _PRIOR_CYCLES completed expiries, per symbol
+            SELECT * FROM (
+                SELECT *, dense_rank() OVER (PARTITION BY symbol
+                                             ORDER BY expiry_date DESC) AS _er
+                FROM tagged
+            ) WHERE _er <= {cycles}
         )
-        SELECT symbol, option_type, dte, expiry_date,
-               strike_price, open_interest, chg_in_oi, spot
-        FROM base
-        """, [d0, d0, d0])
-    prior = pd.DataFrame()
+    """
+    _base = _BASE_SQL.format(cycles=int(_PRIOR_CYCLES))
+
+    prior = query_dataframe(_base + """
+        SELECT k.symbol, k.option_type, k.moneyness, k.dte_b,
+               median(k.open_interest)       AS oi_norm,
+               stddev_samp(k.open_interest)  AS oi_sd,
+               count(k.open_interest)        AS n_obs,
+               -- FLOW normaliser, in RUPEES: what a day's OI build is normally
+               -- worth in this bucket. Needed because the LEVEL ratio below
+               -- cannot select events (see _MIN_ADD_CR) — this is what the
+               -- multiple is actually quoted from. NULLed out below 5
+               -- observations, matching the old inner-frame filter + LEFT merge.
+               CASE WHEN count(*) FILTER (WHERE k._add_cr > 0) >= 5
+                    THEN median(k._add_cr) FILTER (WHERE k._add_cr > 0) END
+                                             AS add_norm_cr,
+               CASE WHEN count(*) FILTER (WHERE k._add_cr > 0) >= 5
+                    THEN count(*) FILTER (WHERE k._add_cr > 0) END
+                                             AS n_flow
+        FROM kept k
+        GROUP BY 1, 2, 3, 4
+        -- A normaliser built on one or two observations is not a normaliser.
+        HAVING count(k.open_interest) >= 5
+    """, [d0, d0, d0])
+
+    # Per-bucket event bar, from PRIOR sessions only so it is causal — never
+    # from today's cross-section, which would let the day set its own bar.
+    _gate = query_dataframe(_base + f"""
+        SELECT moneyness,
+               quantile_cont(_add_cr, {float(_BUCKET_GATE_Q)}) AS gate
+        FROM kept
+        WHERE _add_cr > 0 AND open_interest * spot / 1e7 >= ?
+        GROUP BY 1
+    """, [d0, d0, d0, min_notional_cr])
+
+    # n_flow reaches pandas as a nullable Int64 (DuckDB BIGINT + NULLs). The
+    # pandas build produced float64, because it came off a LEFT merge that
+    # introduced NaN. Values are identical either way, but the column is
+    # displayed, so keep the dtype the dashboard has always formatted.
+    if "n_flow" in prior.columns:
+        prior["n_flow"] = prior["n_flow"].astype("float64")
+
     bucket_gate = None          # per-moneyness event bar; None -> flat min_add_cr
-    if not hist.empty:
-        hist["moneyness"] = [
-            _moneyness_bucket(s, sp, t)
-            for s, sp, t in zip(hist["strike_price"], hist["spot"], hist["option_type"])]
-        # keep the last _PRIOR_CYCLES COMPLETED expiries only (query filters
-        # expiry_date < d0, so the latest ones here are genuinely finished cycles)
-        keep = (hist.groupby("symbol")["expiry_date"]
-                    .apply(lambda s: sorted(s.unique())[-_PRIOR_CYCLES:]).to_dict())
-        hist = hist[[e in keep.get(sym, []) for sym, e in
-                     zip(hist["symbol"], hist["expiry_date"])]]
-        hist["dte_b"] = (hist["dte"] // 7).clip(0, 12)
-        prior = (hist.groupby(["symbol", "option_type", "moneyness", "dte_b"])
-                     ["open_interest"].agg(["median", "std", "count"])
-                     .reset_index()
-                     .rename(columns={"median": "oi_norm", "std": "oi_sd", "count": "n_obs"}))
-        # A normaliser built on one or two observations is not a normaliser.
-        prior = prior[prior["n_obs"] >= 5]
-        # FLOW normaliser, in RUPEES: what a day's OI build is normally worth in
-        # this bucket. Needed because the LEVEL ratio below cannot select events
-        # (see _MIN_ADD_CR) — this is what the multiple is actually quoted from.
-        hist["_add_cr"] = hist["chg_in_oi"].clip(lower=0) * hist["spot"] / 1e7
-        _flow = (hist[hist["_add_cr"] > 0]
-                 .groupby(["symbol", "option_type", "moneyness", "dte_b"])["_add_cr"]
-                 .agg(["median", "count"]).reset_index()
-                 .rename(columns={"median": "add_norm_cr", "count": "n_flow"}))
-        prior = prior.merge(_flow[_flow["n_flow"] >= 5],
-                            on=["symbol", "option_type", "moneyness", "dte_b"], how="left")
-        # Per-bucket event bar, from PRIOR sessions only so it is causal — never
-        # from today's cross-section, which would let the day set its own bar.
-        _hl = hist[(hist["_add_cr"] > 0)
-                   & (hist["open_interest"] * hist["spot"] / 1e7 >= min_notional_cr)]
-        bucket_gate = (_hl.groupby("moneyness", observed=True)["_add_cr"]
-                          .quantile(_BUCKET_GATE_Q))
+    if not _gate.empty:
+        bucket_gate = _gate.set_index("moneyness")["gate"]
+    if prior.empty:
+        prior = pd.DataFrame()
 
     if not prior.empty:
         opt = opt.merge(prior, on=["symbol", "option_type", "moneyness", "dte_b"], how="left")

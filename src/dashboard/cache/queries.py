@@ -14,6 +14,28 @@ import streamlit as st
 
 _TTL = 300  # seconds
 
+# Walk-forward BACKTESTS over closed history. These are deterministic in their
+# arguments and only move when a new session lands, so a 5-minute TTL bought
+# nothing and cost a full recompute every time one expired. Measured 2026-08-16
+# on 2026-08-14 data: cached_rotation_clock_accuracy is 8.2s per window and the
+# Rotation Clock panel calls it three times (1W/2W/1M) = 24.6s of that panel's
+# 29.6s. cached_signal_backtest already sat at 3600 for exactly this reason;
+# this just names the policy instead of repeating the literal.
+#
+# DO NOT add persist="disk" here. It looks like the obvious next win, since the
+# worst cost is the first view in a fresh process and this dashboard is
+# restarted often. But Streamlit's LocalDiskCacheStorageManager.check_context
+# downgrades that combination to a log line and DROPS the TTL:
+#
+#   "The cached function '%s' has a TTL that will be ignored.
+#    Persistent cached functions currently don't support TTL."
+#
+# A disk-persisted backtest would then never expire, and a corrected session
+# would keep serving pre-correction numbers until someone manually deleted
+# .streamlit/cache. Given this project's history of silently stale displayed
+# values, an hour of recompute is much the cheaper failure.
+_TTL_BACKTEST = 3600  # seconds
+
 
 @st.cache_data(ttl=_TTL)
 def cached_sector_master_performance(
@@ -411,7 +433,7 @@ def cached_sector_rotation_timeframe(
     return get_sector_rotation_timeframe(trade_date, window_trading_days, min_turnover_lacs)
 
 
-@st.cache_data(ttl=_TTL)
+@st.cache_data(ttl=_TTL_BACKTEST)
 def cached_rotation_clock_backtest(
     trade_date: date, window_trading_days: int, min_turnover_lacs: float
 ) -> pd.DataFrame:
@@ -419,7 +441,7 @@ def cached_rotation_clock_backtest(
     return get_rotation_clock_backtest(trade_date, window_trading_days, min_turnover_lacs)
 
 
-@st.cache_data(ttl=3600)   # 1 hour — backtest is expensive; re-runs daily at most
+@st.cache_data(ttl=_TTL_BACKTEST)
 def cached_signal_backtest(
     end_date: date,
     backtest_days: int = 60,
@@ -583,7 +605,7 @@ def cached_sector_memory_context(
     )
 
 
-@st.cache_data(ttl=_TTL)
+@st.cache_data(ttl=_TTL_BACKTEST)
 def cached_rotation_clock_accuracy(selected_date: date, window: int, min_turnover: float):
     """Multi-period (walk-forward) rotation-clock hit-rate + per-phase forward edge."""
     from src.analytics.sector_rotation import get_rotation_clock_accuracy
