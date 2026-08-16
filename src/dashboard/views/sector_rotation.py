@@ -5860,37 +5860,45 @@ and never compared across the break.
             "close, so the earliest it could be acted on is the next session.")
 
 
+_SMART = "🎯 Smart Money (Daily Signal)"
+_TILT = "🧭 Forward Tilt"
+_CLOCK = "📅 Rotation Clock"
+_RS = "📈 vs Nifty50"
+_SEASON = "🗓️ Month-Wise Best/Worst"
+_OPER = "🕵️ Operator Footprint"
+_NEXT = "🧭 Market Next Month"
+
+_PANELS = (_SMART, _TILT, _CLOCK, _RS, _SEASON, _OPER, _NEXT)
+
+
 def render(selected_date: date, min_turnover: float, all_dates: list | None = None) -> None:
     st.subheader("🔄 Sector Rotation — Smart Money Tracker")
 
-    (tab_smart, tab_tilt, tab_clock, tab_rs, tab_season,
-     tab_oper, tab_next) = st.tabs([
-        "🎯 Smart Money (Daily Signal)",
-        "🧭 Forward Tilt",
-        "📅 Rotation Clock",
-        "📈 vs Nifty50",
-        "🗓️ Month-Wise Best/Worst",
-        "🕵️ Operator Footprint",
-        "🧭 Market Next Month",
-    ])
+    # NOT st.tabs. `with tab:` is a plain context manager, so st.tabs runs EVERY
+    # panel body on every rerun and lets the browser hide six of them. Measured
+    # 2026-08-16: ~33s to display one panel, 25.6s of it Operator Footprint,
+    # which you pay even while reading Market Next Month (0.8s of real work).
+    # A selector runs one panel, so the page costs what you are looking at.
+    # Streamlit exposes no way to read which st.tabs tab is active server-side,
+    # so laziness requires owning the selection ourselves.
+    panel = st.segmented_control(
+        "Panel", _PANELS, default=_SMART, key="sr_panel",
+        label_visibility="collapsed")
+    # segmented_control returns None when the active chip is clicked again.
+    # Without this the page would blank out on a stray second click.
+    panel = panel or _SMART
 
-    with tab_smart:
+    if panel == _SMART:
         _render_smart_money(selected_date, min_turnover)
-
-    with tab_tilt:
+    elif panel == _TILT:
         _render_forward_tilt(selected_date, min_turnover)
-
-    with tab_clock:
+    elif panel == _CLOCK:
         _render_rotation_clock(selected_date, min_turnover, all_dates=all_dates)
-
-    with tab_rs:
+    elif panel == _RS:
         _render_relative_strength(selected_date, min_turnover, all_dates=all_dates)
-
-    with tab_season:
+    elif panel == _SEASON:
         _render_month_seasonality(selected_date)
-
-    with tab_oper:
+    elif panel == _OPER:
         _render_operator_footprint(selected_date)
-
-    with tab_next:
+    elif panel == _NEXT:
         _render_market_next_month(selected_date)
