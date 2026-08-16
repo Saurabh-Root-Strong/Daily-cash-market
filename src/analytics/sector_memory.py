@@ -276,6 +276,35 @@ def _similarity(f1: dict[str, float], f2: dict[str, float]) -> float:
     return round(max(0.0, 1.0 - distance), 4)
 
 
+def _similarity_many(f1: dict[str, float], feats: pd.DataFrame) -> np.ndarray:
+    """_similarity for a whole frame of candidate rows at once.
+
+    `feats` must have exactly the _FEAT_WEIGHTS columns. Returns one rounded
+    similarity per row, in row order.
+
+    This exists because get_sector_memory_context is called once per sector
+    (~24 per overlay) over that sector's whole filled history, and scoring the
+    rows one at a time was 16,368 iterrows and the largest single cost in the
+    Smart Money panel. _similarity remains the scalar definition of the metric;
+    tests/test_sector_memory_sim.py pins the two together over random inputs
+    including NaNs, so this cannot quietly drift into a different metric.
+
+    NaN rows come out NaN here, where the scalar path returns 0.0 — Python's
+    max(0.0, nan) keeps 0.0 while np.maximum propagates. Both then fail
+    `>= _MIN_SIMILARITY`, so the row is dropped either way; the caller must
+    compare with >= and never with `not <`.
+    """
+    cols = list(_FEAT_WEIGHTS.keys())
+    w = np.array([_FEAT_WEIGHTS[k] for k in cols], dtype=np.float64)
+    t = np.array([f1.get(k, 0.5) for k in cols], dtype=np.float64)
+    # float64, not the stored float32: the scalar path widened via float()
+    # before doing the arithmetic, and float32 would round differently.
+    f = feats[cols].to_numpy(dtype=np.float64)
+    with np.errstate(invalid="ignore"):
+        return np.round(
+            np.maximum(0.0, 1.0 - np.sqrt((((f - t) ** 2) * w).sum(axis=1))), 4)
+
+
 # ── Schema initialisation ─────────────────────────────────────────────────────
 
 def _ensure_schema() -> None:
@@ -639,6 +668,38 @@ def fill_forward_outcomes(
 
 # ── Memory retrieval ──────────────────────────────────────────────────────────
 
+# Columns the similarity retrieval needs. ONE definition: the per-sector read
+# and the whole-log snapshot must return the same shape, or narrowing the
+# snapshot in pandas would not be interchangeable with querying per sector.
+_MEMORY_LOG_COLS = """trade_date, sector, signal, regime_label, accum_score,
+                   dv_ratio, z_pct,
+                   feat_dv_n, feat_zpct_n, feat_rs_n,
+                   feat_ema20, feat_ema_x, feat_vix_n,
+                   feat_fii_n, feat_hmm_n, feat_pcr_n,
+                   fwd_ret_1w, fwd_ret_2w, fwd_ret_1m,
+                   fwd_rs_1w,  fwd_rs_2w,  fwd_rs_1m"""
+
+
+def read_memory_log_snapshot(cutoff: date) -> pd.DataFrame:
+    """Every filled log row before `cutoff`, for all sectors, in one read.
+
+    apply_memory_overlay asks get_sector_memory_context for ~24 sectors with the
+    same as_of_date, and each call was issuing its own single-sector query. The
+    rows are the same either way: this is the identical predicate minus the
+    `sector = ?` term, with the same ORDER BY, so masking by sector afterwards
+    yields the same frame in the same order.
+
+    Callers must treat the result as read-only — it is shared across sectors.
+    """
+    return query_dataframe(f"""
+        SELECT {_MEMORY_LOG_COLS}
+        FROM sector_rotation_log
+        WHERE outcome_filled = TRUE
+          AND trade_date < ?
+        ORDER BY trade_date DESC
+    """, [cutoff])
+
+
 def get_sector_memory_context(
     as_of_date:    date,
     sector:        str,
@@ -654,6 +715,7 @@ def get_sector_memory_context(
     hmm_state:     Optional[str],
     pcr:           Optional[float],
     same_signal_only: bool = False,
+    _log_snapshot: Optional[pd.DataFrame] = None,
 ) -> SectorMemoryContext:
     """
     Find the K most similar historical setups for this (sector, conditions)
@@ -698,26 +760,30 @@ def get_sector_memory_context(
     # use it is what makes the memory honest.
     _OUTCOME_HORIZON_DAYS = 31
     try:
-        sig_filter = "AND signal = ?" if same_signal_only else ""
-        params     = [sector, as_of_date - timedelta(days=_OUTCOME_HORIZON_DAYS)]
-        if same_signal_only:
-            params.insert(1, signal)
+        _cutoff = as_of_date - timedelta(days=_OUTCOME_HORIZON_DAYS)
+        if _log_snapshot is not None:
+            # Caller already read the whole log for this cutoff (see
+            # apply_memory_overlay). Narrowing in pandas selects the same rows
+            # in the same order — the snapshot is fetched ORDER BY trade_date
+            # DESC and boolean masking is order-preserving.
+            hist = _log_snapshot[_log_snapshot["sector"] == sector]
+            if same_signal_only:
+                hist = hist[hist["signal"] == signal]
+        else:
+            sig_filter = "AND signal = ?" if same_signal_only else ""
+            params     = [sector, _cutoff]
+            if same_signal_only:
+                params.insert(1, signal)
 
-        hist = query_dataframe(f"""
-            SELECT trade_date, sector, signal, regime_label, accum_score,
-                   dv_ratio, z_pct,
-                   feat_dv_n, feat_zpct_n, feat_rs_n,
-                   feat_ema20, feat_ema_x, feat_vix_n,
-                   feat_fii_n, feat_hmm_n, feat_pcr_n,
-                   fwd_ret_1w, fwd_ret_2w, fwd_ret_1m,
-                   fwd_rs_1w,  fwd_rs_2w,  fwd_rs_1m
-            FROM sector_rotation_log
-            WHERE sector = ?
-              {sig_filter}
-              AND outcome_filled = TRUE
-              AND trade_date < ?
-            ORDER BY trade_date DESC
-        """, params)
+            hist = query_dataframe(f"""
+                SELECT {_MEMORY_LOG_COLS}
+                FROM sector_rotation_log
+                WHERE sector = ?
+                  {sig_filter}
+                  AND outcome_filled = TRUE
+                  AND trade_date < ?
+                ORDER BY trade_date DESC
+            """, params)
     except Exception as exc:
         ctx.error = f"DB read failed: {exc}"
         return ctx
@@ -729,25 +795,54 @@ def get_sector_memory_context(
 
     ctx.n_similar = len(hist)
 
-    # Compute similarity for each historical record
-    scored: list[tuple[float, pd.Series]] = []
+    # These columns are stored float32. The old path read rows with iterrows(),
+    # which upcast them to Python floats before they were handed to
+    # SimilarSetup; .iloc[] does not, so without this the setups would carry
+    # float32 and could format differently at high precision. Widen once for the
+    # whole frame rather than per row.
+    _f32 = list(hist.select_dtypes("float32").columns)
+    if _f32:
+        hist = hist.astype({c: "float64" for c in _f32})
+
+    # Similarity for every historical record, scored as an array rather than by
+    # iterating rows. This is called once per sector (~24 per overlay) over that
+    # sector's whole filled history, and the row loop was 16,368 iterrows and
+    # the single largest cost in the Smart Money panel.
+    #
+    # It is the same arithmetic as _similarity, which is retained as the scalar
+    # definition and pinned against this path in tests/test_sector_memory_sim.py:
+    #     distance = sqrt( Sum w_i (f1_i - f2_i)^2 ),  sim = round(1 - distance, 4)
+    #
+    # NULL handling matches by construction, though the two get there
+    # differently. These columns are DuckDB floats, so a NULL arrives as NaN,
+    # never as None: the scalar path then puts NaN into hist_feat (NaN is not
+    # None), every comparison against it is False, and max(0.0, 1.0 - NaN)
+    # returns 0.0, which fails the _MIN_SIMILARITY test. Here the NaN propagates
+    # and `NaN >= _MIN_SIMILARITY` is False. Both drop the row.
+    #
+    # The `len(hist_feat) < 6` skip in the old loop counted non-None entries, so
+    # with float columns it could never fire; it is not reproduced. If this
+    # table ever gains an object-dtype feature column that holds real Nones, the
+    # two paths WOULD diverge (the scalar one defaults missing keys to 0.5) and
+    # this needs revisiting.
     feat_cols = list(_FEAT_WEIGHTS.keys())
+    _sims = _similarity_many(today_feat, hist[feat_cols])
+    with np.errstate(invalid="ignore"):
+        _ok = np.flatnonzero(_sims >= _MIN_SIMILARITY)
 
-    for _, hrow in hist.iterrows():
-        hist_feat = {k: float(hrow[k]) for k in feat_cols if hrow[k] is not None}
-        if len(hist_feat) < 6:   # skip rows with too many nulls
-            continue
-        sim = _similarity(today_feat, hist_feat)
-        if sim >= _MIN_SIMILARITY:
-            scored.append((sim, hrow))
-
-    if not scored:
+    if _ok.size == 0:
         ctx.note = (f"No sufficiently similar historical setups found for {sector} + {signal}. "
                     "Current conditions may be unprecedented in the logged history.")
         return ctx
 
-    # Sort by similarity descending.
-    scored.sort(key=lambda x: x[0], reverse=True)
+    # Descending by similarity. STABLE, because list.sort(reverse=True) leaves
+    # equal elements in their original order (trade_date DESC) rather than
+    # reversing them — and ties decide which episode the gap rule keeps.
+    _order = _ok[np.argsort(-_sims[_ok], kind="stable")]
+
+    # Rows are materialised lazily in the walk below: it stops at _TOP_K kept
+    # episodes, so building a Series for every survivor would be wasted work.
+    scored = ((float(_sims[i]), hist.iloc[i]) for i in _order)
 
     # ── Independent-episode de-duplication ────────────────────────────────────
     # Recording every trading day means neighbours are often consecutive days
@@ -1077,6 +1172,15 @@ def apply_memory_overlay(
     hmm_state      = regime.get("hmm_state")
     regime_label   = regime.get("regime", "SIDEWAYS")
 
+    # One read of the log for every sector below, instead of one per sector.
+    # Kept best-effort: if it fails, each call falls back to its own query and
+    # the overlay still renders — this is a fetch optimisation, not a
+    # behavioural gate.
+    try:
+        _snapshot = read_memory_log_snapshot(as_of_date - timedelta(days=31))
+    except Exception:
+        _snapshot = None
+
     edges, confs, convs, exp_rs, eps, bases, adj = [], [], [], [], [], [], []
     for _, row in df.iterrows():
         signal = str(row.get("signal", ""))
@@ -1098,6 +1202,7 @@ def apply_memory_overlay(
                 fii_5d_cr      = fii_5d_cr,
                 hmm_state      = hmm_state,
                 pcr            = None,
+                _log_snapshot  = _snapshot,
             )
             me = compute_memory_edge(ctx, signal)
         except Exception:
