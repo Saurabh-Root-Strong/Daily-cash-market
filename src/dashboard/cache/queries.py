@@ -699,3 +699,58 @@ def cached_fii_footprint(as_of: date, symbol: str = "NIFTY") -> dict:
     """FII size in the index book + market-wide option walls + rollover."""
     from src.analytics.fii_only import get_fii_footprint
     return get_fii_footprint(as_of, symbol)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_fii_price_map(as_of: date, zone: int) -> dict:
+    """Where the index can go given FII positioning — sigma scales, FII shapes."""
+    from src.analytics.fii_only import get_fii_price_map
+    return get_fii_price_map(as_of, zone)
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_index_level(as_of: date, index_name: str = "Nifty 50") -> dict:
+    """Closing level of an index as of a date, for the page header.
+
+    Resolves `trade_date <= as_of` rather than requiring an exact match, so a
+    weekend, a holiday or a future date lands on the last real session instead
+    of rendering a blank header — but the resolved date is returned so the
+    caller can say WHICH session it is showing. A header that silently prints
+    Friday's close under a Sunday date is the kind of quiet lie this page
+    exists to avoid.
+
+    The day change comes from NSE's own `prev_close`, NOT from the previous row
+    in `index_data`. Those two disagree on 16 of 3,304 Nifty sessions (2014-09
+    to 2024-03) because this table has session holes; differencing against the
+    previous stored row would silently report a multi-day move as a one-day
+    change on exactly those dates.
+    """
+    from src.data.repository import query_dataframe
+    df = query_dataframe(
+        """SELECT trade_date, close_val, prev_close
+           FROM index_data
+           WHERE index_name = ? AND trade_date <= ?
+           ORDER BY trade_date DESC
+           LIMIT 2""", [index_name, as_of])
+    if df.empty or df["close_val"].iloc[0] is None:
+        return {"ok": False}
+    close = float(df["close_val"].iloc[0])
+    data_date = df["trade_date"].iloc[0]
+    if hasattr(data_date, "date"):
+        data_date = data_date.date()
+    prev = df["prev_close"].iloc[0]
+    prev = float(prev) if prev is not None and float(prev) > 0 else None
+    gap = None
+    if prev is not None and len(df) > 1 and df["close_val"].iloc[1] is not None:
+        # prev_close not matching the previous stored row means a session is
+        # missing from our history; the change is still right, the history is not
+        gap = abs(prev - float(df["close_val"].iloc[1])) > 0.5
+    return {"ok": True, "index": index_name, "close": close, "prev": prev,
+            "chg": (close - prev) if prev else None,
+            "pct": ((close / prev - 1) * 100.0) if prev else None,
+            "data_date": data_date, "stale": data_date != as_of, "gap": bool(gap)}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_fii_hedge_read(as_of: date) -> dict:
+    """Hedge-or-bet classification: futures short leg crossed with the cash tape."""
+    from src.analytics.fii_only import get_fii_hedge_read
+    return get_fii_hedge_read(as_of)
