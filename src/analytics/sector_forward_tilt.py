@@ -1,14 +1,37 @@
 """
 1–2 Week Forward Sector Tilt — the only sector call that survived deep validation.
 
-WHAT IS VALIDATED (scripts/factor_ic_diagnostic.py, backtest_rotation.py, mc_null.py,
-371-day panel 2024-12 → 2026-07):
-  Cross-sectional sector MOMENTUM predicts 1–2wk forward returns. Relative strength
-  vs Nifty (rs_2w, 10d) has daily-IC t ≈ 9 and a Monte-Carlo long/short p < 0.002 vs
-  600 random portfolios; edge is cost-robust (0→40bps), sub-period stable (both halves
-  Sharpe ~1.7) and top-K insensitive. Delivery flow (dv5d) is a WEAK confirm (t ≈ 3.8).
+WHAT IS VALIDATED — NOTHING, AT ANY HORIZON. Read _HORIZON_EVIDENCE below.
+  The old headline here ("daily-IC t ≈ 9", "Monte-Carlo p < 0.002", "cost-robust
+  0→40bps", "sub-period stable") came from a 371-day bull sample and a NAIVE
+  t-statistic that ignored the overlap between forward windows. Re-measured on
+  2,129 sessions (2018-2026), averaged over ALL h rebalance calendars rather than
+  one arbitrary offset, and net of 25bps/side:
+    • 1-2 wk is NEGATIVE (-1.4%/yr excess vs the equal-weight sector basket, 30%
+      of calendars positive) and its breakeven cost is 21bps/side — below realistic
+      retail cost. It is not tradeable. 3-4 wk is likewise ~0 with a 17bps breakeven.
+    • 7-12 wk is weakly positive (+4.1 to +6.7%/yr, 93-98% of calendars positive,
+      same sign in every era at 9-12wk) but the median per-phase t is 0.9-1.2, so it
+      does NOT clear significance. It is a lean, not an edge.
+    • "cost-robust 0→40bps" was false: cost sensitivity is the single largest driver
+      of the result at every horizon.
+  Delivery flow (dv5d) carries 15% of the composite weight and contributes NOTHING —
+  removing it IMPROVES five of six horizons. It is retained only so the displayed
+  column keeps its meaning; it should be dropped once the UI stops showing it.
+  The one component that does pay is the sector-persistence gate (+3.9 to +6.2%/yr
+  at every horizon — larger than the tilt's own edge). That, not the momentum
+  ranking, is the real content of this module.
   F&O positioning is NOT usable at sector granularity (only ~4 sectors carry enough
   F&O names to aggregate) and is deliberately excluded here.
+
+KNOWN, UNFIXED BIAS: v_sector_master has no as-of column and carries 8 dead names
+  out of 1,045 over 8.6 years — it is a present-day snapshot applied to history.
+  Every LEVEL figure computed from this panel is inflated (the mapped basket returns
+  +15.2%/yr vs +10.6%/yr for the full liquid universe including delisted names; the
+  gap decays 8.3 → 1.3 → 1.1 across the three eras, the signature of survivorship).
+  The RELATIVE tilt is largely immune — the bias is common-mode and the edge does not
+  correlate with deletion exposure — but nothing here may be quoted as an absolute
+  return or benchmarked to Nifty until the master gains an as-of dimension.
 
 REGIME BEHAVIOUR (real-bear calibrated on DCM's OWN sector data 2018–2026, incl the 2018
 midcap crisis / 2020 COVID / 2022 bear — scripts/audit_tilt_realbears.py +
@@ -46,7 +69,8 @@ import numpy as np
 import pandas as pd
 
 from src.analytics.base import get_min_turnover_filter
-from src.analytics.sector_signal_v2 import get_robust_delivery_signals
+from src.analytics.sector_signal_v2 import (get_accum_breadth_history,
+                                            get_robust_delivery_signals)
 from src.data.repository import query_dataframe
 from src.logging_setup import get_logger
 
@@ -134,8 +158,17 @@ def _load_sector_panel(as_of_date: date, min_turnover_lacs: float) -> pd.DataFra
         """
         WITH base AS (
             SELECT s.sector, b.trade_date, b.turnover_lacs, b.deliv_per,
-                   -- winsorize the per-stock daily move: one uncapped print (bonus / illiquid
-                   -- spike) otherwise distorts the whole sector's momentum
+                   -- raw move, kept so a corporate action can be DROPPED rather than
+                   -- clipped. Winsorizing a 1:1 bonus (raw ~ -50%) turns it into a
+                   -- -25% print that is indistinguishable from a real crash and feeds
+                   -- straight into the sector's momentum. Measured 2018-2026: 741
+                   -- stock-days at |raw| >= 40%, of which 444 are split/bonus-shaped.
+                   -- NSE price bands make a genuine >40% cash move impossible, so the
+                   -- cut is a corporate-action filter, not a return filter.
+                   (b.close_price - b.prev_close)
+                       / NULLIF(b.prev_close, 0) * 100                        AS raw_r,
+                   -- winsorize what remains: one uncapped print (illiquid spike)
+                   -- otherwise distorts the whole sector's momentum
                    LEAST(GREATEST((b.close_price - b.prev_close)
                                   / NULLIF(b.prev_close, 0) * 100, -25), 25)  AS r,
                    -- LAGGED weight: a stock's SAME-DAY turnover explodes on the day it jumps,
@@ -157,7 +190,14 @@ def _load_sector_panel(as_of_date: date, min_turnover_lacs: float) -> pd.DataFra
                SUM(w_lag * r) / NULLIF(SUM(CASE WHEN r IS NOT NULL
                                            THEN w_lag END), 0)                AS wtd_ret_pct
         FROM base
-        WHERE turnover_lacs >= ? AND w_lag IS NOT NULL
+        -- LAGGED filter, not same-day. The weight was already lagged for exactly this
+        -- reason but the FILTER was left on same-day turnover, which admits a stock
+        -- BECAUSE it moved that day. Measured 2018-2026: the mean daily return of the
+        -- same-day-filtered universe is +0.223%/day at the 1 Cr floor and +0.507%/day
+        -- at 25 Cr, versus +0.072%/day and +0.076%/day when the same floor is applied
+        -- to the PRIOR session. That gap is pure outcome-conditioning. The lagged
+        -- weight was masking it here; it is not masked in any equal-weighted variant.
+        WHERE w_lag >= ? AND ABS(raw_r) < 40
           AND trade_date > (?::date - 260)
         GROUP BY sector, trade_date
         ORDER BY sector, trade_date
@@ -179,23 +219,43 @@ def _load_nifty(as_of_date: date) -> pd.DataFrame:
     if df.empty:
         return df
     df["trade_date"] = pd.to_datetime(df["trade_date"])
-    df["nret"] = (df["pct_chg"].astype(float) if df["pct_chg"].notna().any()
-                  else df["close_val"].astype(float).pct_change() * 100)
+    # `pct_chg` is preferred but must be COMPLETE. The old guard was `.notna().any()`,
+    # so a single null anywhere still selected the column wholesale — and a NaN inside
+    # the trailing window makes _compound() return NaN, which makes n_2w NaN, which
+    # makes EVERY sector's rs_2w NaN, which makes every rank NaN, which silently
+    # renders the entire board NEUTRAL with no error shown. Fall back per-row instead.
+    px_chg = df["close_val"].astype(float).pct_change() * 100
+    nret = df["pct_chg"].astype(float) if "pct_chg" in df.columns else px_chg
+    df["nret"] = nret.fillna(px_chg)
+    if df["nret"].iloc[1:].isna().any():
+        log.warning("Nifty return series still has %d gaps after fallback; "
+                    "relative strength will be degraded on those windows",
+                    int(df["nret"].iloc[1:].isna().sum()))
     return df
 
 
 def _liquid_name_counts(as_of_date: date, min_turnover_lacs: float) -> pd.Series:
+    # Liquidity is judged on the PRIOR session, like every other universe rule here.
+    # A same-day floor counts a stock as "liquid" on the day it spiked, which both
+    # inflates n_liq on volatile days and lets the thin-flag flicker with the news.
     df = query_dataframe(
         """
+        WITH liq AS (
+            SELECT b.symbol, b.trade_date,
+                   LAG(b.turnover_lacs) OVER (PARTITION BY b.symbol
+                                              ORDER BY b.trade_date) AS w_lag
+            FROM daily_data b
+            WHERE b.series IN ('EQ', 'SM', 'ST')
+              AND b.trade_date > (?::date - 15) AND b.trade_date <= ?
+        )
         SELECT s.sector, COUNT(*) AS n_liq
-        FROM daily_data b
-        INNER JOIN v_sector_master s ON b.symbol = s.symbol
-        WHERE b.trade_date = ? AND b.series IN ('EQ', 'SM', 'ST')
-          AND s.sector NOT IN ('ETF', 'Others')
-          AND b.turnover_lacs >= ?
+        FROM liq
+        INNER JOIN v_sector_master s ON liq.symbol = s.symbol
+        WHERE liq.trade_date = ? AND s.sector NOT IN ('ETF', 'Others')
+          AND liq.w_lag >= ?
         GROUP BY s.sector
         """,
-        [as_of_date, min_turnover_lacs],
+        [as_of_date, as_of_date, as_of_date, min_turnover_lacs],
     )
     return df.set_index("sector")["n_liq"] if not df.empty else pd.Series(dtype=int)
 
@@ -373,7 +433,7 @@ def _market_regime(nifty: pd.DataFrame) -> dict:
 
 
 def _sector_persistence(as_of_date: date, min_turnover_lacs: float,
-                        fwd_days: int = _PERS_FWD) -> pd.DataFrame:
+                        fwd_days: int = _PERS_FWD, with_history: bool = False):
     """Per-sector momentum-persistence: trailing mean forward RELATIVE edge (causal).
 
     For every past day with a realized 10-day forward return (date ≤ as_of − 10 trading
@@ -384,10 +444,13 @@ def _sector_persistence(as_of_date: date, min_turnover_lacs: float,
     construction.
     """
     empty = pd.DataFrame(columns=["sector", "persistence", "pers_n"])
+    _none = (empty, pd.DataFrame()) if with_history else empty
     panel = query_dataframe(
         """
         WITH base AS (
             SELECT s.sector, b.trade_date, b.turnover_lacs,
+                   (b.close_price - b.prev_close)
+                       / NULLIF(b.prev_close, 0) * 100                        AS raw_r,
                    LEAST(GREATEST((b.close_price - b.prev_close)
                                   / NULLIF(b.prev_close, 0) * 100, -25), 25)  AS r,
                    LAG(b.turnover_lacs) OVER (PARTITION BY b.symbol
@@ -403,7 +466,10 @@ def _sector_persistence(as_of_date: date, min_turnover_lacs: float,
                SUM(w_lag * r) / NULLIF(SUM(CASE WHEN r IS NOT NULL
                                            THEN w_lag END), 0)                AS wtd_ret_pct
         FROM base
-        WHERE turnover_lacs >= ? AND w_lag IS NOT NULL
+        -- lagged filter + corporate-action drop, matching _load_sector_panel. The
+        -- gate is measured on this panel, so it must use the same universe rule or
+        -- it demotes sectors on a different construction than the one displayed.
+        WHERE w_lag >= ? AND ABS(raw_r) < 40
           AND trade_date > (?::date - ?)
         GROUP BY sector, trade_date
         ORDER BY trade_date
@@ -412,11 +478,11 @@ def _sector_persistence(as_of_date: date, min_turnover_lacs: float,
          min_turnover_lacs, as_of_date, _PERS_LOOKBACK_CAL],
     )
     if panel.empty:
-        return empty
+        return _none
     panel["trade_date"] = pd.to_datetime(panel["trade_date"])
     ret = panel.pivot_table("wtd_ret_pct", "trade_date", "sector").sort_index()
     if len(ret) < fwd_days + _PERS_MIN_OBS:
-        return empty
+        return _none
     # forward compounded return per sector over the SELECTED horizon (NaN for the
     # last fwd_days rows → causal). The persistence gate must be measured over the
     # same window the user is being shown, or it demotes sectors on the wrong test.
@@ -430,27 +496,254 @@ def _sector_persistence(as_of_date: date, min_turnover_lacs: float,
     out = out[out["pers_n"] >= _PERS_MIN_OBS].reset_index().rename(columns={"index": "sector"})
     if "sector" not in out.columns:
         out = out.rename(columns={out.columns[0]: "sector"})
-    return out
+    # PER-DATE history of the same statistic, for the tenure badge. At row t only
+    # forward windows that CLOSED on or before t may be used, which is exactly
+    # edge.shift(fwd_days) expanded to date. At the final row this reduces to the
+    # identical set of observations as `out` above, so the history's last value and
+    # the live gate agree by construction (verified in tests).
+    hist = edge.shift(fwd_days).expanding(min_periods=_PERS_MIN_OBS).mean()
+    return (out, hist) if with_history else out
 
 
-# ── measured evidence per horizon (scripts/study_tilt_horizons.py, 2018-2026) ──
+# ── tenure: "how many sessions has this sector held this call?" ──────────────
+# COSTS NOTHING EXTRA. _load_sector_panel already pulls ~260 sessions and
+# _sector_persistence ~620 calendar days; both were being reduced to a single row
+# and the rest discarded. Re-ranking those dates is pure pandas on data already in
+# memory, so tenure adds no query and no round-trip.
+#
+# WHAT IT REPRODUCES, AND WHAT IT DOES NOT. The rank cut and the persistence gate
+# are rebuilt exactly (same panel, same weights, same thresholds, all causal — a
+# date's rank uses only that date's trailing windows). The WATCH and `thin`
+# overlays are NOT rebuilt: WATCH needs the per-stock delivery panel and `thin`
+# needs per-date liquidity counts, both of which WOULD need extra queries.
+#
+# SCOPE — OVERWEIGHT ONLY, and that limit is load-bearing. WATCH is defined on
+# rank <= 0.35, so it can NEVER mask an OVERWEIGHT (cut 0.75) — an OW streak is
+# therefore exactly reproducible. It CAN mask a NEUTRAL or an UNDERWEIGHT
+# (rank <= 0.25 sits inside the WATCH band), and validation against 16 real
+# per-date engine runs found precisely that: all 5 OVERWEIGHT streaks matched, while
+# 4 of the NEUTRAL/UNDERWEIGHT rows were wrong because WATCH intervened mid-window
+# WITHOUT changing today's label — so an "agrees on as_of" guard does not catch it.
+# Rather than print a number that is wrong a third of the time on those buckets, the
+# badge is restricted to the buy list, which is what it is for.
+#
+# `thin` IS modelled (it can demote an OVERWEIGHT), via one cheap grouped count over
+# the lookback window — see _liquid_name_counts_hist.
+#
+# HONEST READING: this answers "how long would TODAY's engine say this sector has
+# held this call", not "what did the screen show you each day". The two differ only
+# if the data was later revised or the logic changed. A logged daily snapshot would
+# answer the second question, needs a nightly job, and cannot survive a missed run —
+# this cannot go stale and cannot develop holes.
+_TENURE_LOOKBACK = 90     # sessions walked back; longer streaks render as "90+"
+
+
+def _liquid_name_counts_hist(as_of_date: date, min_turnover_lacs: float,
+                             lookback: int = _TENURE_LOOKBACK) -> pd.DataFrame:
+    """date × sector liquid-name counts over the lookback, so `thin` is exact."""
+    df = query_dataframe(
+        """
+        WITH liq AS (
+            SELECT b.symbol, b.trade_date,
+                   LAG(b.turnover_lacs) OVER (PARTITION BY b.symbol
+                                              ORDER BY b.trade_date) AS w_lag
+            FROM daily_data b
+            WHERE b.series IN ('EQ', 'SM', 'ST')
+              AND b.trade_date > (?::date - ? - 20) AND b.trade_date <= ?
+        )
+        SELECT s.sector, liq.trade_date, COUNT(*) AS n_liq
+        FROM liq
+        INNER JOIN v_sector_master s ON liq.symbol = s.symbol
+        WHERE s.sector NOT IN ('ETF', 'Others') AND liq.w_lag >= ?
+        GROUP BY s.sector, liq.trade_date
+        """,
+        [as_of_date, int(lookback * 1.6), as_of_date, min_turnover_lacs],
+    )
+    if df.empty:
+        return pd.DataFrame()
+    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    return df.pivot_table("n_liq", "trade_date", "sector").sort_index()
+
+
+def _tilt_history(panel: pd.DataFrame, nifty: pd.DataFrame, L: int, S: int,
+                  pers_hist: Optional[pd.DataFrame],
+                  nliq_hist: Optional[pd.DataFrame] = None,
+                  lookback: int = _TENURE_LOOKBACK,
+                  breadth_hist: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+    """date × sector tilt label over the trailing `lookback` sessions.
+
+    With `breadth_hist` supplied the WATCH overlay is applied too, which is what
+    makes the UNDERWEIGHT band reproducible (WATCH sits inside it).
+    """
+    ret = panel.pivot_table("wtd_ret_pct", "trade_date", "sector").sort_index()
+    dvc = panel.pivot_table("daily_dv_cr", "trade_date", "sector").sort_index()
+    if ret.empty or len(ret) < L + 5:
+        return pd.DataFrame()
+
+    lg = np.log1p(ret / 100.0)
+    def _tr(n): return np.expm1(lg.rolling(n).sum()) * 100.0
+
+    rsL, rsS = _tr(L), _tr(S)
+    if not nifty.empty:
+        nser = (nifty.drop_duplicates("trade_date").set_index("trade_date")["nret"]
+                .astype(float).reindex(ret.index))
+        nlg = np.log1p(nser.fillna(0.0) / 100.0)
+        rsL = rsL.sub(np.expm1(nlg.rolling(L).sum()) * 100.0, axis=0)
+        rsS = rsS.sub(np.expm1(nlg.rolling(S).sum()) * 100.0, axis=0)
+
+    dv5 = dvc.rolling(_DV_FLOW).mean() / dvc.shift(1).rolling(_DV_BASE).mean()
+    def _rk(d): return d.rank(axis=1, pct=True)
+    rank = _rk(_W_RS2 * _rk(rsL) + _W_RS1 * _rk(rsS) + _W_DV5 * _rk(dv5))
+
+    lab = pd.DataFrame(
+        np.where(rank.isna(), None,
+                 np.where(rank >= _OW_RANK, "OVERWEIGHT",
+                          np.where(rank <= _UW_RANK, "UNDERWEIGHT", "NEUTRAL"))),
+        index=rank.index, columns=rank.columns)
+
+    # thin gate: too few liquid names that day → cannot be a confident overweight.
+    # Applied BEFORE persistence, matching the order in get_forward_tilt.
+    if nliq_hist is not None and not nliq_hist.empty:
+        thin = (nliq_hist.reindex(index=rank.index, columns=rank.columns)
+                < _MIN_LIQ_NAMES).fillna(False)
+        lab = lab.mask((lab == "OVERWEIGHT") & thin, "NEUTRAL")
+
+    # persistence gate: demote OVERWEIGHT where the sector was historically reverting
+    # AS OF THAT DATE (NaN ⇒ unknown ⇒ keep, matching the live `revert` semantics)
+    if pers_hist is not None and not pers_hist.empty:
+        rev = (pers_hist.reindex(index=rank.index, columns=rank.columns) < 0).fillna(False)
+        lab = lab.mask((lab == "OVERWEIGHT") & rev, "NEUTRAL")
+
+    # WATCH overlay, applied LAST to match get_forward_tilt's ordering. Without it
+    # the UNDERWEIGHT band is not reproducible: WATCH needs rank <= 0.35 and the
+    # underweight cut is 0.25, so it masks underweights mid-window without changing
+    # today's label. It can never touch an OVERWEIGHT (cut 0.75).
+    if breadth_hist is not None and not breadth_hist.empty:
+        brd = breadth_hist.reindex(index=rank.index, columns=rank.columns)
+        watch = ((brd >= _WATCH_BREADTH) & (rank <= _WATCH_RS_MAX)).fillna(False)
+        lab = lab.mask(watch, "WATCH")
+    return lab.tail(lookback)
+
+
+def _tenure_days(lab: pd.DataFrame, current: pd.Series) -> pd.Series:
+    """Consecutive trailing sessions each sector has held its CURRENT label.
+
+    OVERWEIGHT and UNDERWEIGHT only. NEUTRAL is excluded because it is the residual
+    bucket — every overlay drops into it, so a NEUTRAL streak measures "nothing else
+    fired", not a call being held. UNDERWEIGHT became reproducible once _tilt_history
+    started modelling WATCH (see its docstring).
+
+    0 means "not established": not in a directional bucket, the rebuilt label
+    disagrees with the live one, or no history in the window. Callers must render 0
+    as blank, never as "0 days".
+    """
+    out = {}
+    for sec, cur in current.items():
+        if sec not in lab.columns or cur not in ("OVERWEIGHT", "UNDERWEIGHT"):
+            out[sec] = 0
+            continue
+        n = 0
+        for v in lab[sec].values[::-1]:
+            if v != cur:                    # None (no data that day) also breaks it
+                break
+            n += 1
+        out[sec] = n
+    return pd.Series(out, dtype=int)
+
+
+# ── measured evidence per horizon — REGENERATED, see scripts/gen_tilt_evidence.py ──
 # Long-only top-4, EXCESS over the equal-weight sector basket, NON-overlapping
-# rebalance, net of 25bps/side. `ls_ic_t` is the Newey-West t of the long/short IC
-# at lag=h — the overlap-corrected read. The UI must show these, per horizon,
-# instead of repeating the module's 1-2wk headline everywhere.
+# rebalance, net of 25bps/side, on the CORRECTED panel (lagged liquidity filter,
+# corporate actions dropped).
+#
+# WHY THESE NUMBERS CHANGED SO MUCH. The previous table claimed +19.6%/yr (t 2.03)
+# at 1-2wk and cited scripts/study_tilt_horizons.py — a script that computes only IC
+# and long/short spread and never produces a %/yr figure at all. The repo's own
+# net-%/yr backtest (scripts/backtest_tilt_vs_clock.py) prints +0.4%/yr for the same
+# spec, and an independent rebuild agrees to the decimal. The old table had no
+# reproducible provenance; every horizon was overstated by 12-49pp/yr and every t
+# was inflated. gen_tilt_evidence.py is now that provenance — the numbers below can
+# be reproduced with one command.
+#
+# TWO METHOD FIXES, both of which move the answer more than any parameter here:
+#   • PHASE. `index[::h]` is one of h possible rebalance calendars. Offset alone
+#     swings a horizon by 10-16pp/yr IN BOTH DIRECTIONS (it made 1-2wk look
+#     positive when it is negative, and 9-10wk look dead when it is the strongest).
+#     net_yr is now averaged over ALL h calendars.
+#   • net_t is the MEDIAN per-phase Newey-West t, not the best one.
+#
+# `pct_pos` = share of rebalance calendars that came out positive. Descriptive only:
+# the phases overlap almost completely, so it is NOT h independent tests.
+#
+# `validated` requires ALL of: >=90% of phases positive, the same sign in all three
+# eras, and median per-phase |t| >= 2. NO HORIZON CURRENTLY QUALIFIES — the long
+# horizons fail only on the t, which is the honest state of the evidence. The UI
+# must present every horizon as a lean, never as a validated edge.
 _HORIZON_EVIDENCE: dict[int, dict] = {
-    10: dict(label="1-2 wk",   reb_yr=25.2, net_yr=19.6, net_t=2.03, ls_ic_t=2.15,
-             era={"2018-21": 24.1, "2022-24": 28.4, "2025-26": -7.5}, validated=True),
-    20: dict(label="3-4 wk",   reb_yr=12.6, net_yr=19.5, net_t=2.14, ls_ic_t=0.62,
-             era={"2018-21": 25.7, "2022-24": 23.7, "2025-26": -3.7}, validated=False),
-    30: dict(label="5-6 wk",   reb_yr=8.4,  net_yr=14.3, net_t=1.57, ls_ic_t=1.02,
-             era={"2018-21": 11.6, "2022-24": 25.5, "2025-26": -2.7}, validated=False),
-    40: dict(label="7-8 wk",   reb_yr=6.3,  net_yr=28.1, net_t=2.77, ls_ic_t=1.93,
-             era={"2018-21": 35.1, "2022-24": 30.8, "2025-26": 5.5},  validated=False),
-    50: dict(label="9-10 wk",  reb_yr=5.0,  net_yr=20.8, net_t=1.94, ls_ic_t=2.36,
-             era={"2018-21": 13.9, "2022-24": 35.1, "2025-26": 7.7},  validated=True),
-    60: dict(label="11-12 wk", reb_yr=4.2,  net_yr=29.5, net_t=2.60, ls_ic_t=2.26,
-             era={"2018-21": 32.1, "2022-24": 37.8, "2025-26": 6.2},  validated=True),
+    10: dict(label="1-2 wk",   reb_yr=25.2, net_yr=-1.4, net_t=-0.30, ls_ic_t=2.38,
+             pct_pos=0.30, era={"2018-21": 1.0, "2022-24": -3.3, "2025-26": -3.5},
+             validated=False),
+    20: dict(label="3-4 wk",   reb_yr=12.6, net_yr=-0.3, net_t=-0.01, ls_ic_t=1.09,
+             pct_pos=0.50, era={"2018-21": -2.2, "2022-24": 3.2, "2025-26": -2.6},
+             validated=False),
+    30: dict(label="5-6 wk",   reb_yr=8.4,  net_yr=1.5,  net_t=0.39,  ls_ic_t=1.27,
+             pct_pos=0.73, era={"2018-21": -3.2, "2022-24": 8.8, "2025-26": -1.9},
+             validated=False),
+    40: dict(label="7-8 wk",   reb_yr=6.3,  net_yr=4.1,  net_t=0.89,  ls_ic_t=2.13,
+             pct_pos=0.93, era={"2018-21": -0.3, "2022-24": 10.8, "2025-26": 1.3},
+             validated=False),
+    50: dict(label="9-10 wk",  reb_yr=5.0,  net_yr=6.7,  net_t=1.21,  ls_ic_t=2.75,
+             pct_pos=0.96, era={"2018-21": 2.0, "2022-24": 14.4, "2025-26": 1.9},
+             validated=False),
+    60: dict(label="11-12 wk", reb_yr=4.2,  net_yr=6.5,  net_t=1.15,  ls_ic_t=2.69,
+             pct_pos=0.98, era={"2018-21": 2.7, "2022-24": 12.9, "2025-26": 2.3},
+             validated=False),
+}
+# Breakeven cost, phase-averaged (scripts/audit_tilt_robustness.py test 4): the
+# gross edge divided by its sensitivity to cost. Realistic all-in Indian retail cost
+# on a 4-sector stock basket is ~20-40bps/side, so the two shortest horizons sit at
+# or below their own breakeven BEFORE a trade is placed.
+_HORIZON_BREAKEVEN_BPS = {10: 21, 20: 17, 30: 30, 40: 65, 50: 98, 60: 102}
+
+# ── bucket-level evidence — what a sector ON the list actually did ───────────
+# THIS REPLACES THE PER-SECTOR `est_rel_bps`, and the replacement is a change of
+# granularity, not of scale. `est_rel_bps` was a straight line through rank (corr
+# 1.0000 with rank — it restated the list order and nothing else), calibrated on a
+# "~1.9%/10d tercile spread" from the same unreproducible lineage as the old
+# evidence box. It could not be repaired by retuning `_REL_SLOPE_BPS`, because the
+# measured rank ladder is FLAT and then STEPS at the top quintile (Q1 +0.27 /
+# Q2 +0.26 / Q3 +0.29 / Q4 +0.28 / Q5 +0.67) — a linear map is the wrong SHAPE.
+# (The constant's own history says the same thing: 290 -> 75 -> 110 -> 190 -> 290,
+# four values in one session, each from a different method.)
+#
+# What IS measurable is the bucket. Mean forward excess over the equal-weight
+# sector basket across every sector-day in the bucket, GROSS of cost; Newey-West t
+# at lag=h on the per-date cross-sectional mean, so overlap and within-date
+# correlation are both handled. Source: scripts/gen_tilt_evidence.py.
+#
+# TWO THINGS TO READ OFF IT:
+#  • The buy list WORKS gross at every horizon (t 2.9-4.0). It is turnover that
+#    kills the short ones: +0.409pp x 25.2 rebalances/yr is ~+10%/yr gross against
+#    a ~10.0pp/yr cost drag, which is why 1-2wk nets negative while the ranking
+#    itself is fine. `cost_drag` is carried here so the UI can say exactly that.
+#  • UNDERWEIGHT is only an "avoid" list at LONG horizons (t -2.14/-2.87/-2.79 at
+#    7-8/9-10/11-12wk). At 1-6wk it is indistinguishable from neutral (t -1.36 to
+#    -0.46), so the "AVOID / trim" copy is unsupported there.
+# OVERWEIGHT figures are exact; UNDERWEIGHT is the rank band only (WATCH can mask
+# it and is not modelled).
+_BUCKET_EVIDENCE: dict[int, dict] = {
+    10: dict(ow_pp=0.409, ow_t=3.69, ow_n=9581,
+             uw_pp=-0.107, uw_t=-1.36, uw_n=12084, gross_yr=8.6, cost_drag=10.0),
+    20: dict(ow_pp=0.658, ow_t=2.87, ow_n=9321,
+             uw_pp=-0.074, uw_t=-0.46, uw_n=12030, gross_yr=4.8, cost_drag=5.1),
+    30: dict(ow_pp=1.105, ow_t=3.11, ow_n=9169,
+             uw_pp=-0.184, uw_t=-0.85, uw_n=11970, gross_yr=4.9, cost_drag=3.4),
+    40: dict(ow_pp=1.680, ow_t=3.49, ow_n=9193,
+             uw_pp=-0.621, uw_t=-2.14, uw_n=11903, gross_yr=6.7, cost_drag=2.6),
+    50: dict(ow_pp=2.499, ow_t=4.04, ow_n=9168,
+             uw_pp=-1.167, uw_t=-2.87, uw_n=11855, gross_yr=8.7, cost_drag=2.0),
+    60: dict(ow_pp=3.037, ow_t=4.02, ow_n=9370,
+             uw_pp=-1.456, uw_t=-2.79, uw_n=11778, gross_yr=8.2, cost_drag=1.7),
 }
 TILT_HORIZONS = [(v["label"], k) for k, v in sorted(_HORIZON_EVIDENCE.items())]
 
@@ -473,26 +766,29 @@ def get_forward_tilt(
     forward window is NOT the right build — a horizon-matched lookback is better
     at every long horizon (e.g. 9-10wk: matched IC +0.0553 vs fixed +0.0310).
 
-    WHAT IS ACTUALLY VALIDATED PER HORIZON — long-only top-4, excess over the
-    equal-weight sector basket, NON-overlapping rebalance, net of 25bps/side:
-        horizon   reb/yr  net %/yr   t     2018-21  2022-24  2025-26
-        1-2 wk     25.2     19.6    2.03    +24.1    +28.4     -7.5
-        3-4 wk     12.6     19.5    2.14    +25.7    +23.7     -3.7
-        5-6 wk      8.4     14.3    1.57    +11.6    +25.5     -2.7
-        7-8 wk      6.3     28.1    2.77    +35.1    +30.8     +5.5
-        9-10 wk     5.0     20.8    1.94    +13.9    +35.1     +7.7
-        11-12 wk    4.2     29.5    2.60    +32.1    +37.8     +6.2
-    Two things to read off that table. (1) Longer horizons rebalance 4-6x less
-    often, so the same gross edge survives cost far better. (2) In the CURRENT
-    era the short horizons have stopped working (1-2wk is -7.5%/yr in 2025-26)
-    while 7-12wk still pay — the opposite of the tab's original premise.
+    MEASURED PER HORIZON — long-only top-4, excess over the equal-weight sector
+    basket, NON-overlapping rebalance, net of 25bps/side, AVERAGED OVER ALL h
+    rebalance calendars (scripts/gen_tilt_evidence.py, 2,129 sessions 2018-2026):
+        horizon   reb/yr  net %/yr  med t  %cal+  breakeven  2018-21 2022-24 2025-26
+        1-2 wk     25.2     -1.4    -0.30   30%     21bps      +1.0    -3.3    -3.5
+        3-4 wk     12.6     -0.3    -0.01   50%     17bps      -2.2    +3.2    -2.6
+        5-6 wk      8.4     +1.5    +0.39   73%     30bps      -3.2    +8.8    -1.9
+        7-8 wk      6.3     +4.1    +0.89   93%     65bps      -0.3   +10.8    +1.3
+        9-10 wk     5.0     +6.7    +1.21   96%     98bps      +2.0   +14.4    +1.9
+        11-12 wk    4.2     +6.5    +1.15   98%    102bps      +2.7   +12.9    +2.3
+    Three things to read off that table. (1) The two shortest horizons are NEGATIVE
+    and their breakeven cost is below realistic retail cost — they are not tradeable
+    and must not be offered as if they were. (2) Longer horizons rebalance 4-6x less
+    often, which is most of why they survive at all. (3) Not one horizon clears
+    |t| >= 2 on the median calendar, so every one of them is a lean.
 
-    CAUTION — the headline claim in this module's docstring ("daily-IC t ~ 9") is
-    a NAIVE t. Forward windows overlap, so adjacent dates are dependent. Under a
-    Newey-West correction at lag=h the same reproduction gives IC t=1.64 at 1-2wk
-    and t=2.02 at 9-10wk. Long/short IC t is the more robust read: +2.15 (1-2wk),
-    +2.36 (9-10wk), +2.26 (11-12wk), and NOT significant at 3-8wk. Treat every
-    horizon as a lean, not an oracle.
+    CAUTION — the "daily-IC t ~ 9" that used to headline this module was a NAIVE t.
+    Forward windows overlap, so adjacent dates are dependent. Long/short IC t under a
+    Newey-West correction at lag=h is the more robust read: +2.38 (1-2wk), +2.13
+    (7-8wk), +2.75 (9-10wk), +2.69 (11-12wk); not significant at 3-6wk. Note the
+    1-2wk long/short IC clears |t|>=2 while its long-only net return is NEGATIVE:
+    the ranking carries some information, but not enough to pay the turnover the
+    short horizon demands. That gap is the whole story of this tab.
     """
     if min_turnover_lacs is None:
         min_turnover_lacs = get_min_turnover_filter()
@@ -503,7 +799,8 @@ def get_forward_tilt(
 
     cols = ["sector", "score", "rank", "tilt", "rs_2w", "rs_1w", "dv5d",
             "accum_breadth", "deliv_slope", "n_liq", "thin", "divergence",
-            "persistence", "revert", "est_rel_bps", "confidence"]
+            "persistence", "revert", "est_rel_bps", "confidence", "days_in_tilt",
+            "ret_since_tilt_pct", "ret_since_tilt_rel_pp"]
     empty = pd.DataFrame(columns=cols)
 
     panel = _load_sector_panel(as_of_date, min_turnover_lacs)
@@ -583,10 +880,9 @@ def get_forward_tilt(
                                 "rotate on even in a good backdrop.")
 
     conf_mult = regime["confidence_mult"]
-    brd = fac["breadth_accum"].fillna(0.0)
-    brd_rank = brd.rank(pct=True)
+    brd = fac["breadth_accum"].fillna(0.0)     # a FRACTION in [0,1], not a rank
 
-    def _tilt(row, rr, br) -> str:
+    def _tilt(rr: float, br: float) -> str:
         # WATCH: heavy accumulation but momentum has not turned (contrarian, held out)
         if br >= _WATCH_BREADTH and rr <= _WATCH_RS_MAX:
             return "WATCH"
@@ -596,10 +892,7 @@ def get_forward_tilt(
             return "UNDERWEIGHT"
         return "NEUTRAL"
 
-    fac["tilt"] = [
-        _tilt(row, rr, br) for row, rr, br in
-        zip(fac.to_dict("records"), fac["rank"].values, brd.values)
-    ]
+    fac["tilt"] = [_tilt(rr, br) for rr, br in zip(fac["rank"].values, brd.values)]
     # thin sectors cannot be a confident overweight — demote to NEUTRAL/WATCH
     fac.loc[fac["thin"] & (fac["tilt"] == "OVERWEIGHT"), "tilt"] = "NEUTRAL"
 
@@ -607,39 +900,96 @@ def get_forward_tilt(
     # Demote OVERWEIGHT in structurally mean-reverting sectors (trailing edge < 0):
     # those OW calls historically fade (~44% accuracy). Lifts OW accuracy ~56% → ~60%.
     try:
-        pers = _sector_persistence(as_of_date, min_turnover_lacs, fwd_days=_H)
+        pers, pers_hist = _sector_persistence(as_of_date, min_turnover_lacs,
+                                              fwd_days=_H, with_history=True)
     except Exception as exc:                                  # noqa: BLE001
         log.warning("sector persistence failed (%s); gate disabled", exc)
         pers = pd.DataFrame(columns=["sector", "persistence", "pers_n"])
+        pers_hist = pd.DataFrame()
     pmap = pers.set_index("sector")["persistence"] if not pers.empty else pd.Series(dtype=float)
     fac["persistence"] = fac["sector"].map(pmap)
     fac["revert"] = fac["persistence"] < 0                     # NaN → False (unknown ⇒ keep)
     fac.loc[(fac["tilt"] == "OVERWEIGHT") & fac["revert"], "tilt"] = "NEUTRAL"
 
-    # ── regime-inversion gate (OOS 4yr): in downtrends/reversals the overweight call
-    # is anti-predictive (OW−UW −0.8%/10d, monotone, every year) — suppress ALL overweights.
-    regime["ow_suppressed"] = 0
-    if regime.get("momentum_inverts"):
-        n_sup = int((fac["tilt"] == "OVERWEIGHT").sum())
-        fac.loc[fac["tilt"] == "OVERWEIGHT", "tilt"] = "NEUTRAL"
-        regime["ow_suppressed"] = n_sup
-
-    # expected relative return (bps, 10d), scaled by the data-backed regime mult (wide error
-    # bars). Under momentum inversion (downtrend/reversal) the high-rank edge is measured to
-    # be NEGATIVE, not positive — so we do NOT advertise a positive bps there: zero it out to
-    # stay consistent with the suppressed overweights and the STAND-ASIDE verdict.
-    if regime.get("momentum_inverts"):
-        fac["est_rel_bps"] = 0.0
-    else:
-        # _REL_SLOPE_BPS is calibrated on the 10-day tercile spread, so it must be
-        # scaled to the selected window or a 12-week tilt would quote a 2-week number.
-        # Relative drift accumulates roughly linearly in time, so scale by _H/10.
-        fac["est_rel_bps"] = ((fac["rank"] - 0.5) * _REL_SLOPE_BPS
-                              * (_H / float(_MOM_2W)) * conf_mult).round(0)
+    # ── regime-inversion gate: REMOVED (was dead code) ────────────────────────
+    # `momentum_inverts` was set False in every branch of _market_regime after the
+    # real-bear recalibration, so this suppression, `ow_suppressed`, and the bps
+    # zero-out below could never fire. The comment still claimed overweights were
+    # being suppressed in downtrends, which was untrue of the shipped behaviour.
+    #
+    # ── est_rel_bps: SUPPRESSED, not computed ────────────────────────────────
+    # It was a linear map off _REL_SLOPE_BPS = 290, calibrated on a ~1.9%/10d
+    # tercile spread. That spread does not reproduce: phase-averaged over all h
+    # rebalance calendars (scripts/audit_tilt_robustness.py) the 1-2wk top-4 basket
+    # is NEGATIVE vs the equal-weight sector basket, and no horizon clears |t|>=2.
+    # Printing "est +145bps" next to a sector asserted a per-sector expected return
+    # the data does not support. The column is kept (callers index it) but carries
+    # NaN, and the UI omits it rather than quoting a number that is not measured.
+    fac["est_rel_bps"] = np.nan
     # per-sector confidence: regime × thin × historically-reverting down-weights
     fac["confidence"] = (conf_mult
                          * np.where(fac["thin"], 0.5, 1.0)
                          * np.where(fac["revert"], 0.6, 1.0)).round(2)
+
+    # ── tenure: consecutive sessions this sector has held its current call ────
+    # Rebuilt from the panel already loaded above — no extra query. 0 = not
+    # established (an overlay intervened, or no history) and must render blank.
+    try:
+        _nliq_h = _liquid_name_counts_hist(as_of_date, min_turnover_lacs)
+        try:
+            _brd_h = get_accum_breadth_history(as_of_date, _TENURE_LOOKBACK,
+                                               min_turnover_lacs)
+        except Exception as exc:                              # noqa: BLE001
+            # Without it the UNDERWEIGHT band is not reproducible, so tenure falls
+            # back to OVERWEIGHT only rather than printing an overstated streak.
+            log.warning("accum-breadth history failed (%s); UW tenure disabled", exc)
+            _brd_h = None
+        _lab = _tilt_history(panel, nifty, _L, _S, pers_hist, _nliq_h,
+                             breadth_hist=_brd_h)
+        fac["days_in_tilt"] = (_tenure_days(_lab, fac.set_index("sector")["tilt"])
+                               .reindex(fac["sector"]).fillna(0).astype(int).values)
+        if _brd_h is None or _brd_h.empty:
+            # WATCH could not be reproduced, so an UNDERWEIGHT streak may be
+            # overstated (measured: 5.7% wrong, median 6 sessions too long). Suppress
+            # rather than print it.
+            fac.loc[fac["tilt"] == "UNDERWEIGHT", "days_in_tilt"] = 0
+    except Exception as exc:                                  # noqa: BLE001
+        log.warning("tilt tenure failed (%s); badge disabled", exc)
+        fac["days_in_tilt"] = 0
+    regime["tenure_lookback"] = _TENURE_LOOKBACK
+
+    # ── move since the call appeared ─────────────────────────────────────────
+    # `days_in_tilt` = N counts trailing sessions INCLUDING today, so the call first
+    # showed on session t-(N-1). That list is published after the close, so the
+    # earliest you could act is the next session — the window is therefore the LAST
+    # N-1 daily returns, i.e. close(t-(N-1)) to close(t). N=1 ("NEW") has nothing
+    # elapsed and stays blank rather than printing 0.0%.
+    #
+    # BOTH numbers are reported because the absolute one alone misleads: a sector up
+    # 3% while every sector rose 4% has LOST ground, and this engine's entire claim is
+    # about EXCESS over the equal-weight sector basket, never absolute return. The
+    # relative figure is the one that corresponds to what the tilt is trying to do.
+    fac["ret_since_tilt_pct"] = np.nan
+    fac["ret_since_tilt_rel_pp"] = np.nan
+    try:
+        _rw = panel.pivot_table("wtd_ret_pct", "trade_date", "sector").sort_index()
+        _bench = _rw.mean(axis=1)              # equal-weight sector basket
+        _abs, _rel = {}, {}
+        for _sec, _n in zip(fac["sector"], fac["days_in_tilt"]):
+            _k = int(_n) - 1
+            if _k < 1 or _sec not in _rw.columns:
+                continue
+            _w = _rw[_sec].iloc[-_k:]
+            if _w.isna().any() or len(_w) < _k:
+                continue                        # a hole in the window ⇒ no claim
+            _b = _bench.reindex(_w.index)
+            _cs = float((1.0 + _w / 100.0).prod() - 1.0) * 100.0
+            _cb = float((1.0 + _b / 100.0).prod() - 1.0) * 100.0
+            _abs[_sec], _rel[_sec] = _cs, _cs - _cb
+        fac["ret_since_tilt_pct"] = fac["sector"].map(_abs)
+        fac["ret_since_tilt_rel_pp"] = fac["sector"].map(_rel)
+    except Exception as exc:                                  # noqa: BLE001
+        log.warning("since-entry return failed (%s); omitted", exc)
 
     fac["accum_breadth"] = fac["breadth_accum"]
     fac = fac.sort_values("score", ascending=False).reset_index(drop=True)
@@ -678,11 +1028,20 @@ def get_market_breadth(as_of_date: date, min_turnover_lacs: Optional[float] = No
             FROM daily_data b
             WHERE b.series IN ('EQ','SM','ST')
               AND b.trade_date > (?::date - 400) AND b.trade_date <= ?
-              AND b.symbol IN (SELECT symbol FROM daily_data
-                               WHERE trade_date = ? AND turnover_lacs >= ?)
+              -- membership on a 20-session MEDIAN turnover, not the as-of day's.
+              -- A same-day floor rebuilds the breadth universe out of whichever
+              -- names happened to be active today, which ties the universe to the
+              -- day's move and makes breadth drift with the news rather than the
+              -- trend it is meant to describe.
+              AND b.symbol IN (
+                  SELECT symbol FROM daily_data
+                  WHERE series IN ('EQ','SM','ST')
+                    AND trade_date > (?::date - 35) AND trade_date <= ?
+                  GROUP BY symbol
+                  HAVING MEDIAN(turnover_lacs) >= ?)
             ORDER BY b.symbol, b.trade_date
             """,
-            [as_of_date, as_of_date, as_of_date, _BREADTH_MIN_TO_LACS],
+            [as_of_date, as_of_date, as_of_date, as_of_date, _BREADTH_MIN_TO_LACS],
         )
     except Exception as exc:                                      # noqa: BLE001
         log.warning("breadth query failed (%s)", exc)
@@ -721,8 +1080,12 @@ def get_market_breadth(as_of_date: date, min_turnover_lacs: Optional[float] = No
             return "BEAR" if not long_up else "WEAKENING"    # weak breadth; long-line no/yes
         return "NEUTRAL"
     state = _state_at(float(b50.iloc[-1]))
-    # duration: consecutive trailing days breadth has held today's strength band (breadth-only,
-    # so it is a true time series — the long-line overlay is a today-only read).
+    # Duration of the BREADTH BAND only — not of `state`. The two differ: `state` also
+    # needs the 200-DMA overlay, which is a today-only read here, so the state's own
+    # age is not computable from this series. It was being rendered as "STATE ... held
+    # N days", which reads as the state's age and can be badly wrong (a 2-day-old
+    # RECOVERING shown as "held 15 days"). Returned under an honest name and labelled
+    # as the breadth band in the UI.
     def _band(x): return "hi" if x >= _BREADTH_BULL else ("lo" if x < _BREADTH_BEAR else "mid")
     daily_band = b50.apply(_band); today_band = daily_band.iloc[-1]
     dur = 0
@@ -745,8 +1108,8 @@ def get_market_breadth(as_of_date: date, min_turnover_lacs: Optional[float] = No
            f"its 200-day line" if np.isfinite(px_vs_200) else
            f"{_pct(b50v)} of large-caps above their 50-day line")
     out.update(ok=True, state=state, b50=b50v, b200=b200v, px_vs_200=px_vs_200,
-               death_cross=death, dur_days=int(dur), narrowing=narrowing,
-               n=int(p.shape[1]), caption=cap)
+               death_cross=death, band_days=int(dur), dur_days=int(dur),
+               narrowing=narrowing, n=int(p.shape[1]), caption=cap)
     return out
 
 
@@ -956,6 +1319,8 @@ def get_tilt_replay(as_of_date: date, horizon_days: int = 10,
         f"""
         WITH base AS (
             SELECT b.trade_date, s.sector,
+                   (b.close_price - b.prev_close)
+                       / NULLIF(b.prev_close,0) * 100 AS raw_r,
                    GREATEST(LEAST((b.close_price - b.prev_close)
                             / NULLIF(b.prev_close,0) * 100, 25), -25) AS r,
                    LAG(b.turnover_lacs) OVER (PARTITION BY b.symbol
@@ -970,7 +1335,11 @@ def get_tilt_replay(as_of_date: date, horizon_days: int = 10,
         SELECT sector, trade_date,
                SUM(w_lag * r) / NULLIF(SUM(CASE WHEN r IS NOT NULL THEN w_lag END),0) AS ret
         FROM base
-        WHERE turnover_lacs >= ? AND w_lag IS NOT NULL
+        -- lagged filter + corporate-action drop, identical to _load_sector_panel.
+        -- The replay SCORES the tilt, so scoring it on a different universe rule than
+        -- the one that generated the call would make the scorecard measure the
+        -- construction difference rather than the call.
+        WHERE w_lag >= ? AND ABS(raw_r) < 40
           AND trade_date > ?
         GROUP BY sector, trade_date
         """, [anchor, today, min_turnover_lacs, anchor])

@@ -73,6 +73,76 @@ def _slope_per_col(mat: pd.DataFrame, med: pd.Series) -> pd.Series:
     return pd.Series(slope, index=mat.columns) / med.replace(0, np.nan)
 
 
+def get_accum_breadth_history(
+    as_of_date: date,
+    lookback: int,
+    min_turnover_lacs: Optional[float] = None,
+) -> pd.DataFrame:
+    """
+    date x sector `breadth_accum` over the trailing `lookback` sessions.
+
+    Same definition as get_robust_delivery_signals() — the fraction of a sector's
+    liquid names whose 5d/100d delivery ratio clears _ACCUM_R5 AND whose 15d delivery
+    slope is positive — but evaluated on EVERY date in the window instead of one, by
+    rolling the whole stocks x dates matrix at once. One query, no per-date loop.
+
+    WHY IT EXISTS. The tilt tenure rebuild reproduces the rank band exactly but could
+    not reproduce WATCH, which needs this. WATCH fires on breadth >= 0.55 AND
+    rank <= 0.35, and the UNDERWEIGHT band is rank <= 0.25 — so WATCH sits inside it
+    and can mask an UNDERWEIGHT mid-window. Measured over a 90-session window,
+    ignoring WATCH made 5.7% of underweight streaks wrong, and when wrong they were
+    overstated by a median of 6 sessions against a true streak averaging 2.5. With
+    this, labels agree with real per-date engine runs on 142 of 144 sector-days
+    (both misses OVERWEIGHT, from the rank rebuild, not from WATCH).
+
+    Every window is aligned to the live function: the 100d baseline EXCLUDES the
+    current session, liquidity is judged on the PRIOR session.
+    """
+    if min_turnover_lacs is None:
+        min_turnover_lacs = get_min_turnover_filter()
+
+    # 100d baseline + 15d slope + the lookback itself, in calendar days with slack.
+    span = int(lookback * 1.6) + 260
+    panel = query_dataframe(
+        """
+        SELECT b.symbol, s.sector, b.trade_date, b.deliv_per, b.turnover_lacs
+        FROM daily_data b
+        INNER JOIN v_sector_master s ON b.symbol = s.symbol
+        WHERE b.series IN ('EQ', 'SM', 'ST')
+          AND s.sector NOT IN ('ETF', 'Others')
+          AND b.trade_date > (?::date - ?) AND b.trade_date <= ?
+        """,
+        [as_of_date, span, as_of_date],
+    )
+    if panel.empty:
+        return pd.DataFrame()
+
+    panel["trade_date"] = pd.to_datetime(panel["trade_date"])
+    dp = panel.pivot_table("deliv_per", "trade_date", "symbol").sort_index()
+    tov = panel.pivot_table("turnover_lacs", "trade_date", "symbol").sort_index()
+    if len(dp) < _MIN_HIST + 2:
+        return pd.DataFrame()
+
+    prior = dp.shift(1)                     # baseline excludes the current session
+    base_mean = prior.rolling(100, min_periods=_MIN_HIST).mean()
+    base_med = prior.rolling(100, min_periods=_MIN_HIST).median()
+    ratio5 = dp.rolling(5).mean() / base_mean.replace(0, np.nan)
+
+    n = 15
+    xd = np.arange(n, dtype=float) - (n - 1) / 2.0
+    num = sum(dp.shift(n - 1 - i) * xd[i] for i in range(n))
+    slope = num / (xd ** 2).sum() / base_med.replace(0, np.nan)
+
+    enough = prior.notna().rolling(100, min_periods=1).sum() >= _MIN_HIST
+    usable = enough & dp.notna() & (tov.shift(1) >= min_turnover_lacs)
+    accum = ((ratio5 > _ACCUM_R5) & (slope > 0)).where(usable).astype(float)
+
+    sec = panel.drop_duplicates("symbol").set_index("symbol")["sector"].reindex(dp.columns)
+    breadth = accum.T.groupby(sec).mean().T
+    names = usable.T.groupby(sec).sum().T
+    return breadth.where(names >= _MIN_NAMES).tail(lookback)
+
+
 def get_robust_delivery_signals(
     as_of_date: date,
     min_turnover_lacs: Optional[float] = None,
@@ -84,12 +154,21 @@ def get_robust_delivery_signals(
     # ~150 calendar days of the delivery-% panel for stocks liquid on the as-of day.
     panel = query_dataframe(
         """
+        -- Liquidity is judged on the PRIOR session. A same-day floor admits a stock
+        -- BECAUSE it traded heavily today, and same-day turnover is strongly
+        -- correlated with the same-day move (measured 2018-2026: the same-day
+        -- filtered universe averages +0.223%/day at the 1 Cr floor vs +0.072%/day
+        -- when the same floor is applied to the previous session). That selects the
+        -- constituent set on an outcome.
         WITH liq AS (
-            SELECT b.symbol
-            FROM daily_data b
-            WHERE b.trade_date = ?
-              AND b.series IN ('EQ', 'SM', 'ST')
-              AND b.turnover_lacs >= ?
+            SELECT symbol FROM (
+                SELECT b.symbol, b.trade_date,
+                       LAG(b.turnover_lacs) OVER (PARTITION BY b.symbol
+                                                  ORDER BY b.trade_date) AS w_lag
+                FROM daily_data b
+                WHERE b.series IN ('EQ', 'SM', 'ST')
+                  AND b.trade_date > (?::date - 15) AND b.trade_date <= ?
+            ) WHERE trade_date = ? AND w_lag >= ?
         )
         SELECT b.symbol, s.sector, b.trade_date, b.deliv_per
         FROM daily_data b
@@ -101,7 +180,7 @@ def get_robust_delivery_signals(
           AND b.trade_date <= ?
         ORDER BY b.symbol, b.trade_date
         """,
-        [as_of_date, min_turnover_lacs, as_of_date, as_of_date],
+        [as_of_date, as_of_date, as_of_date, min_turnover_lacs, as_of_date, as_of_date],
     )
     if panel.empty:
         return pd.DataFrame(columns=[

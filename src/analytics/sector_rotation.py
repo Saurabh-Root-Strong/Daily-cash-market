@@ -282,7 +282,7 @@ def get_sector_rotation(
     n_1w_days = int(_n1w["n"].iloc[0]) if not _n1w.empty and _n1w["n"].iloc[0] else 5
 
     # ── 100-day daily delivery % series — for trend slope only ────────────────
-    start = as_of_date - timedelta(days=lookback_days)
+    start = _session_cutoff(as_of_date, lookback_days)
     hist_sql = """
         SELECT
             s.sector,
@@ -1199,13 +1199,37 @@ def get_market_regime(as_of_date: date) -> dict:
     }
 
 
+def _session_cutoff(as_of_date: date, n_sessions: int) -> date:
+    """Date of the `n_sessions`-th trading session before `as_of_date`.
+
+    Used as a STRICT lower bound (`trade_date > cutoff`), so the window then holds
+    exactly `n_sessions` sessions ending at as_of.
+
+    WHY THIS EXISTS. These windows used to be `as_of - timedelta(days=n)`, i.e.
+    CALENDAR days, while every caller passes a count of TRADING sessions — the tilt
+    panel passes its selected horizon, whose relative-strength lookback is measured in
+    sessions. Measured on 2026-08-17: asking for 10 captured 6 sessions, 25 captured
+    17, 60 captured 41. So a "1-2wk" (10-session) call was showing a 6-session
+    drill-down and labelling it "2W %". Falls back to the calendar approximation only
+    if the calendar is too short to answer.
+    """
+    row = query_dataframe(
+        "SELECT DISTINCT trade_date FROM daily_data "
+        "WHERE trade_date <= ? ORDER BY trade_date DESC LIMIT 1 OFFSET ?",
+        [as_of_date, int(n_sessions)],
+    )
+    if row.empty:
+        return as_of_date - timedelta(days=int(n_sessions) * 2)
+    return pd.to_datetime(row["trade_date"].iloc[0]).date()
+
+
 def get_sector_stocks_rotation(
     sector: str,
     as_of_date: date,
     min_turnover_lacs: Optional[float] = None,
     lookback_days: int = 7,
 ) -> pd.DataFrame:
-    """Per-stock rotation metrics for a sector over the last `lookback_days` calendar days.
+    """Per-stock rotation metrics for a sector over the last `lookback_days` TRADING SESSIONS.
 
     Returns avg_deliv_per_100d: each stock's own 100D average delivery %
     so conviction can compare against own history, not sector-relative percentiles.
@@ -1213,7 +1237,7 @@ def get_sector_stocks_rotation(
     if min_turnover_lacs is None:
         min_turnover_lacs = get_min_turnover_filter()
 
-    start = as_of_date - timedelta(days=lookback_days)
+    start = _session_cutoff(as_of_date, lookback_days)
 
     # Pure-history 100D cutoff — same offset logic as sector_aggregator
     cutoff_row = query_dataframe(
@@ -1287,6 +1311,7 @@ def get_clock_stock_detail(
     as_of_date: date,
     min_turnover_lacs: Optional[float] = None,
     lookback_days: int = 14,
+    short_days: Optional[int] = None,
 ) -> pd.DataFrame:
     """
     Which stocks inside a Rotation-Clock sector are worth looking at, and which
@@ -1308,6 +1333,31 @@ def get_clock_stock_detail(
     Q5-Q1 = +0.562%/10d (t +7.36, 65% hit), stable in all three eras
     (t +4.85 / +6.66 / +5.13) and it SURVIVES residualising on the stock's own
     momentum (t +8.42). It is the cleanest stock-level signal in this codebase.
+
+    ⚠ MATERIAL QUALIFICATION (scripts/audit_within_sector_pick.py, 2026-08-17).
+    That measurement POOLS every sector. Split by whether the sector was itself a
+    momentum leader, the edge turns out to live entirely in the sectors you are
+    NOT buying:
+
+        universe                     IC        t_NW
+        all sectors                +0.0186   +5.94
+        OVERWEIGHT sectors only    +0.0081   +1.31   <- gone
+
+    Re-run on both the same-day and the corrected lagged-filter panel: identical
+    (+0.0186/+5.97 vs +0.0186/+5.94), so this is NOT the filter fix — it is the
+    conditioning. Plausibly delivery is already elevated across a sector being
+    accumulated, leaving no within-sector dispersion to read.
+
+    So this ranking is informative on WEAK / IMPROVING / LAGGING clock phases and
+    is NOT informative on a LEADING one. Anywhere it is shown under an already-
+    strong sector it must be labelled attribution, not a ranked buy order. Also
+    measured inside overweight sectors, none of the alternatives rescue it:
+    rel_mom t -3.30, abs_mom t -3.00, turnsurge t +0.26, and a top-4 dacc basket
+    is +0.03pp (t +0.14) that DEGRADES to -0.07pp once a Rs 25 Cr delivery floor
+    makes it tradeable. The largest effect in that universe is smallest-names-
+    beat-largest (bottom-4 by delivery share +1.24pp, t +5.00) — a size and
+    liquidity premium, not selection skill, and the one most exposed to the
+    v_sector_master survivorship gap.
 
     THE COST CAVEAT THAT DECIDES HOW TO USE IT: as a STANDALONE trade, top-3 by
     dacc nets -4.9%/yr (t -2.32) — a 0.5% round trip against +0.31%/10d gross.
@@ -1366,13 +1416,37 @@ def get_clock_stock_detail(
                     THEN (l.ltp - s.start_close) / s.start_close * 100 END AS ret_win_pct
         FROM last2 l LEFT JOIN start_px s ON l.symbol = s.symbol
         """,
-        [sector, as_of_date, as_of_date - timedelta(days=lookback_days)],
+        [sector, as_of_date, _session_cutoff(as_of_date, lookback_days)],
     )
     if not px.empty:
         df = df.drop(columns=[c for c in ("ltp",) if c in df.columns]).merge(
             px, on="symbol", how="left")
     else:
         df["ltp"] = np.nan; df["chg_1d_pct"] = np.nan; df["ret_win_pct"] = np.nan
+
+    # Delivery value over the SHORT end of the horizon band as well. The tilt tab
+    # offers ranges ("1-2 wk", "3-4 wk"); `lookback_days` is the far end (10, 20 ...)
+    # and this is the near end (5, 15 ...), so the two columns show whether the money
+    # arrived recently or earlier in the window. Same formula, shorter window.
+    if short_days and int(short_days) > 0 and int(short_days) < int(lookback_days):
+        sv = query_dataframe(
+            """
+            SELECT b.symbol,
+                   SUM(b.deliv_per / 100.0 * b.turnover_lacs) / 100 AS deliv_value_cr_short
+            FROM daily_data b
+            INNER JOIN v_sector_master s ON b.symbol = s.symbol
+            WHERE b.series IN ('EQ', 'SM', 'ST')
+              AND s.sector = ?
+              AND b.trade_date > ?
+              AND b.trade_date <= ?
+            GROUP BY b.symbol
+            """,
+            [sector, _session_cutoff(as_of_date, int(short_days)), as_of_date],
+        )
+        df = df.merge(sv, on="symbol", how="left") if not sv.empty else df.assign(
+            deliv_value_cr_short=np.nan)
+    else:
+        df["deliv_value_cr_short"] = np.nan
 
     # relative move = this stock's WINDOW return minus the sector's typical one
     df["rel_ret_pct"] = df["ret_win_pct"] - df["ret_win_pct"].median()
@@ -1423,11 +1497,11 @@ def get_sector_rotation_history(
     min_turnover_lacs: Optional[float] = None,
     lookback_days: int = _LOOKBACK_DAYS,
 ) -> pd.DataFrame:
-    """Daily delivery % + delivery value trend for a single sector over lookback period."""
+    """Daily delivery % + delivery value trend for a single sector, over `lookback_days` TRADING SESSIONS."""
     if min_turnover_lacs is None:
         min_turnover_lacs = get_min_turnover_filter()
 
-    start = as_of_date - timedelta(days=lookback_days)
+    start = _session_cutoff(as_of_date, lookback_days)
     sql = """
         SELECT
             b.trade_date,

@@ -166,7 +166,7 @@ def cached_clock_replay(as_of: date, window: int = 5,
 
 @st.cache_data(ttl=_TTL)
 def cached_clock_stock_detail(sector: str, trade_date: date, min_turnover_lacs: float = 1.0,
-                              lookback_days: int = 10):
+                              lookback_days: int = 10, short_days: int = 0):
     """
     Stocks inside a Rotation-Clock sector, ranked by delivery-vs-own-normal.
 
@@ -175,7 +175,8 @@ def cached_clock_stock_detail(sector: str, trade_date: date, min_turnover_lacs: 
     """
     from src.analytics.sector_rotation import get_clock_stock_detail
     return get_clock_stock_detail(sector, trade_date, min_turnover_lacs,
-                                  lookback_days=lookback_days)
+                                  lookback_days=lookback_days,
+                                  short_days=short_days or None)
 
 
 @st.cache_data(ttl=_TTL)

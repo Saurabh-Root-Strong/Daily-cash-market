@@ -1557,89 +1557,294 @@ def _phase_card(row: pd.Series, color: str, selected_date: date | None = None,
 
     if selected_date is None:
         return
-    # Stock drill-down. Ranked by delivery-vs-own-normal, which is the ONLY
-    # within-sector stock metric that measured positive (IC +0.032, t +9.56,
-    # monotonic quintiles, stable in all 3 eras). Momentum, delivery-value share
-    # and "who drove the move" all measured NEGATIVE at t -3.5..-4.9, so the
-    # obvious "biggest participant" ranking would be upside down — the attribution
-    # column is shown but explicitly labelled as not a buy order.
-    with st.expander(f"🔍 {sector} — which stocks (same {window}-day window as the clock)",
-                     expanded=False):
-        try:
-            # window MUST match the Clock's Analysis Period. Hardcoding it meant a
-            # 3-month clock opened 14-day stock data; dacc moves 4.34/5.20/5.44/5.26
-            # across the 5/10/22/65-day windows, i.e. a different top name.
-            det = cached_clock_stock_detail(sector, selected_date,
-                                            float(min_turnover or 1.0),
-                                            lookback_days=int(window))
-        except Exception as exc:                                  # noqa: BLE001
-            st.caption(f"Stock detail unavailable: {exc}")
-            return
-        if det is None or det.empty:
-            st.caption("No liquid stocks in this sector for the current filter.")
-            return
+    _render_stock_table(sector, selected_date, min_turnover, window, context="clock")
 
-        show = det.head(12).copy()
-        _wk = max(1, int(round(window / 5)))
-        show = show.rename(columns={
-            "symbol": "Stock", "ltp": "LTP", "chg_1d_pct": "1D %",
-            "ret_win_pct": f"{window}D %", "rel_ret_pct": "vs sector",
-            "dacc": "Deliv x", "deliv_value_cr": "Deliv Cr", "read": "Read",
+
+def _render_stock_table(sector: str, selected_date, min_turnover: float, window: int,
+                        *, context: str = "clock", top_n: int = 12,
+                        title: str | None = None, expanded: bool = False) -> None:
+    """The single stock drill-down table, shared by the Rotation Clock and the Tilt.
+
+    ONE implementation on purpose. The two callers differ only in SORT ORDER and
+    the caption, and that difference is measured, not cosmetic:
+
+      context="clock"    sorts by `dacc` (delivery vs the stock's own 100-day
+                         normal). Pooled across all sectors that is the one
+                         within-sector metric that works — IC +0.0186, t +5.94
+                         (scripts/audit_within_sector_pick.py; the older
+                         +0.032/+9.56 is the same sign on a narrower sample).
+
+      context="tilt_ow"  sorts by RAW DELIVERY % (delivered qty / traded qty).
+                         Inside a sector that is already an OVERWEIGHT the dacc
+                         edge is GONE (IC +0.0081, t +1.31; identical on the
+                         same-day and corrected panels, so it is the CONDITIONING,
+                         not a data artifact) while the raw LEVEL survives it.
+                         Top-4 within each sector, fwd return vs own sector:
+
+                             rank by        top4      t     >=Rs5Cr floor
+                             delivery %   +0.596   +4.58   +0.353 (t +3.15)
+                             dacc         +0.121   +1.02   +0.103 (t +0.92)
+                             momentum     +0.067   +0.66   +0.031 (t +0.40)
+                             delivery Rs  -0.024   -0.42  -0.047 (t -0.76)
+
+                         Era-stable at 10d (+0.41 / +0.65 / +0.68, all t >= 2.1)
+                         and NOT a size proxy (corr with turnover -0.32; median
+                         delivery % across size deciles 49 / 45 / 45%). Sorting by
+                         delivery VALUE is actively backwards — its bottom-4 beat
+                         its top-4 by +0.61pp/10d. Horizon-limited: fades by 9-10wk.
+
+    `window` MUST be the caller's own period. Hardcoding it once meant a 3-month
+    clock opened 14-day stock data, and dacc moves 4.34/5.20/5.44/5.26 across the
+    5/10/22/65-day windows — a different top name each time.
+    """
+    _t = title or f"🔍 {sector} — which stocks (same {window}-day window as the clock)"
+    with st.expander(_t, expanded=expanded):
+        _stock_table_body(sector, selected_date, min_turnover, window,
+                          context=context, top_n=top_n)
+
+
+def _since_md(rel_pp, bucket: str) -> str:
+    """`since` for an expander label, in markdown (labels reject raw HTML).
+
+    Coloured by SIGN, matching the non-expander branch: up green, down red, on both
+    lists. `bucket` is kept in the signature because what a colour MEANS differs by
+    list - on the avoid list a red number is the call working - but that belongs in
+    the hover text, not in the colour rule.
+
+    Without this the figure rendered as plain text whenever the drill-down toggle
+    was on, which is most of the time, because expander labels reject raw HTML.
+    """
+    if rel_pp is None or pd.isna(rel_pp):
+        return ""
+    tone = "grey" if abs(rel_pp) < 1e-9 else ("green" if rel_pp > 0 else "red")
+    return f"  ·  :{tone}[since {rel_pp:+.1f}pp]"
+
+
+def _stock_table_body(sector: str, selected_date, min_turnover: float, window: int,
+                      *, context: str = "clock", top_n: int = 12,
+                      compact: bool = False) -> None:
+    """The table itself, WITHOUT an expander around it.
+
+    Split out because Streamlit forbids nesting expanders: on the Tilt tab each
+    sector row is itself an expander, so it must call this body directly while the
+    Rotation Clock keeps calling the wrapper above.
+
+    `compact` drops the two widest columns (1D % and the free-text Read) for
+    rendering inside a half-width st.columns() pane. The thin-name warning that
+    lives in Read is NOT lost with it — it moves onto the symbol as a ⚠, because
+    that flag is a liquidity safety note, not decoration.
+    """
+    try:
+        # Short end of the horizon band: the tab offers ranges ("1-2 wk", "3-4 wk"),
+        # `window` is the far end and this is the near end, so both delivery-value
+        # columns can be shown side by side.
+        _short = max(5, int(window) - 5)
+        det = cached_clock_stock_detail(sector, selected_date,
+                                        float(min_turnover or 1.0),
+                                        lookback_days=int(window),
+                                        short_days=int(_short))
+    except Exception as exc:                                      # noqa: BLE001
+        st.caption(f"Stock detail unavailable: {exc}")
+        return
+    if det is None or det.empty:
+        st.caption("No liquid stocks in this sector for the current filter.")
+        return
+
+    sort_col = "wtd_deliv_per" if context == "tilt_ow" else "dacc"
+    if sort_col in det.columns and det[sort_col].notna().any():
+        det = det.sort_values(sort_col, ascending=False)
+    show = det.head(top_n).copy()
+    if compact and "thin" in show.columns:
+        show["symbol"] = show["symbol"] + np.where(show["thin"].fillna(False), " ⚠", "")
+    _wk = max(1, int(round(window / 5)))
+    _swk = max(1, int(round(_short / 5)))
+    _c_long, _c_short = f"Deliv Cr {_wk}W", f"Deliv Cr {_swk}W"
+    _s_plural = "" if _swk == 1 else "s"
+    _dup = _c_short == _c_long
+
+    # ── Flow: is the delivery buying picking up or fading? ───────────────
+    # The two delivery columns OVERLAP, so the older stretch is (long - short),
+    # which is always exactly one week. Compare like with like by putting both
+    # sides on a per-week footing before dividing.
+    #
+    # CALIBRATION (757,884 stock-days, 2022-2026, >=Rs 1 Cr/day liquidity and
+    # >=Rs 25 Cr delivered in the window): a +/-25% deadband splits Rising 29% /
+    # Steady 39% / Fading 32% and the label changes on 28.9% of stock-days with
+    # only 2.1% outright reversals. Tighter (+/-15%) doubles reversals to 4.9%.
+    #
+    # IT PREDICTS NOTHING, and that is measured, not assumed: forward 10d return
+    # in EXCESS of the stock's own sector is +0.552% Rising vs +0.627% Fading -
+    # a -0.075pp spread pointing the WRONG way, every |t| < 1. Descriptive only.
+    def _flow(_s, _l):
+        if pd.isna(_s) or pd.isna(_l):
+            return "—"
+        older = float(_l) - float(_s)          # the oldest week in the window
+        if older <= 0 or float(_l) < 25.0:     # no older week, or too small to read
+            return "—"
+        ratio = (float(_s) / _swk) / older     # per-week recent vs per-week older
+        return "↑ Rising" if ratio > 1.333 else ("↓ Fading" if ratio < 0.75
+                                                 else "→ Steady")
+    if not _dup and {"deliv_value_cr", "deliv_value_cr_short"}.issubset(show.columns):
+        show["Flow"] = [_flow(a, b) for a, b in
+                        zip(show["deliv_value_cr_short"], show["deliv_value_cr"])]
+
+    show = show.rename(columns={
+        "symbol": "Stock", "ltp": "LTP", "chg_1d_pct": "1D %",
+        "ret_win_pct": f"{window}D %", "rel_ret_pct": "vs sector",
+        "wtd_deliv_per": "Deliv %", "dacc": "Deliv x",
+        "deliv_value_cr": _c_long, "deliv_value_cr_short": _c_short,
+        "read": "Read",
+    })
+    cols = (["Stock", "LTP", f"{window}D %", "Deliv %", "Deliv x"]
+            + ([] if _dup else [_c_short]) + [_c_long]
+            + ([] if _dup else ["Flow"])
+            if compact else
+            ["Stock", "LTP", "1D %", f"{window}D %", "vs sector",
+             "Deliv %", "Deliv x"] + ([] if _dup else [_c_short]) + [_c_long]
+            + ([] if _dup else ["Flow"]) + ["Read"])
+    cols = [c for c in cols if c in show.columns]
+    _sorted_by = ("delivery % — the share of traded volume actually delivered"
+                  if context == "tilt_ow" else
+                  "delivery vs the stock's own 100-day normal")
+    # Explicit column_config: without it the last columns get clipped and render
+    # blank (that is what happened to "Share of sector delivery %"). Share of
+    # sector delivery is dropped — "Deliv Cr" says the same thing more legibly.
+    st.dataframe(
+        show[cols], hide_index=True, use_container_width=True,
+        column_config={
+            "Stock": st.column_config.TextColumn(width="small"),
+            "LTP": st.column_config.NumberColumn(
+                "LTP ₹", format="%.2f", width="small",
+                help="Last traded (close) price on the selected date."),
+            "1D %": st.column_config.NumberColumn(
+                "1D %", format="%+.2f", width="small",
+                help="Close-to-close move vs the previous session."),
+            f"{window}D %": st.column_config.NumberColumn(
+                f"{_wk}W %", format="%+.2f", width="small",
+                help=f"Actual return over the {window}-day window (close now vs "
+                     f"close {window} days ago). NOT an average of daily moves."),
+            "vs sector": st.column_config.NumberColumn(
+                "vs sector", format="%+.2f", width="small",
+                help="This stock's window return minus the sector's median "
+                     "stock. Positive = leading its own sector."),
+            "Deliv %": st.column_config.NumberColumn(
+                "Deliv %", format="%.1f", width="small",
+                help="TRUE DELIVERY: of everything traded in this stock over the "
+                     "window, this much was actually delivered (taken into a demat "
+                     "account) rather than squared off intraday. High = real "
+                     "ownership changing hands; low = churn.\n\n"
+                     "Measured on 1.32M stock-days (2018-2026): ranking a sector's "
+                     "stocks by this beats every alternative INSIDE an overweight "
+                     "sector — top-4 earn +0.60pp over the next 10 sessions vs their "
+                     "own sector (t +4.58), positive in all three eras, and still "
+                     "+0.35pp (t +3.15) with a Rs 5 Cr delivery floor. It is not a "
+                     "size proxy: correlation with turnover is -0.32."),
+            "Deliv x": st.column_config.NumberColumn(
+                "Deliv ×", format="%.2f", width="small",
+                help="Delivery %% over the window divided by this stock's OWN "
+                     "100-day normal. Above 1 = heavier real buying than usual."
+                     + ("  Shown as context only here: inside an OVERWEIGHT "
+                        "sector this measured t +1.31, i.e. nothing."
+                        if context == "tilt_ow" else
+                        "  This is the column the list is sorted by, and the "
+                        "only within-sector metric that measured predictive.")),
+            _c_long: st.column_config.NumberColumn(
+                f"Deliv ₹Cr {_wk}W", format="%.0f", width="small",
+                help=f"**Money that actually bought and KEPT this stock** over the "
+                     f"last {window} trading days ({_wk} weeks) - the full horizon you "
+                     f"picked above.\n\n"
+                     f"Delivery means the shares were taken into a demat account "
+                     f"instead of being sold again the same day. Day traders square "
+                     f"off; real buyers take delivery. So this is the size of the "
+                     f"genuine money behind the move, in ₹ crore.\n\n"
+                     f"Worked out as each day's delivery % times that day's traded "
+                     f"value, added up over the window.\n\n"
+                     f"Example: `158` means about ₹158 crore of this stock was "
+                     f"bought and held over these {_wk} weeks.\n\n"
+                     f"This number **includes** the {_swk}W column on its left. "
+                     f"Subtract one from the other to see whether the buying is "
+                     f"picking up or fading - the **Flow** column does it for you."),
+            _c_short: st.column_config.NumberColumn(
+                f"Deliv ₹Cr {_swk}W", format="%.0f", width="small",
+                help=f"The same money-taken-home figure, but only the last "
+                     f"{_short} trading days ({_swk} week{_s_plural}).\n\n"
+                     f"**The two columns overlap.** {_wk}W already contains everything "
+                     f"in this {_swk}W. So do not read one as a share of the other - "
+                     f"subtract:\n\n"
+                     f"`{_wk}W - {_swk}W` = what was delivered in the OLDEST week of "
+                     f"the window.\n\n"
+                     f"Example at the 1-2 wk horizon, `1W = 50` and `2W = 80`:\n\n"
+                     f"older week = `80 - 50` = `30`, recent week = `50`, so it went "
+                     f"30 then 50 and the buying is **increasing**.\n\n"
+                     f"The other way round, `1W = 30` and `2W = 80`: older week = "
+                     f"`50`, recent week = `30`, so the buying is **fading**.\n\n"
+                     f"The **Flow** column applies this rule for you."),
+            "Flow": st.column_config.TextColumn(
+                "Flow", width="small",
+                help=f"**Is the delivery buying picking up or dying down?**\n\n"
+                     f"It compares the two money columns on a per-week basis:\n\n"
+                     f"- recent = the {_swk}W figure spread over {_swk} week{_s_plural}\n"
+                     f"- older = `{_wk}W - {_swk}W`, the earliest week\n\n"
+                     f"- **Rising** - the recent week is running 33% or more ABOVE the "
+                     f"older one; buying is stepping up.\n"
+                     f"- **Fading** - 25% or more BELOW; the buying is drying up.\n"
+                     f"- **Steady** - in between, no real change.\n"
+                     f"- **—** (dash) - too small to judge (under ₹25 crore delivered "
+                     f"in the window), or there is no older week to compare with.\n\n"
+                     f"Example: `1W = 50` and `2W = 80` gives older = `30` against "
+                     f"recent `50`, so Rising.\n\n"
+                     f"**Honest warning.** This only describes what already happened. "
+                     f"Measured on 757,884 stock-days (2022-2026), Rising names went "
+                     f"on to make +0.55% over the next 10 days versus their own sector "
+                     f"and Fading names +0.63% - the gap is 0.08pp the WRONG way and is "
+                     f"not significant. Do not buy something because it says Rising."),
+            "Read": st.column_config.TextColumn(width="large"),
         })
-        cols = ["Stock", "LTP", "1D %", f"{window}D %", "vs sector",
-                "Deliv x", "Deliv Cr", "Read"]
-        cols = [c for c in cols if c in show.columns]
-        # Explicit column_config: without it the last columns get clipped and render
-        # blank (that is what happened to "Share of sector delivery %"). Share of
-        # sector delivery is dropped — "Deliv Cr" says the same thing more legibly.
-        st.dataframe(
-            show[cols], hide_index=True, use_container_width=True,
-            column_config={
-                "Stock": st.column_config.TextColumn(width="small"),
-                "LTP": st.column_config.NumberColumn(
-                    "LTP ₹", format="%.2f", width="small",
-                    help="Last traded (close) price on the selected date."),
-                "1D %": st.column_config.NumberColumn(
-                    "1D %", format="%+.2f", width="small",
-                    help="Close-to-close move vs the previous session."),
-                f"{window}D %": st.column_config.NumberColumn(
-                    f"{_wk}W %", format="%+.2f", width="small",
-                    help=f"Actual return over the clock's {window}-day window "
-                         f"(close now vs close {window} days ago). NOT an average "
-                         f"of daily moves."),
-                "vs sector": st.column_config.NumberColumn(
-                    "vs sector", format="%+.2f", width="small",
-                    help="This stock's window return minus the sector's median "
-                         "stock. Positive = leading its own sector."),
-                "Deliv x": st.column_config.NumberColumn(
-                    "Deliv ×", format="%.2f", width="small",
-                    help="Delivery %% over the window divided by this stock's OWN "
-                         "100-day normal. Above 1 = heavier real buying than usual. "
-                         "This is the column the list is sorted by, and the only "
-                         "within-sector metric that measured predictive."),
-                "Deliv Cr": st.column_config.NumberColumn(
-                    "Deliv ₹Cr", format="%.0f", width="small",
-                    help="Delivered value over the window — the size behind the ratio. "
-                         "A big ratio on a tiny base is flagged in Read."),
-                "Read": st.column_config.TextColumn(width="large"),
-            })
 
-        drivers = det.nlargest(3, "contrib_pct")["symbol"].tolist() if "contrib_pct" in det else []
+    if context == "tilt_ow":
         st.caption(
-            "**Sorted by delivery vs the stock's own 100-day normal** - measured over "
-            "1.19M stock-days (2018-2026) that is the one within-sector metric that "
-            "works: IC +0.032, t +9.6, quintiles monotonic (-0.25 to +0.25 %/10d), "
-            "stable across all three eras, and it survives controlling for the stock's "
-            "own momentum.\n\n"
-            + (f"**Drove the sector move:** {', '.join(drivers)} - shown for attribution "
-               f"only. Ranking by who drove it measured **-0.34%/10d (t -4.8)**, i.e. the "
-               f"names that already moved tend to give it back. Same for momentum "
-               f"(t -4.8) and delivery-value share (t -4.8).\n\n" if drivers else "")
-            + "⚠️ Standalone this does not pay: top-3 by this metric nets **-4.9%/yr** "
-              "after a 0.5% round trip. It is a **selection rule for a sector you have "
-              "already decided to buy** - where you must hold something anyway and the "
-              "incremental cost is zero - not a signal in its own right."
-        )
+            f"**Sorted by {_sorted_by}** — of everything traded, how much was actually "
+            "delivered rather than squared off intraday.\n\n"
+            "**This is the one stock-level ranking that measured positive inside an "
+            "overweight sector.** Top-4 within each sector, forward return vs their own "
+            "sector, 2018-2026: **+0.60pp / 10 sessions (t +4.58)**, positive and "
+            "significant in all three eras (+0.41 / +0.65 / +0.68), and still "
+            "**+0.35pp (t +3.15)** once a ₹5 Cr delivery floor makes it tradeable. "
+            "It is not a size proxy — correlation with turnover −0.32, and median "
+            "delivery % is flat across size deciles (49 / 45 / 45%).\n\n"
+            "Everything else tested in the same universe failed: **Deliv ×** "
+            "(vs own 100-day normal) +0.12pp t +1.02, **momentum** +0.07pp t +0.66, "
+            "and **Deliv ₹Cr** −0.02pp t −0.42 — ranking by rupee size is actively "
+            "backwards, its *bottom*-4 beat its top-4 by +0.61pp. Deliv × works across "
+            "the market as a whole (t +5.94) but its edge lives in the sectors you are "
+            "**not** buying, which is why it is a context column here, not the sort.\n\n"
+            "⚠️ Horizon-limited: the effect is strong at 1-2 wk (t +4.58) and 3-4 wk "
+            "(t +3.62) and fades by 9-10 wk (t +1.53, and the ₹5 Cr floor kills it). "
+            "Incremental cost is zero — you have already decided to buy the sector and "
+            "must hold something — but standalone it would not clear a round trip. "
+            "`scripts/audit_within_sector_pick.py`")
+        return
+
+    drivers = det.nlargest(3, "contrib_pct")["symbol"].tolist() if "contrib_pct" in det else []
+    st.caption(
+        "**Sorted by delivery vs the stock's own 100-day normal** - measured over "
+        "1.19M stock-days (2018-2026) that is the one within-sector metric that "
+        "works: IC +0.032, t +9.6, quintiles monotonic (-0.25 to +0.25 %/10d), "
+        "stable across all three eras, and it survives controlling for the stock's "
+        "own momentum.\n\n"
+        + (f"**Drove the sector move:** {', '.join(drivers)} - shown for attribution "
+           f"only. Ranking by who drove it measured **-0.34%/10d (t -4.8)**, i.e. the "
+           f"names that already moved tend to give it back. Same for momentum "
+           f"(t -4.8) and delivery-value share (t -4.8).\n\n" if drivers else "")
+        + "⚠️ Standalone this does not pay: top-3 by this metric nets **-4.9%/yr** "
+          "after a 0.5% round trip. It is a **selection rule for a sector you have "
+          "already decided to buy** - where you must hold something anyway and the "
+          "incremental cost is zero - not a signal in its own right.\n\n"
+        + "⚠️ Conditional caveat: that edge is measured POOLED. Split out, it is "
+          "absent inside sectors that are already momentum leaders (t +1.31), so "
+          "read this ranking as informative on weak/improving phases and as pure "
+          "attribution on a leading one."
+    )
 
 
 # ── Cross-Period Comparison ───────────────────────────────────────────────────
@@ -4792,7 +4997,8 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
     # The RS lookbacks scale with the chosen window (long = h, short = h/2), so
     # 1-2 wk stays bit-identical to the validated build. Each horizon carries its
     # OWN measured evidence — the 1-2wk validation is NOT reused for the others.
-    from src.analytics.sector_forward_tilt import TILT_HORIZONS, _HORIZON_EVIDENCE
+    from src.analytics.sector_forward_tilt import (TILT_HORIZONS, _BUCKET_EVIDENCE,
+                                                   _HORIZON_EVIDENCE)
     _labels = [lbl for lbl, _ in TILT_HORIZONS]
     _pick = st.radio(
         "Forward horizon", _labels, index=0, horizontal=True,
@@ -4832,34 +5038,50 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
         return
 
     if _ev:
+        from src.analytics.sector_forward_tilt import _HORIZON_BREAKEVEN_BPS
         _era = _ev.get("era", {})
         _recent = _era.get("2025-26")
-        _ok = bool(_ev.get("validated"))
-        _col = "#16a34a" if (_ok and (_recent or 0) > 0) else "#d97706"
-        _tag = ("overlap-corrected long/short IC clears |t|≥2"
-                if _ok else "does NOT clear |t|≥2 once overlap is corrected")
+        _net = _ev["net_yr"]
+        _be = _HORIZON_BREAKEVEN_BPS.get(_hd)
+        _pos = _ev.get("pct_pos")
+        # Colour is driven by the measured result, not by a `validated` flag — no
+        # horizon currently qualifies as validated, so nothing here renders green.
+        _col = "#dc2626" if _net <= 0 else "#d97706"
+        _lean = ("**NOT TRADEABLE** — negative before you place a trade"
+                 if _net <= 0 else
+                 "a lean, not a validated edge — the median rebalance calendar "
+                 "does not clear |t|≥2")
         st.markdown(
             f"<div style='border:1px solid {_col}55;border-left:4px solid {_col};"
             f"border-radius:6px;padding:9px 13px;margin:2px 0 10px 0;background:{_col}0d;"
             f"font-size:0.9rem;color:#c9ced6'>"
             f"<b style='color:{_col}'>{_pick} evidence</b> — long-only top-4, excess vs the "
-            f"equal-weight sector basket, non-overlapping rebalance, net of 25bps/side: "
-            f"<b>{_ev['net_yr']:+.1f}%/yr</b> (t {_ev['net_t']:.2f}), rebalances "
-            f"{_ev['reb_yr']:.1f}×/yr. Long/short IC t (Newey-West) "
-            f"<b>{_ev['ls_ic_t']:+.2f}</b> — {_tag}.<br>"
+            f"equal-weight sector basket, non-overlapping, net of 25bps/side, "
+            f"<b>averaged over all {_hd} rebalance calendars</b>: "
+            f"<b>{_net:+.1f}%/yr</b> (median t {_ev['net_t']:+.2f}), rebalances "
+            f"{_ev['reb_yr']:.1f}×/yr"
+            + (f", positive on <b>{_pos * 100:.0f}%</b> of calendars" if _pos else "")
+            + f". Long/short IC t (Newey-West) <b>{_ev['ls_ic_t']:+.2f}</b>. {_lean}.<br>"
             f"By era: 2018-21 <b>{_era.get('2018-21', float('nan')):+.1f}%</b> · "
             f"2022-24 <b>{_era.get('2022-24', float('nan')):+.1f}%</b> · "
             f"2025-26 <b>{_recent:+.1f}%</b>"
-            + ("  ⚠️ <b>negative in the current era</b> — the short horizons have stopped "
-               "paying; 7-12 wk is where the surviving edge is."
-               if (_recent is not None and _recent < 0) else "")
+            + (f"<br>⚠️ <b>Breakeven cost {_be} bps/side.</b> Realistic all-in retail "
+               f"cost on a 4-sector stock basket is ~20-40 bps/side, so this horizon "
+               f"is at or below its own breakeven — the turnover eats it."
+               if (_be and _be <= 40) else
+               f"<br>Breakeven cost {_be} bps/side (realistic retail ~20-40)."
+               if _be else "")
             + "</div>", unsafe_allow_html=True)
-        if _hd != 10:
-            st.caption(
-                "⚠️ The headline validation quoted below (daily-IC t≈9, Monte-Carlo "
-                "p<0.002) is a **1-2 week** result and does **not** transfer to this "
-                "horizon. Read the box above — it is this horizon's own measured record."
-            )
+        st.caption(
+            "These numbers were **regenerated 2026-08-17** (`scripts/gen_tilt_evidence.py`). "
+            "The previous table on this tab quoted +19.6%/yr at 1-2wk and cited a script "
+            "that never computed a %/yr figure; the repo's own backtest gives +0.4%/yr for "
+            "the same spec. Two method fixes moved the answer more than any parameter: the "
+            "rebalance **calendar** is now averaged over all offsets (one offset alone swings "
+            "a horizon 10-16pp/yr in either direction), and the panel's liquidity filter is "
+            "now **lagged** — a same-day turnover floor admitted a stock *because* it moved "
+            "that day."
+        )
     if df is None or df.empty:
         st.info("Not enough history / liquid sectors on this date to compute the tilt.")
         return
@@ -4933,17 +5155,20 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
             f"<div style='margin-top:5px'>{cells}</div>"
             f"<div style='margin-top:5px;color:#c9ced6;font-size:0.9rem'>{mtf['posture']}</div></div>",
             unsafe_allow_html=True)
-        _ev = mtf.get("evidence") or {}
+        # NOTE: named _mtf_ev, not _ev. `_ev` holds this horizon's tilt evidence and is
+        # read further down by _bucket(); shadowing it here silently fed the MTF dict
+        # into the bucket's cost-drag line.
+        _mtf_ev = mtf.get("evidence") or {}
         _det = mtf.get("detail") or ""
         st.caption(
             "**Re-audited on 13.6 years (3,165 sessions) — this panel is descriptive, not a timer.** "
             "Nifty rises in 59.9% of 10-day and 67.5% of 65-day windows *unconditionally*, so every "
             "state is scored as excess over that drift."
-            + (f"  Current state ({mtf['n_up']}/4 up): **{_ev.get('ex10', float('nan')):+.2f}pp** vs "
-               f"drift at 10d (t {_ev.get('t10', float('nan')):+.2f}), "
-               f"**{_ev.get('ex65', float('nan')):+.2f}pp** at 65d "
-               f"(t {_ev.get('t65', float('nan')):+.2f}); seen {_ev.get('freq', float('nan')):.0f}% of sessions."
-               if _ev else "")
+            + (f"  Current state ({mtf['n_up']}/4 up): **{_mtf_ev.get('ex10', float('nan')):+.2f}pp** vs "
+               f"drift at 10d (t {_mtf_ev.get('t10', float('nan')):+.2f}), "
+               f"**{_mtf_ev.get('ex65', float('nan')):+.2f}pp** at 65d "
+               f"(t {_mtf_ev.get('t65', float('nan')):+.2f}); seen {_mtf_ev.get('freq', float('nan')):.0f}% of sessions."
+               if _mtf_ev else "")
             + (f"  This reading is **{_det}**." if _det else "")
             + "  The earlier '3/4-up = best entry, t+3.4' claim came from a **naive** t-statistic: "
               "forward windows overlap, and once corrected it falls to t≈1.2 and fails a "
@@ -4977,9 +5202,8 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
         f"trend: medium is <b>{med}</b> · {_DV_TXT.get(dv, dv)}<br>Trend quality: "
         f"<b>{_TS.get(ts, ts)}</b>{er_txt} — 8yr: clean trends persist (77% hit) vs choppy (55%); "
         f"size nudged accordingly.</span>", unsafe_allow_html=True)
-    if n_sup:
-        st.caption(f"🚫 {n_sup} overweight call(s) suppressed — in this regime the top-momentum "
-                   f"basket is measured to UNDERPERFORM (OOS 4yr). Shown as NEUTRAL, not a buy.")
+    # (the regime-inversion suppression caption was removed with the dead engine path —
+    #  `momentum_inverts` was False in every branch, so this could never fire.)
 
     # ── market-breadth NOWCAST — "are we in a sustained downtrend?" (context, not forecast) ─
     try:
@@ -4995,7 +5219,7 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
             "BEAR":       ("🔴", "#dc2626", "Broad downtrend — most large-caps below their trend lines and the index below its 200-day line."),
         }
         emo, bcol, one = _BD.get(bd["state"], _BD["NEUTRAL"])
-        b50 = bd["b50"]; b200 = bd["b200"]; dur = bd["dur_days"]
+        b50 = bd["b50"]; b200 = bd["b200"]; dur = bd.get("band_days", bd.get("dur_days", 0))
         _bd_tip = ("A snapshot of where the WHOLE market is now — not a forecast. It counts how many "
                    "of ~400 large-caps are above their own 50-day and 200-day lines, and whether the "
                    "Nifty is above/below its 200-day line. IMPORTANT (from 4yr backtest): a 'death "
@@ -5008,7 +5232,8 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
             f"<span style='color:#8a8f98'>· {one}</span><br>"
             f"<span style='color:#8a8f98;font-size:0.9rem'>{bd['caption']}"
             f"{' · death cross (long-term lines crossed down)' if bd.get('death_cross') else ''}"
-            f" · held {dur} day{'s' if dur != 1 else ''}</span></div>",
+            f" · breadth has held this band {dur} day{'s' if dur != 1 else ''}"
+            f"</span></div>",
             unsafe_allow_html=True)
         if bd.get("narrowing"):
             st.caption("⚠ Early caution (low confidence): index up but breadth quietly falling — "
@@ -5071,12 +5296,59 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
                    "gain from rotating (the tool trims size).")
 
     # ── OW / UW / WATCH buckets ───────────────────────────────────────────────
+    # Drill-down is toggle-gated, and the gate is load-bearing rather than tidy:
+    # Streamlit evaluates expander BODIES eagerly, so turning every sector row into
+    # an expander fires one per-stock query per sector on every rerun (~11 sectors,
+    # ~2.5s). Off = zero extra queries. This is the trap that had this page at 61s
+    # before the lazy-panel work.
+    _show_stk = st.toggle(
+        "🔍 Click a sector to see its stocks", value=False, key="tilt_stocks",
+        help="Turns every sector below into a clickable row. Opening one shows the "
+             "names inside it, ranked by delivery value. ATTRIBUTION, not a pick "
+             "order — no stock-level ranking measured to work inside a strong sector.")
+    if _show_stk:
+        st.caption(
+            "⚠️ **Attribution, not a pick order.** On 1.32M stock-days (2018-2026), "
+            "target = each stock's forward return **minus its own sector's** (so the "
+            "sector call is stripped out), inside OVERWEIGHT sectors: "
+            "delivery-vs-own-normal **t +1.31**, momentum-vs-sector **t −3.30** "
+            "(leaders *under*perform at short horizons), turnover surge **t +0.26**. "
+            "A top-4 Deliv × basket is **+0.03pp (t +0.14)** and decays to **−0.07pp** "
+            "at a ₹25 Cr floor. Deliv × *does* work market-wide (**IC +0.019, t +5.94**) "
+            "— its edge lives in the sectors you are **not** buying. Rows are therefore "
+            "sorted by delivery value: where the money actually is. "
+            "`scripts/audit_within_sector_pick.py`")
+
     def _bucket(name: str):
         g = df[df["tilt"] == name].copy()
         icon, color, sub = _TILT_STYLE[name]
         tip = _TILT_HELP.get(name, "").replace('"', "'")
         st.markdown(f"<b style='color:{color}' title=\"{tip}\">{icon} {name} ⓘ</b> "
                     f"<span style='color:#8a8f98'>· {sub}</span>", unsafe_allow_html=True)
+        # Measured bucket record. This is the granularity the data supports — the old
+        # per-sector "est +145bps" was a straight line through rank (corr 1.0 with it)
+        # off a spread that does not reproduce, so it is not quoted any more.
+        _be = _BUCKET_EVIDENCE.get(_hd, {})
+        if _be and name in ("OVERWEIGHT", "UNDERWEIGHT"):
+            _k = "ow" if name == "OVERWEIGHT" else "uw"
+            _pp, _t, _n = _be[f"{_k}_pp"], _be[f"{_k}_t"], _be[f"{_k}_n"]
+            _sig = abs(_t) >= 2
+            _c = "#8a8f98" if not _sig else (POSITIVE_COLOR if _pp > 0 else NEGATIVE_COLOR)
+            _line = (f"Measured 2018-2026: sectors in this bucket averaged "
+                     f"<b style='color:{_c}'>{_pp:+.2f}pp</b> over the next {_hd} sessions "
+                     f"vs the average sector (t {_t:+.2f}, n {_n:,}) — <b>before cost</b>.")
+            if name == "OVERWEIGHT":
+                _line += (f" The {_be['gross_yr']:+.1f}%/yr that implies is offset by a "
+                          f"<b>{_be['cost_drag']:.1f}pp/yr</b> cost drag at "
+                          f"{_ev.get('reb_yr', 0):.0f} rebalances/yr"
+                          + (", which is why the net is negative even though the ranking works."
+                             if _ev.get("net_yr", 0) <= 0 else "."))
+            elif not _sig:
+                _line += (" Not distinguishable from neutral at this horizon — the "
+                          "'AVOID / trim' label is unsupported here (it only clears "
+                          "significance at 7-12 wk).")
+            st.markdown(f"<div style='color:#8a8f98;font-size:0.85rem;margin:-2px 0 8px 0'>"
+                        f"{_line}</div>", unsafe_allow_html=True)
         if g.empty:
             st.caption("— none —"); return
         for _, r in g.iterrows():
@@ -5089,19 +5361,120 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
                 flag += " · ↩ tends to fade after looking strong"
             if r["thin"]:
                 flag += " · ⚠ too few stocks (noisy)"
-            st.markdown(
-                f"**{r['sector']}** &nbsp; <span title='Strength vs Nifty over the last "
-                f"{_wkL} weeks — higher = leading the market'>{_rsL_lbl} {r['rs_2w']:+.1f}%</span> · "
-                f"<span title='Recent delivery-buying vs its own normal — above 1 = more real "
-                f"buying than usual'>dv5d {r['dv5d']:.2f}</span> · "
-                f"<span title='Rough expected move vs the average sector over {_edge_lbl}. A lean, "
-                f"wide error bars — 0 when the backdrop says stand aside'>est {int(r['est_rel_bps']):+d}bps</span>"
-                f"{flag}", unsafe_allow_html=True)
+            # `est_rel_bps` is deliberately NaN now — the tercile spread it was derived
+            # from does not reproduce once the rebalance calendar is averaged over, so
+            # a per-sector expected return is no longer quoted. Show it only if a future
+            # calibration actually populates the column.
+            _est = r.get("est_rel_bps", float("nan"))
+            _est_txt = (f" · <span title='Rough expected move vs the average sector over "
+                        f"{_edge_lbl}. A lean, wide error bars.'>est "
+                        f"{int(_est):+d}bps</span>") if pd.notna(_est) else ""
+            # Tenure badge. 0 = not established (an overlay changed the call, or no
+            # history) → render nothing rather than "0 days". At the lookback edge
+            # the true streak is longer than measured, so it reads "90+".
+            _d = int(r.get("days_in_tilt", 0) or 0)
+            _cap = int(regime.get("tenure_lookback", 90))
+            _d_txt = ""
+            if _d > 0:
+                _d_tip = (
+                    f"Consecutive sessions this sector has been on the {name} list "
+                    f"at the {_pick} horizon. Measured, 2018-2026: a third of all "
+                    f"list entries last exactly ONE session and the median is about "
+                    f"three, so a name dropping off soon after appearing is normal, "
+                    f"not a signal. IMPORTANT: dropping off is NOT a sell — holding "
+                    f"to the horizon beat rotating into the replacement in 23 of 24 "
+                    f"era x horizon tests, once the 50bps round trip is paid."
+                ).replace('"', "'")
+                _d_txt = (f" &nbsp;<span title=\"{_d_tip}\" style='background:#8a8f9822;"
+                          f"border-radius:4px;padding:1px 7px;font-size:0.85rem;"
+                          f"color:#c9ced6'>Days → <b>{_d}{'+' if _d >= _cap else ''}</b>"
+                          f"</span>")
+                if _d == 1:
+                    _d_txt += " <span style='color:#d9a441;font-size:0.85rem'>NEW</span>"
+                # Move since the call appeared. The RELATIVE figure leads, because a
+                # sector up 3% while every sector rose 4% has lost ground.
+                _sa = r.get("ret_since_tilt_pct", float("nan"))
+                _sr = r.get("ret_since_tilt_rel_pp", float("nan"))
+                if pd.notna(_sr):
+                    # Colour is the SIGN: up green, down red, on both lists. What a
+                    # colour MEANS differs by list, so the hover spells that out.
+                    #
+                    # The title attribute MUST stay on ONE LINE. A blank line inside
+                    # it ends the markdown block, and Streamlit then prints the raw
+                    # <span ...> as visible text instead of rendering it.
+                    _s_col = ("#8a8f98" if abs(_sr) < 1e-9
+                              else ("#3fb950" if _sr > 0 else "#f85149"))
+                    _mean = ("a red (negative) number here is the call working - the "
+                             "sector you were told to skip has lagged"
+                             if name == "UNDERWEIGHT" else
+                             "a green (positive) number here is the call working - the "
+                             "sector has beaten the average")
+                    _abs_txt = (f" Its own move over the same window was {_sa:+.1f}%."
+                                if pd.notna(_sa) else "")
+                    _s_tip = (
+                        f"Move since this sector joined the {name} list, over the "
+                        f"{_d - 1} session(s) since - the list publishes after the "
+                        f"close, so the window starts at that day's close, the "
+                        f"earliest you could have acted. "
+                        f"Shown versus the equal-weight sector basket, which is what "
+                        f"this engine tries to beat: a sector up 3% while every sector "
+                        f"rose 4% has lost ground.{_abs_txt} "
+                        f"On this list {_mean}. "
+                        f"A one- or two-session figure is noise, not evidence: a third "
+                        f"of entries last exactly one session. Gross of the ~50bps "
+                        f"round trip."
+                    ).replace(chr(34), chr(39)).replace(chr(10), " ")
+                    _d_txt += (f" &nbsp;<span title=\"{_s_tip}\" "
+                               f"style='font-size:0.85rem;color:{_s_col}'>"
+                               f"since {_sr:+.1f}pp</span>")
+            if _show_stk:
+                # Same row, now the click target. Expander labels take markdown but
+                # not raw HTML, so the badges are rebuilt in plain markdown — the
+                # hover tooltips are traded for the drill-down, which is the point.
+                _lbl = (f"**{r['sector']}**"
+                        + (f"  ·  Days → {_d}{'+' if _d >= _cap else ''}"
+                           + ("  · NEW" if _d == 1 else "") if _d else "")
+                        + _since_md(r.get("ret_since_tilt_rel_pp", float("nan")), name)
+                        + f"  ·  {_rsL_lbl} {r['rs_2w']:+.1f}%"
+                        + f"  ·  dv5d {r['dv5d']:.2f}"
+                        + flag)          # `flag` is plain text/emoji, no HTML to strip
+                with st.expander(_lbl, expanded=False):
+                    # compact: these render inside a half-width st.columns() pane,
+                    # so the two widest columns are dropped and the thin-name ⚠
+                    # rides on the symbol instead of the free-text Read column.
+                    _stock_table_body(r["sector"], selected_date, min_turnover, _hd,
+                                      context="tilt_ow", top_n=8, compact=True)
+            else:
+                st.markdown(
+                    f"**{r['sector']}**{_d_txt} &nbsp; <span title='Strength vs Nifty over the last "
+                    f"{_wkL} weeks — higher = leading the market'>{_rsL_lbl} {r['rs_2w']:+.1f}%</span> · "
+                    f"<span title='Recent delivery-buying vs its own normal — above 1 = more real "
+                    f"buying than usual'>dv5d {r['dv5d']:.2f}</span>"
+                    f"{_est_txt}{flag}", unsafe_allow_html=True)
 
-    st.caption(f"Each row: **{_rsL_lbl}** = {_wkL}-week strength vs the market (higher = leading) · "
-               f"**dv5d** = real buying vs its own normal (>1 = heavier) · **est** = rough "
-               f"{_edge_lbl} edge vs the average sector. All three follow the horizon you "
-               f"picked above. Hover any label for the plain meaning.")
+    st.caption(
+        f"Each row: **Days →** = consecutive sessions the sector has held this call · "
+        f"**since** = move since the call appeared, versus the equal-weight sector "
+        f"basket - a sector up 3% while every sector rose 4% has lost ground. "
+        f"Green is simply up, red is down; on the AVOID list a red number is "
+        f"the call working · "
+        f"**{_rsL_lbl}** = {_wkL}-week strength vs the market (higher = leading) · "
+        f"**dv5d** = real buying vs its own normal (>1 = heavier). All follow the horizon "
+        f"you picked above. Hover any label for the plain meaning.\n\n"
+        f"**Reading 'since'.** It is measured from the close of the session the call "
+        f"first appeared — the list publishes after the close, so that is the earliest "
+        f"you could have acted — and it is quoted RELATIVE to the average sector, "
+        f"because a sector up 3% while every sector rose 4% has lost ground. It is a "
+        f"record of what happened, not evidence the call worked: a third of entries "
+        f"last one session, and at this horizon the buy list is negative net of the "
+        f"50bps round trip (see the bucket note above). Gross of costs.\n\n"
+        f"**Reading the Days badge.** Measured over 2018-2026: the buy list is a fixed "
+        f"top-6-of-24 quota, so something enters only when something else leaves — churn "
+        f"is structural, not a verdict. **A third of all entries last exactly one session** "
+        f"and the median is ~3. **A sector dropping off is not a sell:** holding to the "
+        f"horizon beat rotating into its replacement in 23 of 24 era × horizon tests once "
+        f"the 50bps round trip is paid. Reacting to every daily change costs 20-38%/yr in "
+        f"friction and is negative at every horizon.")
     col_ow, col_uw = st.columns(2)
     with col_ow:
         _bucket("OVERWEIGHT")
@@ -5115,6 +5488,7 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
         _bucket("WATCH")
     with col_uw:
         _bucket("UNDERWEIGHT")
+
 
     # ── defensive lens (DESCRIPTIVE context — NOT part of the alpha ranking) ────
     # Audited (2026-07-03): a regime-conditional defensive BLEND degraded the tilt
