@@ -1688,6 +1688,12 @@ def _stock_table_body(sector: str, selected_date, min_turnover: float, window: i
         show["Flow"] = [_flow(a, b) for a, b in
                         zip(show["deliv_value_cr_short"], show["deliv_value_cr"])]
 
+    # At the shortest horizon (window=5) _short collapses onto window, so both
+    # delivery columns would rename to the SAME label and `show[cols]` would pull
+    # the pair back in as duplicates -> ValueError. Drop the redundant one first.
+    if _dup:
+        show = show.drop(columns=["deliv_value_cr_short"], errors="ignore")
+
     show = show.rename(columns={
         "symbol": "Stock", "ltp": "LTP", "chg_1d_pct": "1D %",
         "ret_win_pct": f"{window}D %", "rel_ret_pct": "vs sector",
@@ -1709,9 +1715,7 @@ def _stock_table_body(sector: str, selected_date, min_turnover: float, window: i
     # Explicit column_config: without it the last columns get clipped and render
     # blank (that is what happened to "Share of sector delivery %"). Share of
     # sector delivery is dropped — "Deliv Cr" says the same thing more legibly.
-    st.dataframe(
-        show[cols], hide_index=True, use_container_width=True,
-        column_config={
+    _cfg = {
             "Stock": st.column_config.TextColumn(width="small"),
             "LTP": st.column_config.NumberColumn(
                 "LTP ₹", format="%.2f", width="small",
@@ -1799,7 +1803,26 @@ def _stock_table_body(sector: str, selected_date, min_turnover: float, window: i
                      f"and Fading names +0.63% - the gap is 0.08pp the WRONG way and is "
                      f"not significant. Do not buy something because it says Rising."),
             "Read": st.column_config.TextColumn(width="large"),
-        })
+    }
+    # Same collapse as above: with one delivery column the _c_short entry would
+    # have silently overwritten _c_long in this dict and attached "only the last
+    # N days" help to the only column there is. Restate it for the single column.
+    if _dup:
+        _cfg[_c_long] = st.column_config.NumberColumn(
+            f"Deliv ₹Cr {_wk}W", format="%.0f", width="small",
+            help=f"**Money that actually bought and KEPT this stock** over the "
+                 f"last {window} trading days ({_wk} week{_s_plural}).\n\n"
+                 f"Delivery means the shares were taken into a demat account "
+                 f"instead of being sold again the same day. Day traders square "
+                 f"off; real buyers take delivery. So this is the size of the "
+                 f"genuine money behind the move, in ₹ crore.\n\n"
+                 f"Worked out as each day's delivery %% times that day's traded "
+                 f"value, added up over the window.\n\n"
+                 f"At this horizon the window is a single week, so there is no "
+                 f"older week to compare against and no Flow column.")
+
+    st.dataframe(show[cols], hide_index=True, use_container_width=True,
+                 column_config=_cfg)
 
     if context == "tilt_ow":
         st.caption(
