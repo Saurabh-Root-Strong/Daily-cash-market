@@ -857,6 +857,9 @@ def get_fno_expiry_breakdown_by_symbol(as_of_date: date) -> pd.DataFrame:
 
     df = base.copy()
     df["post_expiry"] = in_post_expiry
+    # Day 0 of a new cycle: the near contract changed identity since the previous
+    # session. Used by the options block below — see the note there.
+    on_roll_day = days_since_roll == 0
 
     # ── Futures labels (near uses proven base data; next/far computed here) ───
     # Near: base already has fut_signal (near) and fut_oi_chg_pct
@@ -906,6 +909,23 @@ def get_fno_expiry_breakdown_by_symbol(as_of_date: date) -> pd.DataFrame:
                 r.get(f"{p}_put_oi_chg_pct"), r.get(f"{p}_put_prem_chg"), "PE"
             ), axis=1,
         )
+        # ROLL DAY: today's near month was the BACK month yesterday, so this
+        # day-over-day comparison measures a contract against itself while it was
+        # still filling up. OI mechanically jumps and the matrix reads it as
+        # demand. Measured across the whole archive, the median rank-1 CE OI
+        # change is +1.0% on 492 ordinary sessions and +25.8% on the 26 roll
+        # days -- a 26x inflation confined to that one session (day+1 and day+2
+        # sit inside the ordinary population, so the guard is deliberately one
+        # day wide, not _POST_EXPIRY_WINDOW wide).
+        #
+        # The futures cycle read already refuses this comparison via
+        # _TREND_MIN_BASE; the options path had no equivalent and printed a
+        # confident bull label on exactly the days the futures columns blanked.
+        # Both legs to "—" so _combined_opt_label resolves to "—": we do not
+        # know, which is not the same as no positioning.
+        if on_roll_day:
+            df[f"{pfx}_call_sig"] = "—"
+            df[f"{pfx}_put_sig"]  = "—"
         call = df.get(f"{pfx}_call_oi", pd.Series(0, index=df.index)).fillna(0)
         put  = df.get(f"{pfx}_put_oi",  pd.Series(0, index=df.index)).fillna(0)
         df[f"{pfx}_pcr"] = (put / call.replace(0, float("nan"))).round(2)
