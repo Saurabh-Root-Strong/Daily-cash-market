@@ -8,12 +8,33 @@ replace it with _set_repository(repo) for isolation.
 from __future__ import annotations
 
 import datetime
+import logging
+import os
 from pathlib import Path
 from typing import Optional
 
 import pandas as pd
 
 from src.data.connection import ConnectionManager
+
+log = logging.getLogger(__name__)
+
+# ── F&O write-time sanity gate ────────────────────────────────────────────────
+# A corrupt F&O session is invisible downstream. The expiry-cycle read is
+# PEER-RELATIVE, so when a whole session is wrong every name is equally wrong,
+# nothing looks like an outlier, and every guard in the analytics layer passes.
+# 2026-08-27 landed with futures open interest 98.6% below the prior session and
+# traded contracts 207x above it, and the board rendered it as a normal day at
+# stale_days=0 -- the strongest trustworthiness claim the UI makes.
+#
+# FUTSTK open interest is the aggregate to test. Measured across the August 2026
+# roll -- the most violent week of the cycle -- it moved at most ~4.5% session
+# over session (1.770e10 -> 1.768e10 -> 1.687e10 -> 1.694e10), while OPTSTK OI
+# legitimately falls ~37% at expiry and traded contracts legitimately swing 7x.
+# So the band below is enormous next to real movement and still catches the
+# observed failure by two orders of magnitude.
+_FNO_OI_MIN_RATIO = 0.33
+_FNO_OI_MAX_RATIO = 3.00
 
 __all__ = [
     "MarketDataRepository",
@@ -153,6 +174,54 @@ class MarketDataRepository:
             """)
         return len(df)
 
+    def _check_fno_sanity(self, conn, df: pd.DataFrame) -> None:
+        """Refuse an F&O session whose futures OI is implausible against the last one.
+
+        Raises ValueError. Set FNO_SKIP_SANITY=1 to force a write through -- for a
+        genuine market dislocation, or a deliberate backfill of a thin early date.
+        """
+        if os.environ.get("FNO_SKIP_SANITY"):
+            return
+        fut = df[df["instrument"] == "FUTSTK"] if "instrument" in df.columns else df
+        if fut.empty or "open_interest" not in fut.columns:
+            return
+        for d, grp in fut.groupby("trade_date"):
+            incoming = float(grp["open_interest"].sum())
+            if incoming <= 0:
+                continue
+            # Two references, and the second matters as much as the first: an
+            # upsert DELETEs the day before inserting it, so a bad re-fetch can
+            # destroy a session that was already correct. Compare against the day
+            # itself when it is already stored, and against the previous session
+            # otherwise.
+            row = conn.execute(
+                """SELECT SUM(open_interest) FROM fno_bhavcopy
+                   WHERE instrument = 'FUTSTK' AND trade_date = ?""",
+                [d],
+            ).fetchone()
+            same_day = float(row[0]) if row and row[0] else 0.0
+            row = conn.execute(
+                """SELECT SUM(open_interest) FROM fno_bhavcopy
+                   WHERE instrument = 'FUTSTK' AND trade_date = (
+                       SELECT MAX(trade_date) FROM fno_bhavcopy
+                       WHERE instrument = 'FUTSTK' AND trade_date < ?)""",
+                [d],
+            ).fetchone()
+            prev_day = float(row[0]) if row and row[0] else 0.0
+
+            ref, what = (same_day, "the stored copy of that day") if same_day > 0                 else (prev_day, "the previous session")
+            if ref <= 0:                         # first session, or a backfill gap
+                continue
+            ratio = incoming / ref
+            if not (_FNO_OI_MIN_RATIO <= ratio <= _FNO_OI_MAX_RATIO):
+                raise ValueError(
+                    f"F&O sanity gate: {d} futures OI is {ratio:.3f}x {what} "
+                    f"({incoming:.4g} vs {ref:.4g}), outside "
+                    f"[{_FNO_OI_MIN_RATIO}, {_FNO_OI_MAX_RATIO}]. Refusing the write "
+                    f"-- a whole-session error is undetectable downstream. Re-fetch "
+                    f"the file, or set FNO_SKIP_SANITY=1 if this move is real."
+                )
+
     def upsert_fno_bhavcopy(self, df: pd.DataFrame) -> int:
         """Insert or replace FNO Bhavcopy rows for dates present in df."""
         if df.empty:
@@ -164,6 +233,7 @@ class MarketDataRepository:
         dates = df["trade_date"].unique().tolist()
         ph = ", ".join("?" * len(dates))
         with self._cm.connect() as conn:
+            self._check_fno_sanity(conn, df)     # before the DELETE -- see the gate above
             conn.execute(f"DELETE FROM fno_bhavcopy WHERE trade_date IN ({ph})", dates)
             conn.register("_fno_df", df)
             conn.execute("""
