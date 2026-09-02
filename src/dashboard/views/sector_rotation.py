@@ -5053,6 +5053,12 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
     _rsL_lbl = f"rs{_wkL}w"
     _rsS_lbl = f"rs{_wkS}w"
     _edge_lbl = f"~{_wkL}-week"
+    # The delivery factor scales with the horizon too (it did not until the
+    # _dv_windows fix), so its caption must move with it — "dv5d" is correct ONLY
+    # at 1-2wk. Falls back to 5/100 if the engine did not publish the windows.
+    from src.analytics.sector_forward_tilt import _dv_windows
+    _dvF, _dvB = _dv_windows(_hd)
+    _dv_lbl = f"dv{_dvF}d"
 
     try:
         df, regime = cached_forward_tilt(selected_date, min_turnover, horizon_days=_hd)
@@ -5459,7 +5465,7 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
                            + ("  · NEW" if _d == 1 else "") if _d else "")
                         + _since_md(r.get("ret_since_tilt_rel_pp", float("nan")), name)
                         + f"  ·  {_rsL_lbl} {r['rs_2w']:+.1f}%"
-                        + f"  ·  dv5d {r['dv5d']:.2f}"
+                        + f"  ·  {_dv_lbl} {r['dv5d']:.2f}"
                         + flag)          # `flag` is plain text/emoji, no HTML to strip
                 with st.expander(_lbl, expanded=False):
                     # compact: these render inside a half-width st.columns() pane,
@@ -5472,7 +5478,7 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
                     f"**{r['sector']}**{_d_txt} &nbsp; <span title='Strength vs Nifty over the last "
                     f"{_wkL} weeks — higher = leading the market'>{_rsL_lbl} {r['rs_2w']:+.1f}%</span> · "
                     f"<span title='Recent delivery-buying vs its own normal — above 1 = more real "
-                    f"buying than usual'>dv5d {r['dv5d']:.2f}</span>"
+                    f"buying than usual'>{_dv_lbl} {r['dv5d']:.2f}</span>"
                     f"{_est_txt}{flag}", unsafe_allow_html=True)
 
     st.caption(
@@ -5482,7 +5488,8 @@ def _render_forward_tilt(selected_date: date, min_turnover: float) -> None:
         f"Green is simply up, red is down; on the AVOID list a red number is "
         f"the call working · "
         f"**{_rsL_lbl}** = {_wkL}-week strength vs the market (higher = leading) · "
-        f"**dv5d** = real buying vs its own normal (>1 = heavier). All follow the horizon "
+        f"**{_dv_lbl}** = real buying vs its own normal (>1 = heavier), measured over the "
+        f"last {_dvF} sessions against its own {_dvB}-session average. All follow the horizon "
         f"you picked above. Hover any label for the plain meaning.\n\n"
         f"**Reading 'since'.** It is measured from the close of the session the call "
         f"first appeared — the list publishes after the close, so that is the earliest "

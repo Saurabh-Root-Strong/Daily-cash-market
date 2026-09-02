@@ -79,8 +79,8 @@ log = get_logger(__name__)
 # ── factor construction (mirrors the validated build_factors) ────────────────
 _MOM_2W        = 10       # trading days for 2-week momentum / relative strength
 _MOM_1W        = 5        # trading days for 1-week momentum
-_DV_BASE       = 100      # trailing window for the delivery-flow baseline
-_DV_FLOW       = 5        # short delivery-flow window
+_DV_BASE       = 100      # delivery-flow baseline AT THE 1-2wk HORIZON (see _dv_windows)
+_DV_FLOW       = 5        # short delivery-flow window AT THE 1-2wk HORIZON
 _MIN_HIST      = 12       # min sector daily rows to compute momentum
 _MIN_SECTORS   = 8        # need a real cross-section to rank
 _MIN_LIQ_NAMES = 5        # below this a sector is "thin" (noisy rs/breadth)
@@ -153,7 +153,55 @@ def _compound(pct_series: pd.Series, n: int) -> pd.Series:
     return np.expm1(cr - cr.shift(n)) * 100.0
 
 
-def _load_sector_panel(as_of_date: date, min_turnover_lacs: float) -> pd.DataFrame:
+def _dv_windows(h: int) -> tuple[int, int]:
+    """Delivery-flow (flow, baseline) windows for horizon `h`, in trading sessions.
+
+    The RS legs scale with the horizon (long=h, short=h/2) but this factor did NOT
+    — it stayed pinned at 5/100 at every horizon, so an 11-12wk call was ranked
+    partly on the last FIVE sessions of delivery. Measured (scripts/tilt_dv_scaling.py,
+    tilt_dv_design.py; 2018-2026, 24 sectors): a sector in the top quartile of the 5d
+    flow is still there only 41.9% of the time 10 sessions later and ~29% after 60
+    (random 25%), i.e. the state has a ~2-3 week half-life and had fully decayed over
+    most of a long hold.
+
+    BOTH windows scale, and that is the point. The baseline CONTAINS the flow window,
+    so a surge inflates its own denominator; the shipped overlap is 5/100 = 5%.
+    Scaling the flow alone drives it to 30/100 = 30% at 11-12wk and measurably HURTS
+    (5-6wk OW excess +0.507pp vs +0.537 shipped). Scaling both holds the overlap at a
+    constant 5% and improves the OVERWEIGHT bucket at every longer horizon:
+        horizon    shipped 5/100      flow=h/2, base=10h
+        1-2 wk     +0.221pp t+2.96    +0.221pp t+2.96   (identical by construction)
+        3-4 wk     +0.312pp t+1.95    +0.402pp t+2.40
+        5-6 wk     +0.537pp t+2.20    +0.696pp t+2.69
+        7-8 wk     +0.886pp t+2.64    +1.120pp t+2.84
+        9-10 wk    +1.412pp t+3.23    +1.691pp t+3.12
+        11-12 wk   +1.555pp t+2.89    +2.016pp t+2.74
+
+    THIS IS A CONSISTENCY FIX, NOT AN EDGE. The gaps above are ~1 SE and were found
+    inside a search over ~54 design x horizon cells; they would not survive a reality
+    check as a discovered edge. The case for scaling is a priori (constant overlap,
+    horizon-matched state), and the numbers merely fail to contradict it. At 3-4wk it
+    moves ~5%/yr gross against a measured 5.1pp/yr cost drag: negative -> roughly
+    breakeven, still not tradeable. See _HORIZON_EVIDENCE.
+
+    h=10 MUST return (5, 100) exactly so the validated 1-2wk build is untouched;
+    tests/test_forward_tilt_dv.py pins that.
+    """
+    return max(2, h // 2), 10 * h
+
+
+def _panel_lookback_cal(h: int) -> int:
+    """Calendar days `_load_sector_panel` must cover to satisfy `_dv_windows(h)`.
+
+    The baseline needs 10*h TRADING sessions; ~1.45 calendar days per session, plus a
+    60-day buffer for holidays. Floored at the historical 275 so the 1-2wk default
+    scans exactly what it always did — no perf regression on the shipped horizon.
+    """
+    return max(275, int(_dv_windows(h)[1] * 1.45) + 60)
+
+
+def _load_sector_panel(as_of_date: date, min_turnover_lacs: float,
+                       lookback_cal: int = 275) -> pd.DataFrame:
     return query_dataframe(
         """
         WITH base AS (
@@ -182,7 +230,7 @@ def _load_sector_panel(as_of_date: date, min_turnover_lacs: float) -> pd.DataFra
             INNER JOIN v_sector_master s ON b.symbol = s.symbol
             WHERE b.series IN ('EQ', 'SM', 'ST')
               AND s.sector NOT IN ('ETF', 'Others')
-              AND b.trade_date > (?::date - 275)
+              AND b.trade_date > (?::date - ?)
               AND b.trade_date <= ?
         )
         SELECT sector, trade_date,
@@ -198,11 +246,12 @@ def _load_sector_panel(as_of_date: date, min_turnover_lacs: float) -> pd.DataFra
         -- to the PRIOR session. That gap is pure outcome-conditioning. The lagged
         -- weight was masking it here; it is not masked in any equal-weighted variant.
         WHERE w_lag >= ? AND ABS(raw_r) < 40
-          AND trade_date > (?::date - 260)
+          AND trade_date > (?::date - ?)
         GROUP BY sector, trade_date
         ORDER BY sector, trade_date
         """,
-        [as_of_date, as_of_date, min_turnover_lacs, as_of_date],
+        [as_of_date, lookback_cal + 15, as_of_date,
+         min_turnover_lacs, as_of_date, lookback_cal],
     )
 
 
@@ -506,7 +555,8 @@ def _sector_persistence(as_of_date: date, min_turnover_lacs: float,
 
 
 # ── tenure: "how many sessions has this sector held this call?" ──────────────
-# COSTS NOTHING EXTRA. _load_sector_panel already pulls ~260 sessions and
+# COSTS NOTHING EXTRA. _load_sector_panel already pulls 186-628 sessions (it is
+# horizon-scaled — see _panel_lookback_cal) and
 # _sector_persistence ~620 calendar days; both were being reduced to a single row
 # and the rest discarded. Re-ranking those dates is pure pandas on data already in
 # memory, so tenure adds no query and no round-trip.
@@ -569,7 +619,9 @@ def _tilt_history(panel: pd.DataFrame, nifty: pd.DataFrame, L: int, S: int,
                   pers_hist: Optional[pd.DataFrame],
                   nliq_hist: Optional[pd.DataFrame] = None,
                   lookback: int = _TENURE_LOOKBACK,
-                  breadth_hist: Optional[pd.DataFrame] = None) -> pd.DataFrame:
+                  breadth_hist: Optional[pd.DataFrame] = None,
+                  dv_flow: int = _DV_FLOW,
+                  dv_base: int = _DV_BASE) -> pd.DataFrame:
     """date × sector tilt label over the trailing `lookback` sessions.
 
     With `breadth_hist` supplied the WATCH overlay is applied too, which is what
@@ -591,7 +643,11 @@ def _tilt_history(panel: pd.DataFrame, nifty: pd.DataFrame, L: int, S: int,
         rsL = rsL.sub(np.expm1(nlg.rolling(L).sum()) * 100.0, axis=0)
         rsS = rsS.sub(np.expm1(nlg.rolling(S).sum()) * 100.0, axis=0)
 
-    dv5 = dvc.rolling(_DV_FLOW).mean() / dvc.shift(1).rolling(_DV_BASE).mean()
+    # dv windows are passed in, NOT read from the module constants: they scale with
+    # the horizon (see _dv_windows) and this history must stay in lockstep with the
+    # live ranking in get_forward_tilt, or the tenure badge counts a streak of a
+    # different signal than the one on the card.
+    dv5 = dvc.rolling(dv_flow).mean() / dvc.shift(1).rolling(dv_base).mean()
     def _rk(d): return d.rank(axis=1, pct=True)
     rank = _rk(_W_RS2 * _rk(rsL) + _W_RS1 * _rk(rsS) + _W_DV5 * _rk(dv5))
 
@@ -796,6 +852,11 @@ def get_forward_tilt(
     _H = max(2, int(horizon_days))
     _L = _H                      # long RS lookback  (10 at the default → shipped)
     _S = max(2, _H // 2)         # short RS lookback (5  at the default → shipped)
+    # Delivery-flow windows scale too (5/100 at the default → shipped). Before this,
+    # they were pinned at 5/100 at EVERY horizon while the RS legs scaled — so a
+    # 11-12wk call was ranked partly on the last five sessions of delivery. See
+    # _dv_windows for the measurement and for why BOTH windows must scale.
+    _DVF, _DVB = _dv_windows(_H)
 
     cols = ["sector", "score", "rank", "tilt", "rs_2w", "rs_1w", "dv5d",
             "accum_breadth", "deliv_slope", "n_liq", "thin", "divergence",
@@ -803,7 +864,7 @@ def get_forward_tilt(
             "ret_since_tilt_pct", "ret_since_tilt_rel_pp"]
     empty = pd.DataFrame(columns=cols)
 
-    panel = _load_sector_panel(as_of_date, min_turnover_lacs)
+    panel = _load_sector_panel(as_of_date, min_turnover_lacs, _panel_lookback_cal(_H))
     if panel.empty:
         return empty, _market_regime(pd.DataFrame())
     panel["trade_date"] = pd.to_datetime(panel["trade_date"])
@@ -820,8 +881,8 @@ def get_forward_tilt(
         mom_2w = float(_compound(g["wtd_ret_pct"], _L).iloc[-1])
         mom_1w = float(_compound(g["wtd_ret_pct"], _S).iloc[-1])
         dv = g["daily_dv_cr"].astype(float)
-        base = dv.iloc[:-1].tail(_DV_BASE).mean()
-        dv5d = float(dv.tail(_DV_FLOW).mean() / base) if base and base > 0 else np.nan
+        base = dv.iloc[:-1].tail(_DVB).mean()
+        dv5d = float(dv.tail(_DVF).mean() / base) if base and base > 0 else np.nan
         recs.append(dict(sector=sector, mom_2w=mom_2w, mom_1w=mom_1w, dv5d=dv5d))
     fac = pd.DataFrame(recs)
     if len(fac) < _MIN_SECTORS:
@@ -870,6 +931,10 @@ def get_forward_tilt(
     # never imply the 1-2wk validation covers a 12-week call.
     regime["horizon_days"] = _H
     regime["rs_long_days"], regime["rs_short_days"] = _L, _S
+    # Published so the UI can label the column for the horizon in force ("dv5d" only
+    # at 1-2wk). A fixed "dv5d" caption on a scaled factor is the same copy bug the
+    # rs2w/rs4w labels already had to be fixed for.
+    regime["dv_flow_days"], regime["dv_base_days"] = _DVF, _DVB
     regime["horizon_stats"] = _HORIZON_EVIDENCE.get(_H)
     if np.isfinite(disp) and disp < 1.5:
         regime["banner"] += "  (Low sector dispersion — tilt has little to add today.)"
@@ -945,7 +1010,7 @@ def get_forward_tilt(
             log.warning("accum-breadth history failed (%s); UW tenure disabled", exc)
             _brd_h = None
         _lab = _tilt_history(panel, nifty, _L, _S, pers_hist, _nliq_h,
-                             breadth_hist=_brd_h)
+                             breadth_hist=_brd_h, dv_flow=_DVF, dv_base=_DVB)
         fac["days_in_tilt"] = (_tenure_days(_lab, fac.set_index("sector")["tilt"])
                                .reindex(fac["sector"]).fillna(0).astype(int).values)
         if _brd_h is None or _brd_h.empty:
