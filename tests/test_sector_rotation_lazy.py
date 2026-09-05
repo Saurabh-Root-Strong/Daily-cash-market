@@ -24,6 +24,7 @@ _RENDERERS = (
     "_render_smart_money", "_render_forward_tilt", "_render_rotation_clock",
     "_render_relative_strength", "_render_month_seasonality",
     "_render_operator_footprint", "_render_market_next_month",
+    "_render_index_largecap",
 )
 
 

@@ -6271,8 +6271,9 @@ _RS = "📈 vs Nifty50"
 _SEASON = "🗓️ Month-Wise Best/Worst"
 _OPER = "🕵️ Operator Footprint"
 _NEXT = "🧭 Market Next Month"
+_ILC  = "🏛️ Index & Large Cap"
 
-_PANELS = (_SMART, _TILT, _CLOCK, _RS, _SEASON, _OPER, _NEXT)
+_PANELS = (_SMART, _TILT, _CLOCK, _RS, _SEASON, _OPER, _NEXT, _ILC)
 
 
 def render(selected_date: date, min_turnover: float, all_dates: list | None = None) -> None:
@@ -6306,3 +6307,145 @@ def render(selected_date: date, min_turnover: float, all_dates: list | None = No
         _render_operator_footprint(selected_date)
     elif panel == _NEXT:
         _render_market_next_month(selected_date)
+    elif panel == _ILC:
+        _render_index_largecap(selected_date, min_turnover)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# INDEX & LARGE CAP — who actually moved the index today
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _ilc_chip(text: str, colour: str) -> str:
+    return (f"<span style='background:{colour}22;border:1px solid {colour}55;"
+            f"color:{colour};padding:2px 8px;border-radius:10px;"
+            f"font-size:0.82rem;white-space:nowrap'>{text}</span>")
+
+
+def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
+    from src.dashboard.cache.queries import (cached_index_largecap,
+                                             cached_concentration_trend)
+    st.markdown(
+        "Nifty is free-float **cap weighted**, so its 50 members do not move it "
+        "equally. This panel splits the index into weight buckets and shows which "
+        "one actually carried it - and how often the index and its own basket "
+        "disagree.")
+
+    try:
+        d = cached_index_largecap(selected_date, "NIFTY")
+    except Exception as exc:                                   # noqa: BLE001
+        st.error(f"Index & Large Cap unavailable: {exc}")
+        return
+    if not d.data_ok:
+        st.info(d.note or "No constituent data for this date.")
+        return
+
+    # ── honesty rail: this panel describes, it does not forecast ─────────────
+    st.warning(
+        "**This is a decomposition, not a forecast - and that is measured, not "
+        "caution.** A 1,154-session backtest (2022-2026, "
+        "`scripts/nifty_bucket_backtest.py`, 48 candidates) found one survivor of "
+        "a date-block reality check: top-10 advance ratio to the next **overnight "
+        "gap** (|t| 3.56 vs a 3.44 null, p=0.040). It is worth ~5.5bps gross "
+        "against a 2-6bps gap-capture cost, the **Rest-30 bucket produces the same "
+        "monotone ladder** (-1.1 to +13.8 bps), and it is the close-strength/gap "
+        "edge already documented here - breadth is another way of asking *did "
+        "today close strong*. The top10-minus-rest30 **divergence**, the intuitive "
+        "read, was the weakest variable tested (t +1.76). So no arrow is shown.")
+
+    # ── today's decomposition ────────────────────────────────────────────────
+    st.markdown(f"#### 📐 {d.display} - {selected_date:%d %b %Y}")
+    if d.carry_spread is None:
+        st.info(d.note or "Index return unavailable - carry spread hidden.")
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Index (cap-weighted)",
+              f"{d.index_ret:+.2f}%" if d.index_ret is not None else "-")
+    c2.metric("Equal-weight basket",
+              f"{d.equal_ret:+.2f}%" if d.equal_ret is not None else "-",
+              help="Plain mean of the 50 constituents. No weights needed - exact.")
+    c3.metric("Carry spread",
+              f"{d.carry_spread:+.2f} pp" if d.carry_spread is not None else "-",
+              help="Index minus equal-weight. Positive = heavyweights carrying it; "
+                   "negative = the broad basket is beating the index.")
+    c4.metric("Advancing", f"{d.adv_all} / {d.n_present}")
+
+    _col = ("#00C853" if "carried" in d.regime else
+            "#FF5252" if "dragged" in d.regime else "#78909C")
+    st.markdown(_ilc_chip(d.regime, _col), unsafe_allow_html=True)
+
+    # ── bucket table ─────────────────────────────────────────────────────────
+    st.markdown("##### Weight buckets")
+    st.caption(
+        "Buckets are **membership by published index weight**, not the weights "
+        "themselves - the DB holds no free-float data and weights are *not* "
+        "recoverable from the index series (a returns fit reproduces the index at "
+        "OOS R-squared 0.957 yet drops HDFCBANK out of the top 20; a price-levels "
+        "fit gets rank correlation -0.06). Returns below are **equal-weighted "
+        "inside each bucket**, so they are not index points.")
+    rows = []
+    for b in d.rows:
+        lean = {1: "🟢 net long build", -1: "🔴 net short build",
+                0: "⚪ mixed", None: "-"}[b.fut_lean]
+        rows.append({
+            "Bucket": b.label + (" ⚠" if b.thin else ""),
+            "Return %": None if b.ret_pct is None else round(b.ret_pct, 2),
+            "Adv": f"{b.adv}/{b.n_present}",
+            "Adv %": None if b.adv_pct is None else round(b.adv_pct, 0),
+            "Delivery %": None if b.deliv_pct is None else round(b.deliv_pct, 1),
+            "Deliv z": None if b.deliv_z is None else round(b.deliv_z, 2),
+            "Futures OI %": None if b.fut_oi_pct is None else round(b.fut_oi_pct, 2),
+            "Futures read": lean,
+            "F&O names": f"{b.fut_valid}/{b.n_members}",
+        })
+    st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True,
+                 column_config={
+                     "Deliv z": st.column_config.NumberColumn(
+                         "Deliv z", format="%.2f",
+                         help="Delivery vs the BUCKET'S OWN 100-day normal. An "
+                              "absolute delivery % is not comparable across "
+                              "buckets; heavyweights sit at a structurally "
+                              "different level."),
+                     "Futures read": st.column_config.TextColumn(
+                         "Futures read",
+                         help="Near-month stock futures OI-price matrix, "
+                              "same-expiry matched vs the prior session. "
+                              "Settlement sessions excluded - every contract's OI "
+                              "collapses on expiry and would read as basket-wide "
+                              "unwinding."),
+                     "F&O names": st.column_config.TextColumn(
+                         "F&O names",
+                         help="How many of the bucket had a usable near-month "
+                              "futures read. fno_bhavcopy starts 2024-07 and "
+                              "coverage averages ~42% across the 50, so a low "
+                              "count means the futures column is thin, not calm."),
+                 })
+
+    for b in d.rows:
+        if b.movers_up or b.movers_dn:
+            up = " · ".join(f"{s} {v:+.1f}%" for s, v in b.movers_up) or "-"
+            dn = " · ".join(f"{s} {v:+.1f}%" for s, v in b.movers_dn) or "-"
+            st.markdown(
+                f"**{b.label}** &nbsp; 🟢 {up} &nbsp;&nbsp;|&nbsp;&nbsp; 🔴 {dn}",
+                unsafe_allow_html=True)
+
+    # ── the measured trend ───────────────────────────────────────────────────
+    with st.expander("📈 Is the index decoupling from its own breadth?",
+                     expanded=False):
+        tr = cached_concentration_trend("NIFTY", 5)
+        if tr.empty:
+            st.info("Not enough history for the concentration trend.")
+        else:
+            st.dataframe(
+                tr.rename(columns={
+                    "year": "Year", "sessions": "Sessions",
+                    "abs_spread": "|Carry spread| pp",
+                    "carried_days": "Carried (days)", "carried_pct": "Carried %",
+                    "dragged_days": "Dragged (days)", "dragged_pct": "Dragged %"}),
+                hide_index=True, use_container_width=True)
+            st.caption(
+                "**Carried** = the index rose while under half its own members did. "
+                "**Dragged** = it fell while over half advanced. Measured 2022-2026 "
+                "the carried share rises monotonically (2.4% to 7.2% of sessions) "
+                "*while the carry spread itself shrinks* - fewer names are doing "
+                "more of the work. Partial calendar years are dropped: a "
+                "100-session stub read 14.0% next to a 2.4% full year, which is a "
+                "truncated denominator, not a trend.")

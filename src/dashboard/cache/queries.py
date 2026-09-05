@@ -755,3 +755,17 @@ def cached_fii_hedge_read(as_of: date) -> dict:
     """Hedge-or-bet classification: futures short leg crossed with the cash tape."""
     from src.analytics.fii_only import get_fii_hedge_read
     return get_fii_hedge_read(as_of)
+
+
+# ── Index & Large Cap (weight-bucket decomposition) ──────────────────────────
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def cached_index_largecap(trade_date: date, fno_symbol: str = "NIFTY"):
+    from src.analytics.index_largecap import get_index_largecap
+    return get_index_largecap(trade_date, fno_symbol)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_concentration_trend(fno_symbol: str = "NIFTY", years: int = 5) -> pd.DataFrame:
+    from src.analytics.index_largecap import get_concentration_trend
+    return get_concentration_trend(fno_symbol, years)
