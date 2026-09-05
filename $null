@@ -1,0 +1,174 @@
+﻿python : 2026-08-17 21:41:58.767 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+At line:1 char:395
++ ... arket"; zap pytest tests -q 2>&1 | Select-Object -Last 4; python -c "
++                                                               ~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (2026-08-17 21:4...eStorageManager:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+2026-08-17 21:41:59.868 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.870 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.870 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.871 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.871 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.872 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.873 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.873 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.873 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.874 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.874 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.875 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.875 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.875 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.876 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.877 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.878 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.878 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.878 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.879 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.879 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.880 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.880 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.881 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.881 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.882 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.882 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.883 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.883 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.883 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.884 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.884 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.884 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.885 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.885 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.886 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.886 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.886 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.887 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.887 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.887 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.889 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.889 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.890 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.890 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.891 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.891 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.891 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.892 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.892 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.892 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.893 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.893 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.894 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.894 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.894 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.895 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.895 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.895 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.896 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.896 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.896 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.897 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.897 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.897 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.898 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.898 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.899 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.899 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.899 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.900 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.901 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.901 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.901 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.902 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.902 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.903 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.903 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.903 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.904 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.904 WARNING streamlit.runtime.caching.cache_data_api: No runtime found, using 
+MemoryCacheStorageManager
+2026-08-17 21:41:59.906 WARNING streamlit.runtime.scriptrunner_utils.script_run_context: Thread 'MainThread': missing 
+ScriptRunContext! This warning can be ignored when running in bare mode.
+2026-08-17 21:42:00.463 WARNING streamlit.runtime.scriptrunner_utils.script_run_context: Thread 'MainThread': missing 
+ScriptRunContext! This warning can be ignored when running in bare mode.

@@ -6323,7 +6323,8 @@ def _ilc_chip(text: str, colour: str) -> str:
 
 def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
     from src.dashboard.cache.queries import (cached_index_largecap,
-                                             cached_concentration_trend)
+                                             cached_concentration_trend,
+                                             cached_state_base_rates)
     st.markdown(
         "Nifty is free-float **cap weighted**, so its 50 members do not move it "
         "equally. This panel splits the index into weight buckets and shows which "
@@ -6346,15 +6347,29 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
     # ── honesty rail: this panel describes, it does not forecast ─────────────
     st.warning(
         "**This is a decomposition, not a forecast - and that is measured, not "
-        "caution.** A 1,154-session backtest (2022-2026, "
-        "`scripts/nifty_bucket_backtest.py`, 48 candidates) found one survivor of "
-        "a date-block reality check: top-10 advance ratio to the next **overnight "
-        "gap** (|t| 3.56 vs a 3.44 null, p=0.040). It is worth ~5.5bps gross "
-        "against a 2-6bps gap-capture cost, the **Rest-30 bucket produces the same "
-        "monotone ladder** (-1.1 to +13.8 bps), and it is the close-strength/gap "
-        "edge already documented here - breadth is another way of asking *did "
-        "today close strong*. The top10-minus-rest30 **divergence**, the intuitive "
-        "read, was the weakest variable tested (t +1.76). So no arrow is shown.")
+        "caution.** Re-tested end to end in "
+        "`scripts/nifty_bucket_backtest_v2.py` + stages 2-4: a 1,153-session cash "
+        "panel (2022+) and a 492-session F&O panel (2024-07+, where "
+        "`fno_bhavcopy` begins), 200 candidates.\n\n"
+        "- **Futures and options OI add nothing.** Reality check over the whole "
+        "F&O family: **p=0.65**, with the best |t| of 2.74 sitting *below* the "
+        "null's own median of 2.96.\n"
+        "- **Breadth is close-strength wearing a hat.** Top-10 breadth predicts "
+        "the overnight gap at t=+3.09 alone - but put it in one regression with "
+        "the index's own CLR and it collapses to **t=+0.35** while CLR holds "
+        "**t=+3.43** (they correlate +0.655).\n"
+        "- **The week horizon is an overlap artifact.** On strictly disjoint "
+        "weeks the h=5 result is t=+0.12, and the five weekday phase offsets run "
+        "-8.5 to +28.6 bps. The answer depends on which weekday you start "
+        "counting.\n"
+        "- **The three-way gate fails the sharpest test.** Heavy top-10 delivery "
+        "AND rising futures OI AND price up pays +76bps/5d vs a -2bps base across "
+        "21 distinct episodes - but **no single leg and no pair pays** (-5, -11, "
+        "+5, +4, +2 bps). Signals that truly confirm leave a trace in the pairs. "
+        "A control drawing 21 random contiguous blocks of matched size has "
+        "sd 45bps and a 95th percentile of +76.6 against the observed +78.4.\n\n"
+        "So no arrow is shown. The state table below is a **base rate**, not a "
+        "call.")
 
     # ── today's decomposition ────────────────────────────────────────────────
     st.markdown(f"#### 📐 {d.display} - {selected_date:%d %b %Y}")
@@ -6434,6 +6449,51 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
             st.markdown(
                 f"**{b.label}** &nbsp; 🟢 {up} &nbsp;&nbsp;|&nbsp;&nbsp; 🔴 {dn}",
                 unsafe_allow_html=True)
+
+    # ── state base rates ─────────────────────────────────────────────────────
+    st.markdown("##### What has followed this state, historically")
+    _st = d.state
+    if _st is None:
+        st.caption("Today's state is unavailable — a bucket is too thin to "
+                   "classify, so no base rate is shown.")
+    br = cached_state_base_rates("NIFTY", 5, selected_date)
+    if br.empty:
+        st.caption("Not enough history for state base rates.")
+    else:
+        if _st:
+            _r = br[br["state"] == _st]
+            _a = br[br["state"].str.startswith("—")]
+            if not _r.empty and not _a.empty:
+                r0, a0 = _r.iloc[0], _a.iloc[0]
+                st.markdown(_ilc_chip(
+                    f"Today: {_st} &nbsp;·&nbsp; {int(r0['days'])} prior sessions",
+                    "#42A5F5"), unsafe_allow_html=True)
+                m1, m2, m3 = st.columns(3)
+                for col, lab, kb, ku in [
+                        (m1, "Next open (gap)", "gap_bps", "gap_up"),
+                        (m2, "Next session", "d1_bps", "d1_up"),
+                        (m3, "Next 5 sessions", "d5_bps", "d5_up")]:
+                    col.metric(lab, f"{r0[kb]:+.1f} bps",
+                               f"{r0[kb]-a0[kb]:+.1f} vs all sessions",
+                               delta_color="off",
+                               help=f"Up {r0[ku]:.1f}% of the time, against "
+                                    f"{a0[ku]:.1f}% unconditionally. A BASE RATE "
+                                    f"over {int(a0['days'])} sessions, not a "
+                                    f"forecast.")
+        st.dataframe(
+            br.rename(columns={
+                "state": "State", "days": "Days", "gap_bps": "Gap bps",
+                "gap_up": "Gap up %", "d1_bps": "1d bps", "d1_up": "1d up %",
+                "d5_bps": "5d bps", "d5_up": "5d up %"}),
+            hide_index=True, use_container_width=True)
+        st.caption(
+            "Every session lands in exactly one state, so this is the record, "
+            "not a fitted rule. **The gap column is the only one this data can "
+            "resolve** — its minimum detectable edge is ~5bps, against ~36bps for "
+            "the 5-day column on non-overlapping windows. Read the 5d numbers as "
+            "*not measurable here*, not as *real*. And the gap column's ordering "
+            "is close-strength: control for CLR and the breadth signal goes to "
+            "t=+0.35. Survivorship applies — this is today's 50 applied to history.")
 
     # ── the measured trend ───────────────────────────────────────────────────
     with st.expander("📈 How often does the index disagree with its own basket?",

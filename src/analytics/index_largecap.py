@@ -166,6 +166,19 @@ class IndexLargeCap:
     is_expiry_session: bool = False
 
     @property
+    def state(self) -> Optional[str]:
+        """Which of the four top-10 / rest-30 states today falls in.
+
+        Shares its label constants with get_state_base_rates(), so the live read
+        and the historical table can never fall out of sync.
+        """
+        by = {r.label: r for r in self.rows}
+        t, r30 = by.get("Top 10"), by.get("Rest 30")
+        if t is None or r30 is None or t.thin or r30.thin:
+            return None
+        return _classify(t.adv_pct, r30.adv_pct)
+
+    @property
     def regime(self) -> str:
         """Plain-language read of TODAY. Descriptive only."""
         if self.carry_spread is None or self.index_ret is None:
@@ -443,4 +456,139 @@ def get_concentration_trend(fno_symbol: str = "NIFTY", years: int = 5,
                          carried_pct=round(float(carried.mean() * 100), 1),
                          dragged_days=int(dragged.sum()),
                          dragged_pct=round(float(dragged.mean() * 100), 1)))
+    return pd.DataFrame(rows)
+
+
+# ── state base rates ─────────────────────────────────────────────────────────
+# Labels are shared by the live read and the historical table so the two can
+# never drift apart. Order is the order they are rendered in.
+STATE_BROAD_UP   = "Broad up"
+STATE_CARRIED    = "Top-10 carried (narrow up)"
+STATE_LAGGED     = "Top-10 lagged (broad up)"
+STATE_BROAD_DOWN = "Broad down"
+
+
+def _classify(a10: Optional[float], a30: Optional[float]) -> Optional[str]:
+    """Four-way split on whether each half of the index advanced."""
+    if a10 is None or a30 is None:
+        return None
+    if a10 > 50 and a30 > 50:   return STATE_BROAD_UP
+    if a10 > 50:                return STATE_CARRIED
+    if a30 > 50:                return STATE_LAGGED
+    return STATE_BROAD_DOWN
+
+
+def get_state_base_rates(fno_symbol: str = "NIFTY", years: int = 5,
+                         as_of: Optional[date] = None) -> pd.DataFrame:
+    """What NIFTY did next, historically, after each top-10 / rest-30 state.
+
+    BASE RATES, NOT A FORECAST. Read the caveats before reading the numbers.
+
+    The four states are a partition of every session by whether the top-10 half
+    and the rest-30 half each advanced, so every day lands in exactly one and the
+    table is a description of the record, not a fitted rule.
+
+    WHY NO ARROW IS DERIVED FROM IT (scripts/nifty_bucket_backtest_v2.py and
+    stages 2-4, 1,153 sessions from 2022 plus a 492-session F&O panel):
+      * The gap column looks strongest, and it is: the CARRIED state precedes a
+        +16.4bps overnight gap against a +6.5bps base. But put top-10 breadth in
+        one regression with the index's own CLOSE-STRENGTH and breadth collapses
+        to t=+0.35 while close-strength holds t=+3.43. They correlate +0.655.
+        This is the close-strength/gap edge already documented in this repo,
+        re-found through a different lens - not a second, independent edge.
+      * The 5-day column cannot be trusted at all. Daily 5-day windows overlap
+        4 of 5 days; on strictly DISJOINT weeks the breadth result is t=+0.12,
+        and the five weekday phase offsets range -8.5 to +28.6 bps (t -0.71 to
+        +2.40). The answer depends on which weekday you start counting from.
+      * Futures and options OI add nothing. A 140-candidate reality check over
+        the whole F&O family returns p=0.65, with the best |t| of 2.74 sitting
+        BELOW the null's median of 2.96.
+      * The three-signal conjunction the panel was designed around - heavy
+        top-10 delivery AND rising futures OI AND price up - pays +76bps over
+        5 days against a -2bps base, and it is NOT one lucky episode (21 distinct
+        episodes, t=+2.02). It still fails, for a sharper reason: NO SINGLE LEG
+        AND NO PAIR PAYS. deliv alone -5, futOI alone -11, price alone +5,
+        deliv+futOI +4, futOI+price +2. Only the 3-way AND pays. Three signals
+        that genuinely confirm each other leave a trace in the pairs. And a
+        control drawing 21 random contiguous blocks of the same sizes has
+        sd 45bps with a 95th percentile of +76.6 against the observed +78.4,
+        i.e. p=0.046 before counting the 7 subsets searched.
+      * Power: at 5 days this panel cannot resolve anything below ~36bps on
+        non-overlapping data, so the nulls there are weak evidence, not proof of
+        absence. The gap horizon (~5bps detectable) is the only one that can see
+        an economically relevant effect.
+
+    Survivorship applies here as it does to the concentration trend: the basket
+    is TODAY's 50 applied to history.
+    """
+    meta = INDEX_BUCKETS.get(fno_symbol)
+    if meta is None:
+        return pd.DataFrame()
+    buckets = meta["buckets"]
+    top10 = tuple(buckets["Top 10"])
+    rest30 = tuple(buckets["Rest 30"])
+    all_syms = tuple(s for b in buckets.values() for s in b)
+    ph = ", ".join("?" * len(all_syms))
+    anchor = as_of or date.today()
+    start = anchor - timedelta(days=365 * years + 30)
+    df = query_dataframe(f"""
+        SELECT trade_date, symbol,
+               (close_price - prev_close) / NULLIF(prev_close, 0) * 100 AS r
+        FROM daily_data
+        WHERE symbol IN ({ph}) AND series IN ('EQ','SM','ST')
+          AND close_price > 0 AND prev_close > 0
+          AND trade_date >= ? AND trade_date <= ?
+    """, [*all_syms, start, anchor])
+    idx = query_dataframe("""
+        SELECT trade_date, open_val, close_val, pct_chg FROM index_data
+        WHERE index_name = ? AND trade_date >= ? AND trade_date <= ?
+    """, [meta["index_name"], start, anchor])
+    if df.empty or idx.empty:
+        return pd.DataFrame()
+    df = df[df["r"].abs() < 40]
+    df["trade_date"] = pd.to_datetime(df["trade_date"])
+    idx["trade_date"] = pd.to_datetime(idx["trade_date"])
+    R = df.pivot_table("r", "trade_date", "symbol").sort_index()
+    idx = idx.set_index("trade_date").sort_index().astype(float)
+    ix = R.index.intersection(idx.index)
+    R = R.reindex(ix)
+    y = idx.loc[ix, "pct_chg"]
+
+    def adv_pct(cols):
+        s = R[[x for x in cols if x in R.columns]]
+        n = s.notna().sum(axis=1)
+        return (s > 0).sum(axis=1) / n.where(n > 0) * 100
+
+    a10, a30 = adv_pct(top10), adv_pct(rest30)
+    # forward returns. Compounded in log space so a 5-day figure is a real return.
+    lg = np.log1p(y / 100.0)
+    fwd5 = np.expm1(lg.iloc[::-1].rolling(5).sum().iloc[::-1].shift(-1)) * 100.0
+    fwd1 = y.shift(-1)
+    gap = (idx["open_val"] / idx["close_val"].shift(1) - 1).reindex(ix).shift(-1) * 100
+    k = pd.DataFrame({"a10": a10, "a30": a30, "gap": gap,
+                      "d1": fwd1, "d5": fwd5}).dropna()
+    if k.empty:
+        return pd.DataFrame()
+    k["state"] = [_classify(x, z) for x, z in zip(k["a10"], k["a30"])]
+    rows = []
+    for st in (STATE_BROAD_UP, STATE_CARRIED, STATE_LAGGED, STATE_BROAD_DOWN):
+        g = k[k["state"] == st]
+        if g.empty:
+            continue
+        rows.append(dict(
+            state=st, days=len(g),
+            gap_bps=round(g["gap"].mean() * 100, 1),
+            gap_up=round((g["gap"] > 0).mean() * 100, 1),
+            d1_bps=round(g["d1"].mean() * 100, 1),
+            d1_up=round((g["d1"] > 0).mean() * 100, 1),
+            d5_bps=round(g["d5"].mean() * 100, 1),
+            d5_up=round((g["d5"] > 0).mean() * 100, 1)))
+    rows.append(dict(
+        state="— all sessions —", days=len(k),
+        gap_bps=round(k["gap"].mean() * 100, 1),
+        gap_up=round((k["gap"] > 0).mean() * 100, 1),
+        d1_bps=round(k["d1"].mean() * 100, 1),
+        d1_up=round((k["d1"] > 0).mean() * 100, 1),
+        d5_bps=round(k["d5"].mean() * 100, 1),
+        d5_up=round((k["d5"] > 0).mean() * 100, 1)))
     return pd.DataFrame(rows)

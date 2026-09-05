@@ -770,3 +770,10 @@ def cached_concentration_trend(fno_symbol: str = "NIFTY", years: int = 5,
                                as_of: date | None = None) -> pd.DataFrame:
     from src.analytics.index_largecap import get_concentration_trend
     return get_concentration_trend(fno_symbol, years, as_of)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_state_base_rates(fno_symbol: str = "NIFTY", years: int = 5,
+                            as_of: date | None = None) -> pd.DataFrame:
+    from src.analytics.index_largecap import get_state_base_rates
+    return get_state_base_rates(fno_symbol, years, as_of)

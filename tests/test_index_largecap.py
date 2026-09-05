@@ -141,3 +141,61 @@ def test_concentration_trend_docstring_retracts_the_monotone_claim():
     doc = ilc.get_concentration_trend.__doc__ or ""
     assert "NOT AS A TREND" in doc.upper() or "not as a trend" in doc
     assert "replicate" in doc and "survivorship" in doc
+
+
+# ── the v2 backtest verdict, pinned so it cannot be quietly softened ─────────
+
+def test_state_classification_is_a_partition():
+    """Every (a10, a30) pair must land in exactly one of the four states."""
+    from src.analytics.index_largecap import (_classify, STATE_BROAD_UP,
+                                              STATE_CARRIED, STATE_LAGGED,
+                                              STATE_BROAD_DOWN)
+    assert _classify(60, 60) == STATE_BROAD_UP
+    assert _classify(60, 40) == STATE_CARRIED
+    assert _classify(40, 60) == STATE_LAGGED
+    assert _classify(40, 40) == STATE_BROAD_DOWN
+    assert _classify(50, 50) == STATE_BROAD_DOWN      # exactly half is not "up"
+    assert _classify(None, 60) is None and _classify(60, None) is None
+    seen = {_classify(a, b) for a in (40, 50, 60) for b in (40, 50, 60)}
+    assert len(seen) == 4, "the four states must be reachable and disjoint"
+
+
+def test_live_state_and_history_share_one_label_set():
+    """If the panel's live chip and its base-rate table drifted apart, the chip
+    would silently match no row and the metrics would vanish."""
+    from datetime import date as _d
+    from src.analytics.index_largecap import get_index_largecap, get_state_base_rates
+    d = get_index_largecap(_d(2026, 9, 3), "NIFTY")
+    br = get_state_base_rates("NIFTY", 5, _d(2026, 9, 3))
+    assert d.state is not None
+    assert d.state in set(br["state"]), "live state has no row in the base rates"
+
+
+def test_state_is_none_when_a_bucket_is_too_thin_to_classify():
+    d = ilc.IndexLargeCap(trade_date=None, fno_symbol="NIFTY", display="x")
+    d.rows = [ilc.BucketRow(label="Top 10", n_members=10, n_present=3, adv_pct=100.0),
+              ilc.BucketRow(label="Rest 30", n_members=30, n_present=30, adv_pct=60.0)]
+    assert d.state is None, "a 3-of-10 bucket cannot carry a breadth verdict"
+
+
+def test_base_rate_rows_sum_to_the_all_sessions_row():
+    """The four states partition the sample, so their day counts must total the
+    'all sessions' row. A mismatch means days are being dropped or double-counted."""
+    from datetime import date as _d
+    from src.analytics.index_largecap import get_state_base_rates
+    br = get_state_base_rates("NIFTY", 5, _d(2026, 9, 4))
+    allrow = br[br["state"].str.startswith("—")]
+    parts = br[~br["state"].str.startswith("—")]
+    assert len(allrow) == 1 and len(parts) == 4
+    assert int(parts["days"].sum()) == int(allrow.iloc[0]["days"])
+
+
+def test_base_rate_docstring_records_why_no_arrow_is_derived():
+    """The panel shows forward returns. The reasons they are NOT a signal have to
+    travel with the function, or the next reader will wire an arrow to them."""
+    from src.analytics.index_largecap import get_state_base_rates
+    doc = get_state_base_rates.__doc__ or ""
+    assert "BASE RATES, NOT A FORECAST" in doc
+    assert "0.65" in doc            # the F&O family reality check
+    assert "t=+0.35" in doc         # breadth collapsing under the CLR control
+    assert "NO SINGLE LEG" in doc   # the conjunction's failure mode
