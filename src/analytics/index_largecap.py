@@ -13,6 +13,8 @@ WHAT IS EXACT HERE (no estimation, no weights needed)
         > 0  heavyweights are carrying the index
         < 0  the broad basket is beating the index
     That identity needs no weight data and cannot drift out of calibration.
+    Audited: corr(spread, number of names present) = +0.010, so the spread measures
+    concentration and not coverage (scripts/ilc_self_audit.py).
 
 WHY THERE ARE NO INDEX WEIGHTS IN HERE
     The DB has no free-float or shares-outstanding, and weights are NOT recoverable
@@ -41,6 +43,22 @@ NO DIRECTIONAL CALL IS MADE, AND THAT IS A MEASURED DECISION
     another proxy for "did today close strong". The user's own framing, the
     top10-minus-rest30 DIVERGENCE, was the weakest variable tested (t +1.76).
     So this tab describes; it does not forecast.
+
+SELF-AUDIT OF THIS MODULE (scripts/ilc_self_audit.py) -- three defects found and
+fixed after the first ship, one claim retracted:
+    - near-month futures OI read basket-wide UNWINDING every roll week (DTE 0-2
+      mean -47.9%, 99.94% of rows below -5%; 13.7% of sessions). Now TOTAL forward
+      OI, which is flat at +0.45..0.67% across every DTE bucket; only the expiry
+      SESSION itself still jumps (+14.25% vs +0.47%, 5.0% of days) and is suppressed.
+    - the Rest-30 delivery mean had corr +0.674 with HOW MANY of its names reported
+      that day. Now a per-symbol z averaged across the bucket, which is immune.
+    - the raw OI mean differed from a winsorised one by up to 84.5pp on a single
+      Top-10 day (one contract printed +895%). Now clipped to +-50%.
+    - the concentration "trend" does not replicate on a membership-independent
+      basket -- see get_concentration_trend. Claim retracted.
+Checked and clean: the carry-spread identity (no coverage leak), and the
+head(3)/tail(3) mover lists (buckets never fall below 9/9/25 names, so a stock can
+never appear as both a top gainer and a top loser).
 """
 from __future__ import annotations
 
@@ -142,6 +160,10 @@ class IndexLargeCap:
     rows:         list = field(default_factory=list)
     data_ok:      bool = True
     note:         str = ""
+    # True on a monthly settlement session, where forward OI jumps mechanically as
+    # the front contract settles and positions roll in. The futures columns are
+    # suppressed rather than shown as a basket-wide build.
+    is_expiry_session: bool = False
 
     @property
     def regime(self) -> str:
@@ -179,40 +201,48 @@ def _load_cash(symbols: tuple, trade_date: date, lookback: int = 220) -> pd.Data
 
 
 def _load_futures(symbols: tuple, trade_date: date) -> pd.DataFrame:
-    """Near-month stock futures, SAME-EXPIRY matched against the prior session.
+    """Per-symbol TOTAL futures OI on trade_date and the prior session.
 
-    Settlement sessions are dropped: every contract's OI collapses on expiry, which
-    would read as a basket-wide 'long unwinding' regardless of direction.
+    TOTAL, NOT NEAR-MONTH -- this is the rollover trap, measured on this data
+    (scripts/ilc_self_audit.py). Near-month OI bleeds into the next contract as
+    expiry approaches because positions MIGRATE rather than close:
+        DTE 0-2 : mean OI change -47.9%, 99.94% of rows below -5%
+        DTE 3-5 : mean OI change -33.0%, 99.88% below -5%
+    and 13.7% of all near-month rows sit at DTE <= 5. A near-month read therefore
+    prints basket-wide "unwinding" on roughly one session in seven regardless of
+    what anyone did. Summing every forward expiry is continuous through the roll.
+    src/analytics/index_prediction.py solved the same trap the same way.
+
+    Both days are summed over the SAME forward set (expiry > trade_date), so the
+    comparison is apples-to-apples across an expiry boundary too.
     """
     ph = ", ".join("?" * len(symbols))
     return query_dataframe(f"""
-        WITH near AS (
-            SELECT trade_date, symbol, MIN(expiry_date) AS exp
-            FROM fno_bhavcopy
-            WHERE instrument = 'FUTSTK' AND expiry_date > trade_date
-              AND open_interest > 0 AND symbol IN ({ph})
-              AND trade_date <= ? AND trade_date > (?::date - 20)
-            GROUP BY 1, 2
-        ),
-        f AS (
-            SELECT b.trade_date, b.symbol, b.expiry_date, b.close_price,
-                   b.open_interest
-            FROM fno_bhavcopy b
-            INNER JOIN near n ON n.symbol = b.symbol AND n.trade_date = b.trade_date
-                             AND n.exp = b.expiry_date
-            WHERE b.instrument = 'FUTSTK'
-        ),
-        settle AS (
-            SELECT DISTINCT trade_date, symbol FROM fno_bhavcopy
-            WHERE instrument = 'FUTSTK' AND expiry_date = trade_date
-        )
-        SELECT f.trade_date, f.symbol, f.open_interest, f.close_price,
-               LAG(f.open_interest) OVER w AS prev_oi,
-               LAG(f.close_price)   OVER w AS prev_px,
-               (s.symbol IS NOT NULL) AS is_settle
-        FROM f LEFT JOIN settle s ON s.symbol = f.symbol AND s.trade_date = f.trade_date
-        WINDOW w AS (PARTITION BY f.symbol, f.expiry_date ORDER BY f.trade_date)
-    """, [*symbols, trade_date, trade_date])
+        SELECT trade_date, symbol, expiry_date, open_interest
+        FROM fno_bhavcopy
+        WHERE instrument = 'FUTSTK' AND open_interest > 0
+          AND symbol IN ({ph})
+          AND trade_date <= ? AND trade_date > (?::date - 20)
+          AND expiry_date > ?
+    """, [*symbols, trade_date, trade_date, trade_date])
+
+
+def _total_oi_change(fut: pd.DataFrame, trade_date: date) -> pd.DataFrame:
+    """symbol -> total forward OI today vs the prior session. Roll-immune."""
+    if fut.empty:
+        return pd.DataFrame(columns=["symbol", "oi", "prev_oi"])
+    fut = fut.copy()
+    fut["trade_date"] = pd.to_datetime(fut["trade_date"]).dt.date
+    dates = sorted(d for d in fut["trade_date"].unique() if d <= trade_date)
+    if len(dates) < 2 or dates[-1] != trade_date:
+        return pd.DataFrame(columns=["symbol", "oi", "prev_oi"])
+    prev = dates[-2]
+    tot = (fut[fut["trade_date"].isin((trade_date, prev))]
+           .groupby(["trade_date", "symbol"])["open_interest"].sum().unstack(0))
+    if trade_date not in tot.columns or prev not in tot.columns:
+        return pd.DataFrame(columns=["symbol", "oi", "prev_oi"])
+    out = pd.DataFrame({"oi": tot[trade_date], "prev_oi": tot[prev]}).dropna()
+    return out[out["prev_oi"] > 0].reset_index()
 
 
 def _bucket_row(label: str, members: tuple, hist: pd.DataFrame,
@@ -229,33 +259,50 @@ def _bucket_row(label: str, members: tuple, hist: pd.DataFrame,
     row.adv_pct   = row.adv / len(t) * 100
     row.deliv_pct = float(t["deliv_per"].dropna().mean()) if t["deliv_per"].notna().any() else None
 
-    # delivery vs the bucket's OWN trailing normal — a bucket of heavyweights has a
-    # structurally different delivery level than a bucket of mid-weights, so an
-    # absolute % is not comparable across rows; the z-score is.
+    # Delivery: PER-SYMBOL z against each name's own 100-day normal, then averaged.
+    # NOT the z of the bucket's mean delivery -- measured (scripts/ilc_self_audit.py)
+    # the Rest-30 mean has corr +0.674 with HOW MANY of its names reported that day
+    # (it ranges 25-30), so a bucket-level z is partly a coverage signal. A per-symbol
+    # z is immune: a name entering or leaving changes which z's are averaged, not the
+    # level. Top-10 / Next-10 were already clean (corr -0.06 / -0.03); Rest 30 was not.
     h = hist[hist["symbol"].isin(mem)]
-    if not h.empty and row.deliv_pct is not None:
-        daily = h.groupby("trade_date")["deliv_per"].mean().sort_index()
-        prior = daily[daily.index < t["trade_date"].iloc[0]].tail(_DELIV_BASE)
-        if len(prior) >= 30 and prior.std() > 1e-9:
-            row.deliv_z = float((row.deliv_pct - prior.mean()) / prior.std())
+    if not h.empty:
+        wide = h.pivot_table("deliv_per", "trade_date", "symbol")
+        prior = wide[wide.index < t["trade_date"].iloc[0]].tail(_DELIV_BASE)
+        cur = wide.reindex([t["trade_date"].iloc[0]]).iloc[0] if \
+            t["trade_date"].iloc[0] in wide.index else None
+        if cur is not None and len(prior) >= 30:
+            mu, sd = prior.mean(), prior.std()
+            ok = (sd > 1e-9) & mu.notna() & cur.notna()
+            if ok.any():
+                z = ((cur[ok] - mu[ok]) / sd[ok]).replace([np.inf, -np.inf], np.nan).dropna()
+                if len(z):
+                    row.deliv_z = float(z.mean())
 
-    ft = fut_today[fut_today["symbol"].isin(mem)]
+    ft = fut_today[fut_today["symbol"].isin(mem)] if not fut_today.empty else pd.DataFrame()
     if not ft.empty:
+        rets = t.set_index("symbol")["r"]
+        pcts = []
         for _, fr in ft.iterrows():
-            oi, poi = float(fr["open_interest"]), float(fr["prev_oi"])
-            px, ppx = float(fr["close_price"]), float(fr["prev_px"])
-            if poi <= 0:
+            oi, poi = float(fr["oi"]), float(fr["prev_oi"])
+            r = rets.get(fr["symbol"])
+            if poi <= 0 or r is None or pd.isna(r):
                 continue
             oi_chg = (oi - poi) / poi * 100
+            # Price leg is the stock's CASH return, not a futures close: the futures
+            # price series breaks across a roll (different contract), the cash one
+            # does not, and the direction is the same question.
             row.fut_valid += 1
-            if   px > ppx and oi_chg >  0.5: row.fut_long   += 1
-            elif px < ppx and oi_chg >  0.5: row.fut_short  += 1
-            elif px > ppx and oi_chg < -0.5: row.fut_cover  += 1
-            elif px < ppx and oi_chg < -0.5: row.fut_unwind += 1
-        if row.fut_valid:
-            row.fut_oi_pct = float(
-                ((ft["open_interest"] - ft["prev_oi"]) / ft["prev_oi"].clip(lower=1) * 100)
-                .replace([np.inf, -np.inf], np.nan).dropna().mean())
+            pcts.append(oi_chg)
+            if   r > 0 and oi_chg >  0.5: row.fut_long   += 1
+            elif r < 0 and oi_chg >  0.5: row.fut_short  += 1
+            elif r > 0 and oi_chg < -0.5: row.fut_cover  += 1
+            elif r < 0 and oi_chg < -0.5: row.fut_unwind += 1
+        if pcts:
+            # winsorised: raw means differ from the +-50% clipped mean by up to
+            # 84.5pp on the worst Top-10 day and by >2pp on ~5% of sessions, because
+            # a single thin contract can print +895%.
+            row.fut_oi_pct = float(np.mean(np.clip(pcts, -50, 50)))
 
     s = t.sort_values("r", ascending=False)
     row.movers_up = [(r.symbol, float(r.r)) for r in s.head(3).itertuples() if r.r > 0]
@@ -304,41 +351,69 @@ def get_index_largecap(trade_date: date, fno_symbol: str = "NIFTY") -> IndexLarg
     if out.index_ret is not None:
         out.carry_spread = out.index_ret - out.equal_ret
 
-    fut = _load_futures(all_syms, trade_date)
-    if not fut.empty:
-        fut["trade_date"] = pd.to_datetime(fut["trade_date"]).dt.date
-        fut = fut[(fut["trade_date"] == trade_date) & (~fut["is_settle"].astype(bool))
-                  & fut["prev_oi"].notna() & fut["prev_px"].notna()]
-    out.rows = [_bucket_row(lbl, mem, hist, today, fut if not fut.empty else pd.DataFrame())
+    # Expiry SESSION is the one case total-forward OI still cannot read: the front
+    # contract settles and everyone rolls INTO the next month, so forward OI jumps
+    # mechanically. Measured on this data: +14.25% mean on expiry sessions against
+    # +0.47% on every other day, and it is only 26 of 524 sessions (5.0%). Total OI
+    # already fixed the far worse near-month roll bleed (-48% at DTE 0-2, 13.7% of
+    # sessions); this suppresses the residual rather than printing a fake build.
+    _exp = query_dataframe("""
+        SELECT 1 AS x FROM fno_bhavcopy
+        WHERE instrument = 'FUTSTK' AND trade_date = ? AND expiry_date = ? LIMIT 1
+    """, [trade_date, trade_date])
+    out.is_expiry_session = not _exp.empty
+    oi = (pd.DataFrame(columns=["symbol", "oi", "prev_oi"]) if out.is_expiry_session
+          else _total_oi_change(_load_futures(all_syms, trade_date), trade_date))
+    out.rows = [_bucket_row(lbl, mem, hist, today, oi)
                 for lbl, mem in meta["buckets"].items()]
     return out
 
 
-def get_concentration_trend(fno_symbol: str = "NIFTY", years: int = 5) -> pd.DataFrame:
+def get_concentration_trend(fno_symbol: str = "NIFTY", years: int = 5,
+                            as_of: Optional[date] = None) -> pd.DataFrame:
     """Per-year: how often the index rose while most of its members fell.
 
-    This is the tab's one genuinely measured trend, and it is pure description —
-    no forecast is implied. Measured 2022-2026 it rises monotonically
-    (2.4% -> 7.2% of sessions) while the carry spread itself SHRINKS, i.e. the
-    index is decoupling from its own breadth.
+    READ THIS AS A RECORD OF TODAY'S 50, NOT AS A TREND. On the shipped basket the
+    series looks monotone (2.4 -> 4.1 -> 6.0 -> 6.9 -> 7.2% of sessions, 2022-2026),
+    and I originally shipped that as the panel's headline. It does NOT replicate
+    (scripts/ilc_self_audit.py):
+        today's 50 (shipped)          2.4  4.1  6.0  6.9  7.2   monotone
+        only full-history names (46)  2.4  3.7  7.3  5.6  6.6   NOT monotone
+        broad liquid universe         8.5  9.1 14.2  8.1  8.4   no trend at all
+    The broad basket uses no index list at all (~186 names/day passing a lagged
+    100 Cr turnover floor), and it shows a 2024 spike that reverts, not a rise.
+    And extending the window BACKWARDS kills it outright — anchored at mid-2024 the
+    same function returns 2020: 6.4, 2021: 11.7, 2022: 2.4, 2023: 4.1. 2021 was
+    HIGHER than 2026. The apparent rise was an artifact of starting the window at
+    2022, which happens to be the series minimum.
+    The likely cause is survivorship: this list is TODAY's members, and Nifty
+    reconstitutes twice a year, so the early years are populated by names that were
+    later promoted BECAUSE they outperformed — which inflates measured breadth then
+    and suppresses the "carried" count. A point-in-time membership table is what
+    would settle it. Until then this is a description of one basket, not evidence
+    that concentration is rising.
     """
     meta = INDEX_BUCKETS.get(fno_symbol)
     if meta is None:
         return pd.DataFrame()
     all_syms = tuple(s for b in meta["buckets"].values() for s in b)
     ph = ", ".join("?" * len(all_syms))
-    start = date.today() - timedelta(days=365 * years + 30)
+    # Anchored on the SELECTED date, not today: picking a 2024 session must not
+    # render 2026 rows underneath it. The panel is a record as of the date on screen.
+    anchor = as_of or date.today()
+    start = anchor - timedelta(days=365 * years + 30)
     df = query_dataframe(f"""
         SELECT trade_date, symbol,
                (close_price - prev_close) / NULLIF(prev_close, 0) * 100 AS r
         FROM daily_data
         WHERE symbol IN ({ph}) AND series IN ('EQ','SM','ST')
-          AND close_price > 0 AND prev_close > 0 AND trade_date >= ?
-    """, [*all_syms, start])
+          AND close_price > 0 AND prev_close > 0
+          AND trade_date >= ? AND trade_date <= ?
+    """, [*all_syms, start, anchor])
     idx = query_dataframe("""
         SELECT trade_date, pct_chg FROM index_data
-        WHERE index_name = ? AND trade_date >= ?
-    """, [meta["index_name"], start])
+        WHERE index_name = ? AND trade_date >= ? AND trade_date <= ?
+    """, [meta["index_name"], start, anchor])
     if df.empty or idx.empty:
         return pd.DataFrame()
     df = df[df["r"].abs() < 40]

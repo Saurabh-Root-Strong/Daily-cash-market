@@ -69,3 +69,75 @@ def test_no_index_row_means_no_carry_spread_not_a_zero():
 def test_unknown_index_degrades_cleanly():
     out = ilc.get_index_largecap(__import__("datetime").date(2026, 9, 4), "BANKNIFTY")
     assert not out.data_ok and "BANKNIFTY" in out.note
+
+
+# ── regressions for the three defects the self-audit found ───────────────────
+
+def test_total_oi_change_is_roll_immune_and_same_expiry_set():
+    """Near-month OI falls ~48% at 0-2 DTE because positions MIGRATE to the next
+    contract. The total across every live expiry must be flat through that roll."""
+    import datetime as _dt
+    td, pv = _dt.date(2026, 9, 3), _dt.date(2026, 9, 2)
+    fut = pd.DataFrame([
+        # front contract bleeds 100 -> 20, next contract absorbs 20 -> 100
+        dict(trade_date=pv, symbol="X", expiry_date=_dt.date(2026, 9, 29), open_interest=100),
+        dict(trade_date=pv, symbol="X", expiry_date=_dt.date(2026, 10, 27), open_interest=20),
+        dict(trade_date=td, symbol="X", expiry_date=_dt.date(2026, 9, 29), open_interest=20),
+        dict(trade_date=td, symbol="X", expiry_date=_dt.date(2026, 10, 27), open_interest=100),
+    ])
+    out = ilc._total_oi_change(fut, td)
+    assert len(out) == 1
+    r = out.iloc[0]
+    assert r["oi"] == 120 and r["prev_oi"] == 120, "the roll must net to zero"
+
+
+def test_total_oi_change_needs_two_sessions_and_the_target_date():
+    import datetime as _dt
+    td = _dt.date(2026, 9, 3)
+    one = pd.DataFrame([dict(trade_date=td, symbol="X",
+                             expiry_date=_dt.date(2026, 9, 29), open_interest=10)])
+    assert ilc._total_oi_change(one, td).empty, "one session cannot give a change"
+    stale = pd.DataFrame([
+        dict(trade_date=_dt.date(2026, 9, 1), symbol="X",
+             expiry_date=_dt.date(2026, 9, 29), open_interest=10),
+        dict(trade_date=_dt.date(2026, 9, 2), symbol="X",
+             expiry_date=_dt.date(2026, 9, 29), open_interest=12)])
+    assert ilc._total_oi_change(stale, td).empty, \
+        "must not silently read an older session as today"
+
+
+def test_expiry_session_suppresses_the_futures_read():
+    """Forward OI jumps +14.25% on a settlement session against +0.47% elsewhere,
+    because the front settles and everyone rolls in. Show nothing, not a build."""
+    from datetime import date as _d
+    out = ilc.get_index_largecap(_d(2026, 8, 25), "NIFTY")
+    assert out.is_expiry_session, "25 Aug 2026 is a monthly settlement session"
+    for b in out.rows:
+        assert b.fut_valid == 0 and b.fut_oi_pct is None and b.fut_lean is None
+    # the cash side must survive the suppression
+    assert all(b.ret_pct is not None for b in out.rows)
+
+
+def test_futures_oi_pct_is_winsorised():
+    """One thin contract printed +895%; the raw mean differed from a clipped one
+    by up to 84.5pp on a Top-10 day."""
+    import inspect
+    src = inspect.getsource(ilc._bucket_row)
+    assert "clip(pcts, -50, 50)" in src, "the OI mean must stay winsorised"
+
+
+def test_delivery_z_is_per_symbol_not_a_z_of_the_bucket_mean():
+    """The Rest-30 mean had corr +0.674 with how many names reported that day, so
+    a bucket-level z was partly a coverage signal."""
+    import inspect
+    src = inspect.getsource(ilc._bucket_row)
+    assert "pivot_table" in src and "cur[ok]" in src, \
+        "delivery z must be computed per symbol, then averaged"
+
+
+def test_concentration_trend_docstring_retracts_the_monotone_claim():
+    """The panel originally headlined a monotone rise that does not replicate on a
+    membership-independent basket. The retraction must stay in the code."""
+    doc = ilc.get_concentration_trend.__doc__ or ""
+    assert "NOT AS A TREND" in doc.upper() or "not as a trend" in doc
+    assert "replicate" in doc and "survivorship" in doc

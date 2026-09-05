@@ -6329,6 +6329,10 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
         "equally. This panel splits the index into weight buckets and shows which "
         "one actually carried it - and how often the index and its own basket "
         "disagree.")
+    st.caption(
+        "The sidebar **Min Traded Value** filter does not apply here: the basket is "
+        "fixed index membership, not a liquidity screen. Everything below is "
+        "anchored on the selected date.")
 
     try:
         d = cached_index_largecap(selected_date, "NIFTY")
@@ -6400,17 +6404,21 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                  column_config={
                      "Deliv z": st.column_config.NumberColumn(
                          "Deliv z", format="%.2f",
-                         help="Delivery vs the BUCKET'S OWN 100-day normal. An "
-                              "absolute delivery % is not comparable across "
-                              "buckets; heavyweights sit at a structurally "
-                              "different level."),
+                         help="Mean of each stock's delivery z against ITS OWN "
+                              "100-day normal. Per-symbol, not a z of the bucket "
+                              "mean: the Rest-30 mean had correlation +0.674 with "
+                              "how many of its names reported that day, so a "
+                              "bucket-level z was partly a coverage signal."),
                      "Futures read": st.column_config.TextColumn(
                          "Futures read",
-                         help="Near-month stock futures OI-price matrix, "
-                              "same-expiry matched vs the prior session. "
-                              "Settlement sessions excluded - every contract's OI "
-                              "collapses on expiry and would read as basket-wide "
-                              "unwinding."),
+                         help="TOTAL forward futures OI (every live expiry) vs the "
+                              "prior session, against the stock's cash return. "
+                              "NOT near-month: measured here, near-month OI falls "
+                              "-47.9% on average at 0-2 days to expiry (99.94% of "
+                              "rows negative) because positions MIGRATE to the next "
+                              "contract, which printed basket-wide unwinding on "
+                              "13.7% of sessions. Total OI is flat across every "
+                              "DTE bucket; the expiry session itself is suppressed."),
                      "F&O names": st.column_config.TextColumn(
                          "F&O names",
                          help="How many of the bucket had a usable near-month "
@@ -6428,9 +6436,9 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                 unsafe_allow_html=True)
 
     # ── the measured trend ───────────────────────────────────────────────────
-    with st.expander("📈 Is the index decoupling from its own breadth?",
+    with st.expander("📈 How often does the index disagree with its own basket?",
                      expanded=False):
-        tr = cached_concentration_trend("NIFTY", 5)
+        tr = cached_concentration_trend("NIFTY", 5, selected_date)
         if tr.empty:
             st.info("Not enough history for the concentration trend.")
         else:
@@ -6443,9 +6451,19 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                 hide_index=True, use_container_width=True)
             st.caption(
                 "**Carried** = the index rose while under half its own members did. "
-                "**Dragged** = it fell while over half advanced. Measured 2022-2026 "
-                "the carried share rises monotonically (2.4% to 7.2% of sessions) "
-                "*while the carry spread itself shrinks* - fewer names are doing "
-                "more of the work. Partial calendar years are dropped: a "
-                "100-session stub read 14.0% next to a 2.4% full year, which is a "
-                "truncated denominator, not a trend.")
+                "**Dragged** = it fell while over half advanced.\n\n"
+                "**Read this as a record of today's 50, not as a trend.** On this "
+                "basket the carried share looks monotone (2.4% to 7.2%), and that "
+                "was this panel's original headline - but it does **not** replicate. "
+                "Restricted to the 46 names with full history it is 2.4 / 3.7 / 7.3 / "
+                "5.6 / 6.6 (not monotone), and on a **membership-independent** basket "
+                "of ~186 liquid names a day it is 8.5 / 9.1 / 14.2 / 8.1 / 8.4 - a "
+                "2024 spike that reverts, not a rise. The likely cause is "
+                "survivorship: this is TODAY's list, and names promoted into the "
+                "index *because* they outperformed inflate the early years' breadth. "
+                "Extending the window back settles it - 2021 reads **11.7%**, higher "
+                "than 2026, so the 'rise' was an artifact of starting at 2022, the "
+                "series minimum. "
+                "A point-in-time membership table would settle it. Partial calendar "
+                "years are dropped - a 100-session stub read 14.0% beside a 2.4% "
+                "full year, a truncated denominator, not a reversal.")

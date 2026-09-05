@@ -766,6 +766,7 @@ def cached_index_largecap(trade_date: date, fno_symbol: str = "NIFTY"):
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def cached_concentration_trend(fno_symbol: str = "NIFTY", years: int = 5) -> pd.DataFrame:
+def cached_concentration_trend(fno_symbol: str = "NIFTY", years: int = 5,
+                               as_of: date | None = None) -> pd.DataFrame:
     from src.analytics.index_largecap import get_concentration_trend
-    return get_concentration_trend(fno_symbol, years)
+    return get_concentration_trend(fno_symbol, years, as_of)
