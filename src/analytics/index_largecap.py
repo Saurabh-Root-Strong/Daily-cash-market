@@ -102,6 +102,11 @@ INDEX_BUCKETS: dict[str, dict] = {
     ),
 }
 
+# Rough published weight share of each bucket, used only to blend the display
+# score. The exact weights are not recoverable from this DB (see the module
+# docstring); these are share-of-index approximations and the composite was
+# tested under equal weighting too, with the same null result.
+_BUCKET_WEIGHT = {"Top 10": 0.46, "Next 10": 0.24, "Rest 30": 0.30}
 _DELIV_BASE = 100      # sessions the delivery normal is measured over
 _MIN_COVER  = 0.60     # below this share of a bucket present, the row is unreliable
 
@@ -123,6 +128,9 @@ class BucketRow:
     fut_unwind:   int = 0
     fut_valid:    int = 0
     fut_oi_pct:   Optional[float] = None
+    ce_oi_pct:    Optional[float] = None     # total forward CALL OI change %
+    pe_oi_pct:    Optional[float] = None     # total forward PUT OI change %
+    opt_valid:    int = 0
     movers_up:    list = field(default_factory=list)
     movers_dn:    list = field(default_factory=list)
 
@@ -133,6 +141,43 @@ class BucketRow:
     @property
     def thin(self) -> bool:
         return self.coverage < _MIN_COVER
+
+    @property
+    def opt_read(self) -> Optional[str]:
+        """CE vs PE forward-OI flow, the way the desk reads it.
+
+        Call side building relative to the put side is call writing (bearish);
+        put side building relative to the call side is put writing (bullish).
+        This is a RELATIVE read and deliberately not conditioned on price -- it is
+        the construction the user described, and it was tested as such.
+        """
+        if self.opt_valid < 4 or self.ce_oi_pct is None or self.pe_oi_pct is None:
+            return None
+        d = self.pe_oi_pct - self.ce_oi_pct
+        if abs(d) < 0.25:
+            return "balanced"
+        if self.pe_oi_pct > 0 and self.ce_oi_pct <= 0:  return "put writing"
+        if self.ce_oi_pct > 0 and self.pe_oi_pct <= 0:  return "call writing"
+        return "put side heavier" if d > 0 else "call side heavier"
+
+    @property
+    def flow_score(self) -> Optional[float]:
+        """Delivery + futures + options, each in [-1, +1], averaged.
+
+        MEASURED WORTHLESS AS A FORECAST and kept only as a summary of what the
+        flow is doing -- see IndexLargeCap.net_score for the numbers.
+        """
+        legs = []
+        if self.deliv_z is not None:
+            legs.append(1.0 if self.deliv_z > 0.3 else -1.0 if self.deliv_z < -0.3 else 0.0)
+        lean = self.fut_lean
+        if lean is not None:
+            legs.append(float(lean))
+        rd = self.opt_read
+        if rd is not None:
+            legs.append({"put writing": 1.0, "put side heavier": 0.5, "balanced": 0.0,
+                         "call side heavier": -0.5, "call writing": -1.0}[rd])
+        return float(np.mean(legs)) if legs else None
 
     @property
     def fut_lean(self) -> Optional[int]:
@@ -164,6 +209,27 @@ class IndexLargeCap:
     # the front contract settles and positions roll in. The futures columns are
     # suppressed rather than shown as a basket-wide build.
     is_expiry_session: bool = False
+
+    @property
+    def net_score(self) -> Optional[float]:
+        """Weight-shared blend of the three bucket flow scores, in [-1, +1].
+
+        DISPLAYED AS POSITIONING, NEVER AS A CALL. Backtested over 1,149 sessions
+        (2022-2026, scripts/nifty_bucket_composite.py) on the full F&O history:
+            next day   IC -0.012   hit 48.2%   against a 52.2% base rate
+            next 5 d   IC +0.005   hit 49.1%   against a 54.7% base rate
+        The index's own close-strength beats it (t +2.15 vs -0.69), it adds
+        nothing beside that control (t -0.17), its quintiles are not monotone, and
+        the walk-forward half is worse than the in-sample half (46.3% next-day hit
+        after 2024-09). The top-10-only variant hits 44.6%, BELOW a coin flip.
+        """
+        parts = [(r.flow_score, _BUCKET_WEIGHT.get(r.label))
+                 for r in self.rows]
+        parts = [(v, w) for v, w in parts if v is not None and w]
+        if not parts:
+            return None
+        tw = sum(w for _, w in parts)
+        return float(sum(v * w for v, w in parts) / tw) if tw else None
 
     @property
     def state(self) -> Optional[str]:
@@ -258,8 +324,56 @@ def _total_oi_change(fut: pd.DataFrame, trade_date: date) -> pd.DataFrame:
     return out[out["prev_oi"] > 0].reset_index()
 
 
+def _load_options(symbols: tuple, trade_date: date) -> pd.DataFrame:
+    """Per-symbol TOTAL forward CALL and PUT OI on trade_date and the prior session.
+
+    Same rollover discipline as the futures leg: summed over every live expiry, so
+    a position migrating from the near contract to the next does not read as an
+    unwind. Strikes are summed too -- this is a SIDE-level flow read, not a
+    strike-level one.
+    """
+    ph = ", ".join("?" * len(symbols))
+    return query_dataframe(f"""
+        SELECT trade_date, symbol, option_type, SUM(open_interest) AS oi
+        FROM fno_bhavcopy
+        WHERE instrument = 'OPTSTK' AND open_interest > 0
+          AND option_type IN ('CE','PE')
+          AND symbol IN ({ph})
+          AND trade_date <= ? AND trade_date > (?::date - 20)
+          AND expiry_date > ?
+        GROUP BY 1, 2, 3
+    """, [*symbols, trade_date, trade_date, trade_date])
+
+
+def _opt_change(opt: pd.DataFrame, trade_date: date) -> pd.DataFrame:
+    """symbol -> CE and PE total forward OI % change vs the prior session."""
+    cols = ["symbol", "ce_pct", "pe_pct"]
+    if opt.empty:
+        return pd.DataFrame(columns=cols)
+    opt = opt.copy()
+    opt["trade_date"] = pd.to_datetime(opt["trade_date"]).dt.date
+    dates = sorted(d for d in opt["trade_date"].unique() if d <= trade_date)
+    if len(dates) < 2 or dates[-1] != trade_date:
+        return pd.DataFrame(columns=cols)
+    prev = dates[-2]
+    cur = opt[opt["trade_date"] == trade_date]
+    pri = opt[opt["trade_date"] == prev]
+    out = {}
+    for side, key in (("CE", "ce_pct"), ("PE", "pe_pct")):
+        a = cur[cur["option_type"] == side].set_index("symbol")["oi"]
+        b = pri[pri["option_type"] == side].set_index("symbol")["oi"]
+        j = pd.DataFrame({"a": a, "b": b}).dropna()
+        j = j[j["b"] > 0]
+        # winsorised for the same reason the futures leg is: one thin series can
+        # print a several-hundred-percent change and carry the bucket mean.
+        out[key] = ((j["a"] - j["b"]) / j["b"] * 100).clip(-50, 50)
+    df = pd.DataFrame(out).dropna()
+    return df.reset_index().rename(columns={"index": "symbol"}) if not df.empty         else pd.DataFrame(columns=cols)
+
+
 def _bucket_row(label: str, members: tuple, hist: pd.DataFrame,
-                today: pd.DataFrame, fut_today: pd.DataFrame) -> BucketRow:
+                today: pd.DataFrame, fut_today: pd.DataFrame,
+                opt_today: pd.DataFrame | None = None) -> BucketRow:
     mem = set(members)
     t = today[today["symbol"].isin(mem)]
     row = BucketRow(label=label, n_members=len(members), n_present=len(t))
@@ -316,6 +430,13 @@ def _bucket_row(label: str, members: tuple, hist: pd.DataFrame,
             # 84.5pp on the worst Top-10 day and by >2pp on ~5% of sessions, because
             # a single thin contract can print +895%.
             row.fut_oi_pct = float(np.mean(np.clip(pcts, -50, 50)))
+
+    if opt_today is not None and not opt_today.empty:
+        ot = opt_today[opt_today["symbol"].isin(mem)]
+        if not ot.empty:
+            row.opt_valid = len(ot)
+            row.ce_oi_pct = float(ot["ce_pct"].mean())
+            row.pe_oi_pct = float(ot["pe_pct"].mean())
 
     s = t.sort_values("r", ascending=False)
     row.movers_up = [(r.symbol, float(r.r)) for r in s.head(3).itertuples() if r.r > 0]
@@ -377,7 +498,10 @@ def get_index_largecap(trade_date: date, fno_symbol: str = "NIFTY") -> IndexLarg
     out.is_expiry_session = not _exp.empty
     oi = (pd.DataFrame(columns=["symbol", "oi", "prev_oi"]) if out.is_expiry_session
           else _total_oi_change(_load_futures(all_syms, trade_date), trade_date))
-    out.rows = [_bucket_row(lbl, mem, hist, today, oi)
+    opt = (pd.DataFrame(columns=["symbol", "ce_pct", "pe_pct"])
+           if out.is_expiry_session
+           else _opt_change(_load_options(all_syms, trade_date), trade_date))
+    out.rows = [_bucket_row(lbl, mem, hist, today, oi, opt)
                 for lbl, mem in meta["buckets"].items()]
     return out
 

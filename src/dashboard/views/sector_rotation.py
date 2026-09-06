@@ -6450,6 +6450,66 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                 f"**{b.label}** &nbsp; 🟢 {up} &nbsp;&nbsp;|&nbsp;&nbsp; 🔴 {dn}",
                 unsafe_allow_html=True)
 
+    # ── flow summary: delivery + futures + options, per bucket ──────────────
+    st.markdown("##### Flow read — delivery, futures OI, options OI")
+    _flow = []
+    for b in d.rows:
+        _sc = b.flow_score
+        _flow.append({
+            "Bucket": b.label,
+            "Delivery": ("—" if b.deliv_z is None else
+                         "🟢 heavy" if b.deliv_z > 0.3 else
+                         "🔴 light" if b.deliv_z < -0.3 else "⚪ normal"),
+            "Deliv z": None if b.deliv_z is None else round(b.deliv_z, 2),
+            "Futures": {1: "🟢 long build / covering", -1: "🔴 short build / unwind",
+                        0: "⚪ mixed", None: "—"}[b.fut_lean],
+            "Fut OI %": None if b.fut_oi_pct is None else round(b.fut_oi_pct, 2),
+            "Call OI %": None if b.ce_oi_pct is None else round(b.ce_oi_pct, 2),
+            "Put OI %": None if b.pe_oi_pct is None else round(b.pe_oi_pct, 2),
+            "Options": {"put writing": "🟢 put writing",
+                        "put side heavier": "🟢 put side heavier",
+                        "balanced": "⚪ balanced",
+                        "call side heavier": "🔴 call side heavier",
+                        "call writing": "🔴 call writing", None: "—"}[b.opt_read],
+            "Bucket score": None if _sc is None else round(_sc, 2),
+        })
+    st.dataframe(pd.DataFrame(_flow), hide_index=True, use_container_width=True,
+                 column_config={
+                     "Options": st.column_config.TextColumn(
+                         "Options", help="CE vs PE TOTAL FORWARD OI change, summed "
+                         "over every live expiry and every strike. Call side "
+                         "building relative to the put side reads as call writing; "
+                         "put side building reads as put writing."),
+                     "Bucket score": st.column_config.NumberColumn(
+                         "Bucket score", format="%.2f",
+                         help="Mean of the three legs, each in [-1, +1]. A summary "
+                              "of positioning, NOT a forecast — see the measured "
+                              "hit rate below."),
+                 })
+    _ns = d.net_score
+    if _ns is not None:
+        _lbl = ("flow leans long" if _ns > 0.25 else
+                "flow leans short" if _ns < -0.25 else "flow is mixed")
+        _c = "#00C853" if _ns > 0.25 else "#FF5252" if _ns < -0.25 else "#78909C"
+        st.markdown(_ilc_chip(f"Net flow score {_ns:+.2f} — {_lbl}", _c),
+                    unsafe_allow_html=True)
+    if d.is_expiry_session:
+        st.caption("Settlement session — futures and options OI are suppressed, so "
+                   "the score runs on the delivery leg alone.")
+    st.error(
+        "**This score does not forecast the index, and that is measured on the "
+        "full four years.** `scripts/nifty_bucket_composite.py`, 1,149 sessions "
+        "2022-2026 on the backfilled F&O history:\n\n"
+        "| | next day | next 5 sessions |\n|---|---|---|\n"
+        "| **net score hit rate** | **48.2%** | **49.1%** |\n"
+        "| base rate (all sessions) | 52.2% | 54.7% |\n"
+        "| information coefficient | -0.012 | +0.005 |\n\n"
+        "It loses to the index's own close-strength (t +2.15 vs -0.69), adds "
+        "nothing beside that control (t -0.17), its quintiles are not monotone, "
+        "and out of sample after Sep-2024 the next-day hit rate falls to **46.3%**. "
+        "The top-10-only variant hits **44.6%**, *below a coin flip*. Read this "
+        "block as **what positioning is doing**, never as where the index is going.")
+
     # ── state base rates ─────────────────────────────────────────────────────
     st.markdown("##### What has followed this state, historically")
     _st = d.state

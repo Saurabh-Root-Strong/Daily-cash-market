@@ -199,3 +199,70 @@ def test_base_rate_docstring_records_why_no_arrow_is_derived():
     assert "0.65" in doc            # the F&O family reality check
     assert "t=+0.35" in doc         # breadth collapsing under the CLR control
     assert "NO SINGLE LEG" in doc   # the conjunction's failure mode
+
+
+# ── the flow summary (delivery + futures + options) ──────────────────────────
+
+def test_opt_read_needs_a_quorum_and_names_the_relative_flow():
+    """CE vs PE forward-OI flow. A 3-name read is not a bucket verdict."""
+    thin = ilc.BucketRow(label="b", n_members=10, n_present=10,
+                         opt_valid=3, ce_oi_pct=5.0, pe_oi_pct=-5.0)
+    assert thin.opt_read is None
+    cw = ilc.BucketRow(label="b", n_members=10, n_present=10,
+                       opt_valid=9, ce_oi_pct=4.0, pe_oi_pct=-1.0)
+    assert cw.opt_read == "call writing"
+    pw = ilc.BucketRow(label="b", n_members=10, n_present=10,
+                       opt_valid=9, ce_oi_pct=-1.0, pe_oi_pct=4.0)
+    assert pw.opt_read == "put writing"
+    bal = ilc.BucketRow(label="b", n_members=10, n_present=10,
+                        opt_valid=9, ce_oi_pct=3.0, pe_oi_pct=3.1)
+    assert bal.opt_read == "balanced"
+    # both sides building, calls faster -> leaning bearish but not pure writing
+    lean = ilc.BucketRow(label="b", n_members=10, n_present=10,
+                         opt_valid=9, ce_oi_pct=6.0, pe_oi_pct=2.0)
+    assert lean.opt_read == "call side heavier"
+
+
+def test_flow_score_averages_only_the_legs_that_exist():
+    """A missing options or futures leg must not be scored as zero — that would
+    drag every thin session toward 'mixed' and hide the legs that do exist."""
+    r = ilc.BucketRow(label="b", n_members=10, n_present=10, deliv_z=1.0)
+    assert r.flow_score == pytest.approx(1.0), "delivery alone must score alone"
+    r2 = ilc.BucketRow(label="b", n_members=10, n_present=10, deliv_z=1.0,
+                       fut_valid=10, fut_long=8, fut_short=1,
+                       opt_valid=9, ce_oi_pct=4.0, pe_oi_pct=-1.0)
+    # +1 delivery, +1 futures, -1 options (call writing) -> mean of three = 1/3
+    assert r2.flow_score == pytest.approx(1 / 3)
+    # and a bearish options leg must be able to flip a two-leg score negative
+    r3 = ilc.BucketRow(label="b", n_members=10, n_present=10, deliv_z=0.0,
+                       opt_valid=9, ce_oi_pct=4.0, pe_oi_pct=-1.0)
+    assert r3.flow_score == pytest.approx(-0.5)
+
+
+def test_net_score_is_bucket_weighted_and_survives_a_missing_bucket():
+    d = ilc.IndexLargeCap(trade_date=None, fno_symbol="NIFTY", display="x")
+    d.rows = [ilc.BucketRow(label="Top 10", n_members=10, n_present=10, deliv_z=1.0),
+              ilc.BucketRow(label="Next 10", n_members=10, n_present=10, deliv_z=-1.0),
+              ilc.BucketRow(label="Rest 30", n_members=30, n_present=30)]
+    # Rest 30 has no legs at all, so it must drop OUT of the weighting entirely
+    # rather than contribute a 0.0 that silently dilutes the other two.
+    w = ilc._BUCKET_WEIGHT
+    assert d.net_score == pytest.approx(
+        (1.0 * w["Top 10"] - 1.0 * w["Next 10"]) / (w["Top 10"] + w["Next 10"]))
+
+
+def test_net_score_docstring_carries_the_measured_hit_rate():
+    """The score is displayed. The evidence that it does not forecast has to be
+    attached to it in code, or someone will wire an arrow to it later."""
+    doc = ilc.IndexLargeCap.net_score.__doc__ or ""
+    assert "48.2%" in doc and "52.2%" in doc, "next-day hit rate vs base missing"
+    assert "44.6%" in doc and "BELOW a coin flip" in doc
+
+
+def test_expiry_session_suppresses_options_too():
+    """Forward OI jumps mechanically on settlement, for options as for futures."""
+    from datetime import date as _d
+    out = ilc.get_index_largecap(_d(2026, 8, 25), "NIFTY")
+    assert out.is_expiry_session
+    for b in out.rows:
+        assert b.opt_valid == 0 and b.ce_oi_pct is None and b.opt_read is None
