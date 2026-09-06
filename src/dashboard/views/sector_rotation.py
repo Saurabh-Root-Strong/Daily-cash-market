@@ -6575,13 +6575,23 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
             for col, h, lab in ((cA, "d1", "Next session"),
                                 (cB, "d5", "Next 5 sessions")):
                 sm = _an["summary"][h]
+                lo, hi = sm["k_range"]
                 col.metric(
                     f"{lab} — analogue mean", f"{sm['mean']:+.2f}%",
                     f"{sm['mean'] - sm['base_mean']:+.2f}pp vs all sessions",
                     delta_color="off",
-                    help=f"Up {sm['up']:.0f}% of the 25 against a {sm['base_up']:.0f}% "
-                         f"base rate. Best {sm['best']:+.2f}%, worst "
-                         f"{sm['worst']:+.2f}% — the SPREAD is the point.")
+                    help=f"Up {sm['up']:.0f}% of the {_an['k']} against a "
+                         f"{sm['base_up']:.0f}% base rate. Best {sm['best']:+.2f}%, "
+                         f"worst {sm['worst']:+.2f}% — the SPREAD is the point.")
+                col.caption(
+                    f"Across k = 10 to 60 this runs **{lo:+.2f}% to {hi:+.2f}%**"
+                    + ("  ⚠️ **and changes sign**" if sm["k_sign_flips"] else ""))
+            if any(_an["summary"][h]["k_sign_flips"] for h in ("d1", "d5")):
+                st.warning(
+                    "**The number above is not stable in k.** k=25 is a choice, "
+                    "not a measurement, and at least one horizon changes SIGN "
+                    "across k = 10 to 60. Treat the range as the answer and the "
+                    "point estimate as an artifact of where the list was cut.")
             _m = _an["matches"].copy()
             _m["date"] = pd.to_datetime(_m["date"]).dt.strftime("%d %b %Y")
             st.dataframe(

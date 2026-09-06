@@ -50,3 +50,53 @@ def test_unknown_index_and_settlement_session_degrade_cleanly():
     r = ilc.get_flow_analogues(_dt.date(2026, 8, 25), "NIFTY")
     if not r["ok"]:
         assert "settlement" in r["note"] or "flow state" in r["note"]
+
+
+# ── round-2 audit regressions ────────────────────────────────────────────────
+
+def test_purge_gap_keeps_last_weeks_sessions_out_of_the_analogue_set():
+    """Measured: without a purge, 34.1% of sampled days had one of their 25
+    'analogues' within 10 calendar days, the closest 1 day away. A neighbour from
+    last week shares most of its forward window with today."""
+    d = _dt.date(2026, 9, 3)
+    r = ilc.get_flow_analogues(d, "NIFTY", 25, purge=5)
+    m = pd.to_datetime(r["matches"]["date"])
+    assert (pd.Timestamp(d) - m).dt.days.min() > 7, \
+        "a purged lookup must not return a match from the last few sessions"
+    loose = ilc.get_flow_analogues(d, "NIFTY", 25, purge=0)
+    assert len(loose["matches"]) == 25, "purge=0 must still return k matches"
+
+
+def test_k_sensitivity_is_published_so_an_unstable_number_cannot_hide():
+    """k=25 is a choice. On 3 Sep 2026 the next-day mean ran -0.095% at k=10 and
+    +0.149% at k=40 — a SIGN flip — so the sweep has to travel with the answer."""
+    r = ilc.get_flow_analogues(_dt.date(2026, 9, 3), "NIFTY", 25)
+    sw = r["summary"]["k_sweep"]
+    assert set(sw) >= {10, 25, 60}, "the k sweep must span the plausible range"
+    for h in ("d1", "d5"):
+        lo, hi = r["summary"][h]["k_range"]
+        assert lo <= r["summary"][h]["mean"] <= hi, "the point estimate must sit in its own range"
+        assert isinstance(r["summary"][h]["k_sign_flips"], bool)
+    assert r["summary"]["d1"]["k_sign_flips"] is True, (
+        "3 Sep 2026 is the worked example of an unstable horizon; if this ever "
+        "goes False the sweep has stopped detecting instability")
+
+
+def test_net_score_falls_back_to_equal_weight_on_unknown_labels():
+    """An unrecognised bucket label used to be dropped silently, rendering a blank
+    score with no explanation. An approximate blend beats a mystery blank."""
+    d = ilc.IndexLargeCap(trade_date=None, fno_symbol="X", display="x")
+    d.rows = [ilc.BucketRow(label="Mega caps", n_members=10, n_present=10, deliv_z=2.0),
+              ilc.BucketRow(label="The rest", n_members=40, n_present=40, deliv_z=-2.0)]
+    assert d.net_score == pytest.approx(0.0), "unknown labels must still produce a score"
+
+
+def test_flow_state_matrix_query_is_fast_enough_for_an_eager_expander():
+    """Streamlit evaluates expander BODIES eagerly, and this one sits in an
+    expander. The pandas-merge version cost 19.8s of a 20.2s panel render."""
+    import time
+    t = time.time()
+    Z, _ = ilc._flow_state_matrix("NIFTY", _dt.date(2026, 9, 3))
+    el = time.time() - t
+    assert not Z.empty
+    assert el < 8.0, f"flow state matrix took {el:.1f}s — the panel renders it eagerly"

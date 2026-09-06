@@ -224,13 +224,20 @@ class IndexLargeCap:
         the walk-forward half is worse than the in-sample half (46.3% next-day hit
         after 2024-09). The top-10-only variant hits 44.6%, BELOW a coin flip.
         """
-        parts = [(r.flow_score, _BUCKET_WEIGHT.get(r.label))
-                 for r in self.rows]
-        parts = [(v, w) for v, w in parts if v is not None and w]
-        if not parts:
+        scored = [r for r in self.rows if r.flow_score is not None]
+        if not scored:
             return None
-        tw = sum(w for _, w in parts)
-        return float(sum(v * w for v, w in parts) / tw) if tw else None
+        # An unknown bucket label used to be dropped SILENTLY (weight None), so a
+        # future index whose buckets are not named "Top 10"/"Next 10"/"Rest 30"
+        # would render a blank score with no explanation. Fall back to equal
+        # weighting instead: an approximate blend beats a mystery blank.
+        if any(r.label not in _BUCKET_WEIGHT for r in scored):
+            return float(np.mean([r.flow_score for r in scored]))
+        tw = sum(_BUCKET_WEIGHT[r.label] for r in scored)
+        if not tw:
+            return None
+        return float(sum(r.flow_score * _BUCKET_WEIGHT[r.label]
+                         for r in scored) / tw)
 
     @property
     def state(self) -> Optional[str]:
@@ -753,23 +760,43 @@ def _flow_state_matrix(fno_symbol: str, as_of: date,
           AND close_price > 0 AND prev_close > 0
           AND trade_date >= ? AND trade_date <= ?
     """, [*all_syms, start, as_of])
-    fno = query_dataframe(f"""
-        SELECT trade_date, symbol, expiry_date, instrument, option_type,
-               SUM(open_interest) AS oi
-        FROM fno_bhavcopy
-        WHERE instrument IN ('FUTSTK','OPTSTK') AND open_interest > 0
-          AND symbol IN ({ph}) AND expiry_date > trade_date
-          AND trade_date >= ? AND trade_date <= ?
-        GROUP BY 1,2,3,4,5
+    # Day-over-day forward OI in SQL, NOT ~1,100 per-day pandas merges. The merge
+    # version cost 19.8s of a 20.2s panel render; this is the same arithmetic in
+    # about a second.
+    #
+    # Same-expiry matching is BY CONSTRUCTION here: LAG pairs each contract with
+    # ITSELF on its prior session, so a position migrating from the near contract
+    # into the next nets to zero rather than reading as an unwind. A contract with
+    # no prior row (poi NULL) drops out of BOTH sums, which keeps the two days over
+    # an identical contract set -- the property the merge version got by joining.
+    oi = query_dataframe(f"""
+        WITH f AS (
+            SELECT trade_date, symbol, expiry_date, instrument, option_type,
+                   SUM(open_interest) AS oi
+            FROM fno_bhavcopy
+            WHERE instrument IN ('FUTSTK','OPTSTK') AND open_interest > 0
+              AND symbol IN ({ph}) AND expiry_date > trade_date
+              AND trade_date >= ? AND trade_date <= ?
+            GROUP BY 1,2,3,4,5
+        ), l AS (
+            SELECT *, LAG(oi) OVER (PARTITION BY symbol, expiry_date, instrument,
+                                                 option_type
+                                    ORDER BY trade_date) AS poi
+            FROM f
+        )
+        SELECT trade_date, symbol, instrument, option_type,
+               SUM(oi) AS oi, SUM(poi) AS poi
+        FROM l WHERE poi > 0
+        GROUP BY 1,2,3,4
     """, [*all_syms, start, as_of])
     idx = query_dataframe("""
         SELECT trade_date, pct_chg FROM index_data
         WHERE index_name = ? AND trade_date >= ? AND trade_date <= ?
     """, [meta["index_name"], start, as_of])
-    if cash.empty or fno.empty or idx.empty:
+    if cash.empty or oi.empty or idx.empty:
         return pd.DataFrame(), pd.DataFrame()
 
-    for df in (cash, fno, idx):
+    for df in (cash, oi, idx):
         df["trade_date"] = pd.to_datetime(df["trade_date"])
     cash = cash[cash["r"].abs() < 40]
     R = cash.pivot_table("r", "trade_date", "symbol").sort_index()
@@ -779,33 +806,14 @@ def _flow_state_matrix(fno_symbol: str, as_of: date,
         "SELECT DISTINCT trade_date FROM fno_bhavcopy WHERE instrument='FUTSTK'"
         " AND expiry_date = trade_date AND trade_date >= ?",
         [start])["trade_date"]))
-
-    def _fwd_oi(sub, extra=None):
-        days = sorted(sub["trade_date"].unique())
-        g = dict(tuple(sub.groupby("trade_date")))
-        keys = ["symbol", "expiry_date"] + (extra or [])
-        grp = ["symbol"] + (extra or [])
-        out = []
-        for dd, pp in zip(days[1:], days[:-1]):
-            if dd in settle:
-                continue
-            m = g[dd].merge(g[pp], on=keys, suffixes=("", "_p"))
-            if m.empty:
-                continue
-            res = m.groupby(grp)[["oi", "oi_p"]].sum()
-            res = res[res["oi_p"] > 0]
-            res["pct"] = ((res["oi"] - res["oi_p"]) / res["oi_p"] * 100).clip(-50, 50)
-            res["trade_date"] = dd
-            out.append(res.reset_index())
-        return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
-
-    F = _fwd_oi(fno[fno["instrument"] == "FUTSTK"])
-    O = _fwd_oi(fno[fno["instrument"] == "OPTSTK"], extra=["option_type"])
-    if F.empty or O.empty:
+    oi = oi[~oi["trade_date"].isin(settle)].copy()
+    oi["pct"] = ((oi["oi"] - oi["poi"]) / oi["poi"] * 100).clip(-50, 50)
+    FOI = oi[oi["instrument"] == "FUTSTK"].pivot_table("pct", "trade_date", "symbol")
+    _o = oi[oi["instrument"] == "OPTSTK"]
+    CE = _o[_o["option_type"] == "CE"].pivot_table("pct", "trade_date", "symbol")
+    PE = _o[_o["option_type"] == "PE"].pivot_table("pct", "trade_date", "symbol")
+    if FOI.empty or CE.empty or PE.empty:
         return pd.DataFrame(), pd.DataFrame()
-    FOI = F.pivot_table("pct", "trade_date", "symbol")
-    CE = O[O["option_type"] == "CE"].pivot_table("pct", "trade_date", "symbol")
-    PE = O[O["option_type"] == "PE"].pivot_table("pct", "trade_date", "symbol")
 
     raw = {}
     for bn, mem in buckets.items():
@@ -837,7 +845,7 @@ def _flow_state_matrix(fno_symbol: str, as_of: date,
 
 
 def get_flow_analogues(trade_date: date, fno_symbol: str = "NIFTY",
-                       k: int = 25) -> dict:
+                       k: int = 25, purge: int = 5) -> dict:
     """The k past sessions whose flow state most resembles `trade_date`, and what
     NIFTY did after them.
 
@@ -865,7 +873,7 @@ def get_flow_analogues(trade_date: date, fno_symbol: str = "NIFTY",
     so this is not simply the curse of dimensionality -- the neighbours really are
     near. They just do not share a future.
     """
-    out = {"ok": False, "note": "", "k": k,
+    out = {"ok": False, "note": "", "k": k, "purge": purge,
            "matches": pd.DataFrame(), "summary": {}}
     Z, fwd = _flow_state_matrix(fno_symbol, trade_date)
     if Z.empty:
@@ -877,8 +885,18 @@ def get_flow_analogues(trade_date: date, fno_symbol: str = "NIFTY",
                        "futures and options legs need a non-settlement session "
                        "with a prior session to compare against.")
         return out
-    # strictly the PAST: a neighbour may never be today or later
+    # Strictly the PAST, and then a PURGE GAP on top of it.
+    #
+    # The audit backtest purged neighbours within `horizon` sessions of the target;
+    # the live lookup originally did not, and the asymmetry mattered: measured over
+    # 126 sampled sessions, 34.1% had at least one of their 25 "analogues" within
+    # 10 CALENDAR days, and the closest match was 1 day away at the extreme. A
+    # neighbour from last week shares most of its forward window with this one, so
+    # it is autocorrelation wearing the costume of an analogue. Same rule here as
+    # in the backtest.
     past = Z.index[Z.index < ts]
+    if purge > 0 and len(past) > purge:
+        past = past[:-purge]
     if len(past) < 60:
         out["note"] = "Fewer than 60 prior sessions carry a flow state."
         return out
@@ -907,4 +925,23 @@ def get_flow_analogues(trade_date: date, fno_symbol: str = "NIFTY",
     out["summary"]["match_quality"] = dict(
         kth=float(dist.loc[sel].max()), median_random=med,
         ratio=float(dist.loc[sel].max() / med) if med else None)
+    # K-SENSITIVITY. k=25 is a choice, not a measurement, and the headline moves
+    # with it: on 3 Sep 2026 the next-day mean ran -0.095% at k=10 and +0.149% at
+    # k=40, flipping SIGN, while "up %" swung 48-60%. Publishing the sweep is the
+    # only honest way to show a single number that is not stable in its own
+    # parameter -- the panel renders the RANGE, not just the k=25 point.
+    sweep = {}
+    for kk in (10, 15, 25, 40, 60):
+        if kk > len(dist):
+            continue
+        ss = dist.index[:kk]
+        sweep[kk] = {h: dict(
+            mean=float(fwd.loc[ss, h].dropna().mean()),
+            up=float((fwd.loc[ss, h].dropna() > 0).mean() * 100))
+            for h in ("d1", "d5")}
+    out["summary"]["k_sweep"] = sweep
+    for h in ("d1", "d5"):
+        ms = [v[h]["mean"] for v in sweep.values()]
+        out["summary"][h]["k_range"] = (min(ms), max(ms))
+        out["summary"][h]["k_sign_flips"] = bool(min(ms) < 0 < max(ms))
     return out
