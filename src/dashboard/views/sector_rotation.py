@@ -6512,91 +6512,113 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
         "The top-10-only variant hits **44.6%**, *below a coin flip*. Read this "
         "block as **what positioning is doing**, never as where the index is going.")
 
-    # ── historical match: same numbers, what NIFTY did next ─────────────────
+    # ── historical match: the actual sessions, and what NIFTY did next ──────
     st.markdown("##### When these numbers occurred before — what NIFTY did next")
     _fa = cached_flow_analogues(selected_date, "NIFTY", 25)
-    _ba = cached_bucket_analogues(selected_date, "NIFTY", 25)
     if not _fa.get("ok"):
         st.info(_fa.get("note") or "No historical match available.")
     else:
         _spot = _fa.get("spot")
-        _rows = []
+        _m = _fa["matches"].copy()
 
-        def _add(label, blk, scope):
-            for h, hl in (("d1", "Next day"), ("d5", "Next 5 sessions")):
-                v = blk.get(h)
-                if not v:
-                    continue
-                kr = v.get("k_range")
-                _rows.append({
-                    "Matched on": label, "Horizon": hl, "Matches": v["n"],
-                    "Avg %": round(v["mean"], 2),
-                    "Avg points": None if v.get("mean_pts") is None
-                                  else round(v["mean_pts"]),
-                    "Up %": round(v["up"], 0),
-                    "Base up %": round(v["base_up"], 0),
-                    "Best": None if v.get("best_pts") is None else round(v["best_pts"]),
-                    "Worst": None if v.get("worst_pts") is None else round(v["worst_pts"]),
-                    "Range across k": ("-" if not kr
-                                       else f"{kr[0]:+.2f}% to {kr[1]:+.2f}%"
-                                            + (" !" if v.get("k_sign_flips") else "")),
-                    "_scope": scope})
+        def _trip(row, leg):
+            """Top / Next / Rest for one leg, as one compact cell."""
+            return " · ".join(
+                f"{row[f'{b} {leg}']:+.2f}" for b in ("Top 10", "Next 10", "Rest 30"))
 
-        _add("All 3 buckets", _fa["summary"], 0)
-        if _ba.get("ok"):
-            for _bn, _blk in _ba["buckets"].items():
-                _add(_bn + " only", _blk, 1)
-        _df = pd.DataFrame(_rows).drop(columns=["_scope"])
-        st.dataframe(_df, hide_index=True, use_container_width=True,
-                     column_config={
-                         "Matched on": st.column_config.TextColumn(
-                             "Matched on",
-                             help="Which legs had to look alike. 'All 3 buckets' "
-                                  "needs all nine numbers to line up; a single "
-                                  "bucket needs only its own delivery, futures and "
-                                  "options."),
-                         "Avg points": st.column_config.NumberColumn(
-                             "Avg points", format="%d",
-                             help="The average % move applied to TODAY'S level"
-                                  + (f" ({_spot:,.0f})" if _spot else "")
-                                  + ". Nifty ran ~17,000 in 2022 and ~23,900 now, "
-                                    "so a raw historical point move is not "
-                                    "comparable across the window."),
-                         "Best": st.column_config.NumberColumn(
-                             "Best", format="%d",
-                             help="Best single outcome among the matches, in points "
-                                  "on today's level."),
-                         "Worst": st.column_config.NumberColumn("Worst", format="%d"),
-                         "Base up %": st.column_config.TextColumn(
-                             "Base up %",
-                             help="How often NIFTY rose over the same horizon across "
-                                  "ALL sessions. The match only means something if "
-                                  "'Up %' departs from this."),
-                         "Range across k": st.column_config.TextColumn(
-                             "Range across k",
-                             help="How the average moves as the match list is cut at "
-                                  "k = 10 to 60. A '!' marks a horizon that changes "
-                                  "SIGN — there the point estimate is an artifact of "
-                                  "where the list was cut."),
-                     })
+        def _opt_word(v):
+            return "call" if v < -0.25 else "put" if v > 0.25 else "bal"
+
+        def _optrip(row):
+            return " · ".join(
+                _opt_word(row[f"{b} options"]) for b in ("Top 10", "Next 10", "Rest 30"))
+
+        _today = pd.Series(_fa["today"])
+        _disp = [{
+            "Session": f"{selected_date:%d %b %Y}  ← today",
+            "Alike": None,
+            "Delivery z": _trip(_today, "delivery"),
+            "Futures OI %": _trip(_today, "futures"),
+            "Call vs put": _optrip(_today),
+            "Next day %": None, "Next day pts": None,
+            "Next 5 sessions %": None, "Next 5d pts": None,
+        }]
+        _far = float(_m["distance"].max()) or 1.0
+        for _, r in _m.iterrows():
+            _disp.append({
+                "Session": pd.Timestamp(r["date"]).strftime("%d %b %Y"),
+                "Alike": round(100 * (1 - r["distance"] / (_far * 1.15)), 0),
+                "Delivery z": _trip(r, "delivery"),
+                "Futures OI %": _trip(r, "futures"),
+                "Call vs put": _optrip(r),
+                "Next day %": round(r["d1"], 2),
+                "Next day pts": None if pd.isna(r.get("d1_pts")) else round(r["d1_pts"]),
+                "Next 5 sessions %": None if pd.isna(r["d5"]) else round(r["d5"], 2),
+                "Next 5d pts": None if pd.isna(r.get("d5_pts")) else round(r["d5_pts"]),
+            })
+        st.dataframe(
+            pd.DataFrame(_disp), hide_index=True, use_container_width=True,
+            column_config={
+                "Alike": st.column_config.ProgressColumn(
+                    "Alike", format="%d%%", min_value=0, max_value=100,
+                    help="How closely that session's nine flow numbers matched "
+                         "today's. 100% would be identical."),
+                "Delivery z": st.column_config.TextColumn(
+                    "Delivery z  (T · N · R)",
+                    help="Top 10 · Next 10 · Rest 30, each against its own "
+                         "100-day normal. Compare the row to the today row."),
+                "Futures OI %": st.column_config.TextColumn(
+                    "Futures OI %  (T · N · R)",
+                    help="Signed futures pressure per bucket: total forward OI "
+                         "change against the stocks' own price direction."),
+                "Call vs put": st.column_config.TextColumn(
+                    "Call vs put  (T · N · R)",
+                    help="Which option side built faster. call = call side "
+                         "heavier, put = put side heavier, bal = balanced."),
+                "Next day pts": st.column_config.NumberColumn(
+                    "Next day pts", format="%d",
+                    help="That session's % move applied to TODAY'S level"
+                         + (f" ({_spot:,.0f})" if _spot else "")
+                         + ". Nifty ran ~17,000 in 2022 and ~23,900 now, so raw "
+                           "historical points are not comparable across the window."),
+                "Next 5d pts": st.column_config.NumberColumn("Next 5d pts", format="%d"),
+            })
+        _s1, _s5 = _fa["summary"]["d1"], _fa["summary"]["d5"]
+        _up1, _up5 = int(round(_s1["up"] * _s1["n"] / 100)), int(round(_s5["up"] * _s5["n"] / 100))
+        # Built in pieces on purpose: an inline `... if cond else "."` here binds
+        # to the WHOLE concatenation, so a missing index close collapsed the entire
+        # sentence to a single full stop.
+        _txt = (
+            f"**Of these {_s1['n']} sessions: {_up1} rose the next day "
+            f"({_s1['up']:.0f}%, base {_s1['base_up']:.0f}%) and {_up5} rose over "
+            f"the next 5 ({_s5['up']:.0f}%, base {_s5['base_up']:.0f}%).** "
+            f"Next day averaged {_s1['mean']:+.2f}%")
+        if _s1.get("mean_pts") is not None:
+            _txt += f" ({_s1['mean_pts']:+,.0f} pts)"
+        _txt += f", the week {_s5['mean']:+.2f}%"
+        if _s5.get("mean_pts") is not None:
+            _txt += f" ({_s5['mean_pts']:+,.0f} pts)"
+        _txt += "."
+        if _s5.get("best_pts") is not None and _s5.get("worst_pts") is not None:
+            _txt += (f" Range on the week: {_s5['worst_pts']:+,.0f} to "
+                     f"{_s5['best_pts']:+,.0f} pts.")
+        st.markdown(_txt)
         _mq = _fa["summary"]["match_quality"]
         st.caption(
-            f"Matched against every session back to 2022, using only days BEFORE "
-            f"{selected_date:%d %b %Y} and skipping the last {_fa['purge']} sessions "
+            f"Every session back to 2022, using only days BEFORE "
+            f"{selected_date:%d %b %Y} and skipping the last {_fa['purge']} "
             f"(a neighbour from last week shares most of its forward window with "
             f"this one). The 25th match sits at distance {_mq['kth']:.2f} against "
-            f"{_mq['median_random']:.2f} for a typical day, so these are genuinely "
-            f"the closest states on record.")
+            f"{_mq['median_random']:.2f} for a typical day.")
         st.error(
-            "**Read the Best/Worst columns, not the average.** Measured on 947 "
-            "sessions walk-forward: |mean(25 NEAREST) - actual| = **1.444%** "
-            "against |mean(25 FARTHEST) - actual| = **1.462%** - the most similar "
-            "days forecast NIFTY no better than the *least* similar ones. "
-            "k nearest vs k RANDOM past days is 54.5% vs 54.3%, and beside the "
-            "index's own close-strength the match dies (t +0.67 vs +2.78). "
-            "Single-bucket matching does not rescue it either (TOP10-only: IC "
-            "-0.008, 50.0% hit at 1 day). These are real analogues with a real "
-            "spread and no predictive content.")
+            "**Read the spread, not the average.** Measured on 947 sessions "
+            "walk-forward: |mean(25 NEAREST) - actual| = **1.444%** against "
+            "|mean(25 FARTHEST) - actual| = **1.462%** - the most similar days "
+            "forecast NIFTY no better than the *least* similar ones. k nearest vs "
+            "k RANDOM past days is 54.5% vs 54.3%, and beside the index's own "
+            "close-strength the match dies (t +0.67 vs +2.78). Matching a single "
+            "bucket does not rescue it (TOP10-only: IC -0.008, 50.0% hit at 1 "
+            "day). Real analogues, real spread, no predictive content.")
 
     # ── state base rates ─────────────────────────────────────────────────────
     st.markdown("##### What has followed this state, historically")

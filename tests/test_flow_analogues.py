@@ -158,3 +158,39 @@ def test_bucket_analogues_match_each_bucket_on_its_own_three_legs():
 def test_bucket_analogue_docstring_records_that_narrowing_does_not_help():
     doc = ilc.get_bucket_analogues.__doc__ or ""
     assert "-0.008" in doc and "50.0%" in doc, "the TOP10-only null must stay recorded"
+
+
+# ── the session list the panel actually renders ──────────────────────────────
+
+def test_matches_carry_the_raw_legs_so_a_match_is_inspectable():
+    """The panel shows each matched session's own delivery z / futures / options
+    numbers beside today's, so the reader can SEE the match rather than trusting
+    a standardised distance."""
+    r = ilc.get_flow_analogues(_dt.date(2026, 9, 4), "NIFTY", 25)
+    assert len(r["dims"]) == 9
+    for b in ("Top 10", "Next 10", "Rest 30"):
+        for leg in ("delivery", "futures", "options"):
+            col = f"{b} {leg}"
+            assert col in r["dims"], f"{col} missing from dims"
+            assert col in r["matches"].columns, f"{col} missing from matches"
+            assert col in r["today"], f"{col} missing from today"
+    assert r["matches"][r["dims"]].notna().all().all()
+
+
+def test_nearest_match_really_is_closer_in_the_raw_numbers_too():
+    """Distance is computed on standardised legs. Sanity-check it agrees with the
+    raw numbers: the closest match must sit nearer to today than the farthest."""
+    r = ilc.get_flow_analogues(_dt.date(2026, 9, 4), "NIFTY", 25)
+    m, t = r["matches"], pd.Series(r["today"])
+    first = (m.iloc[0][r["dims"]].astype(float) - t[r["dims"]]).abs().sum()
+    last = (m.iloc[-1][r["dims"]].astype(float) - t[r["dims"]]).abs().sum()
+    assert first < last, "the top row is not actually the most alike"
+
+
+def test_flow_state_matrix_with_raw_returns_three_aligned_frames():
+    Z, fwd, RAW = ilc._flow_state_matrix("NIFTY", _dt.date(2026, 9, 4), with_raw=True)
+    assert not Z.empty and Z.index.equals(RAW.index) and Z.index.equals(fwd.index)
+    assert list(Z.columns) == list(RAW.columns)
+    # and the 2-tuple form still works for every existing caller
+    z2, f2 = ilc._flow_state_matrix("NIFTY", _dt.date(2026, 9, 4))
+    assert z2.shape == Z.shape

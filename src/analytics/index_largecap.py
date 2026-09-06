@@ -731,8 +731,8 @@ def get_state_base_rates(fno_symbol: str = "NIFTY", years: int = 5,
 _Z_WIN, _Z_MIN = 250, 150
 
 
-def _flow_state_matrix(fno_symbol: str, as_of: date,
-                       years: int = 5) -> tuple:
+def _flow_state_matrix(fno_symbol: str, as_of: date, years: int = 5,
+                       with_raw: bool = False) -> tuple:
     """Causal 9-dim flow state per session, plus the index's forward returns.
 
     Returns (Z, fwd) indexed by trade_date. Z is standardised against each dim's
@@ -745,9 +745,15 @@ def _flow_state_matrix(fno_symbol: str, as_of: date,
     qualifies -- every z came back NaN and the state matrix was silently EMPTY,
     while the gap-free delivery legs looked perfectly healthy.
     """
+    def _empty():
+        # every early exit has to honour with_raw, or the 3-tuple caller unpacks
+        # a 2-tuple and dies on an unknown index / an empty table
+        e = pd.DataFrame()
+        return (e, e, e) if with_raw else (e, e)
+
     meta = INDEX_BUCKETS.get(fno_symbol)
     if meta is None:
-        return pd.DataFrame(), pd.DataFrame()
+        return _empty()
     buckets = meta["buckets"]
     all_syms = tuple(s for b in buckets.values() for s in b)
     ph = ", ".join("?" * len(all_syms))
@@ -794,7 +800,7 @@ def _flow_state_matrix(fno_symbol: str, as_of: date,
         WHERE index_name = ? AND trade_date >= ? AND trade_date <= ?
     """, [meta["index_name"], start, as_of])
     if cash.empty or oi.empty or idx.empty:
-        return pd.DataFrame(), pd.DataFrame()
+        return _empty()
 
     for df in (cash, oi, idx):
         df["trade_date"] = pd.to_datetime(df["trade_date"])
@@ -813,7 +819,7 @@ def _flow_state_matrix(fno_symbol: str, as_of: date,
     CE = _o[_o["option_type"] == "CE"].pivot_table("pct", "trade_date", "symbol")
     PE = _o[_o["option_type"] == "PE"].pivot_table("pct", "trade_date", "symbol")
     if FOI.empty or CE.empty or PE.empty:
-        return pd.DataFrame(), pd.DataFrame()
+        return _empty()
 
     raw = {}
     for bn, mem in buckets.items():
@@ -841,6 +847,11 @@ def _flow_state_matrix(fno_symbol: str, as_of: date,
         "d5": np.expm1(lg.iloc[::-1].rolling(5).sum().iloc[::-1].shift(-1)) * 100.0,
     })
     ix = Z.index.intersection(fwd.index)
+    if with_raw:
+        # RAW legs as well: the panel shows the actual delivery z / OI %% numbers
+        # for each matched session so the reader can SEE that it matched, rather
+        # than trusting a standardised distance.
+        return Z.reindex(ix), fwd.reindex(ix), X.reindex(ix)
     return Z.reindex(ix), fwd.reindex(ix)
 
 
@@ -875,7 +886,7 @@ def get_flow_analogues(trade_date: date, fno_symbol: str = "NIFTY",
     """
     out = {"ok": False, "note": "", "k": k, "purge": purge, "spot": None,
            "matches": pd.DataFrame(), "summary": {}}
-    Z, fwd = _flow_state_matrix(fno_symbol, trade_date)
+    Z, fwd, RAW = _flow_state_matrix(fno_symbol, trade_date, with_raw=True)
     if Z.empty:
         out["note"] = "Not enough history to build the flow state."
         return out
@@ -909,6 +920,11 @@ def get_flow_analogues(trade_date: date, fno_symbol: str = "NIFTY",
         "d1": fwd.loc[sel, "d1"].values,
         "d5": fwd.loc[sel, "d5"].values,
     })
+    # the actual numbers on each matched session, so the match is inspectable
+    for c in RAW.columns:
+        out["matches"][c] = RAW.loc[sel, c].values
+    out["today"] = {c: float(RAW.loc[ts, c]) for c in RAW.columns}
+    out["dims"] = list(RAW.columns)
     out["ok"] = True
     out["spot"] = _index_close(INDEX_BUCKETS[fno_symbol]["index_name"], trade_date)
     _sp = out["spot"]
