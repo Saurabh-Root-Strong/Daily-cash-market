@@ -74,6 +74,7 @@ from src.data.repository import query_dataframe
 __all__ = [
     "get_index_largecap", "IndexLargeCap", "BucketRow",
     "INDEX_BUCKETS", "get_concentration_trend",
+    "get_state_base_rates", "get_flow_analogues",
 ]
 
 # ── Bucket membership ─────────────────────────────────────────────────────────
@@ -716,3 +717,194 @@ def get_state_base_rates(fno_symbol: str = "NIFTY", years: int = 5,
         d5_bps=round(k["d5"].mean() * 100, 1),
         d5_up=round((k["d5"] > 0).mean() * 100, 1)))
     return pd.DataFrame(rows)
+
+
+# ── flow analogues ───────────────────────────────────────────────────────────
+
+_Z_WIN, _Z_MIN = 250, 150
+
+
+def _flow_state_matrix(fno_symbol: str, as_of: date,
+                       years: int = 5) -> tuple:
+    """Causal 9-dim flow state per session, plus the index's forward returns.
+
+    Returns (Z, fwd) indexed by trade_date. Z is standardised against each dim's
+    OWN trailing 250-session mean/sd, SHIFTED, so day t never sees itself.
+
+    min_periods on those rolling stats is load-bearing, not a default. The futures
+    and options legs are absent on every settlement session (forward OI jumps
+    mechanically there), which punches ~5% holes into those series. pandas
+    defaults min_periods to the window, so a 250-row window holding ~12 gaps NEVER
+    qualifies -- every z came back NaN and the state matrix was silently EMPTY,
+    while the gap-free delivery legs looked perfectly healthy.
+    """
+    meta = INDEX_BUCKETS.get(fno_symbol)
+    if meta is None:
+        return pd.DataFrame(), pd.DataFrame()
+    buckets = meta["buckets"]
+    all_syms = tuple(s for b in buckets.values() for s in b)
+    ph = ", ".join("?" * len(all_syms))
+    start = as_of - timedelta(days=365 * years + 420)
+
+    cash = query_dataframe(f"""
+        SELECT trade_date, symbol, deliv_per,
+               (close_price - prev_close) / NULLIF(prev_close, 0) * 100 AS r
+        FROM daily_data WHERE symbol IN ({ph}) AND series IN ('EQ','SM','ST')
+          AND close_price > 0 AND prev_close > 0
+          AND trade_date >= ? AND trade_date <= ?
+    """, [*all_syms, start, as_of])
+    fno = query_dataframe(f"""
+        SELECT trade_date, symbol, expiry_date, instrument, option_type,
+               SUM(open_interest) AS oi
+        FROM fno_bhavcopy
+        WHERE instrument IN ('FUTSTK','OPTSTK') AND open_interest > 0
+          AND symbol IN ({ph}) AND expiry_date > trade_date
+          AND trade_date >= ? AND trade_date <= ?
+        GROUP BY 1,2,3,4,5
+    """, [*all_syms, start, as_of])
+    idx = query_dataframe("""
+        SELECT trade_date, pct_chg FROM index_data
+        WHERE index_name = ? AND trade_date >= ? AND trade_date <= ?
+    """, [meta["index_name"], start, as_of])
+    if cash.empty or fno.empty or idx.empty:
+        return pd.DataFrame(), pd.DataFrame()
+
+    for df in (cash, fno, idx):
+        df["trade_date"] = pd.to_datetime(df["trade_date"])
+    cash = cash[cash["r"].abs() < 40]
+    R = cash.pivot_table("r", "trade_date", "symbol").sort_index()
+    DL = cash.pivot_table("deliv_per", "trade_date", "symbol").sort_index()
+
+    settle = set(pd.to_datetime(query_dataframe(
+        "SELECT DISTINCT trade_date FROM fno_bhavcopy WHERE instrument='FUTSTK'"
+        " AND expiry_date = trade_date AND trade_date >= ?",
+        [start])["trade_date"]))
+
+    def _fwd_oi(sub, extra=None):
+        days = sorted(sub["trade_date"].unique())
+        g = dict(tuple(sub.groupby("trade_date")))
+        keys = ["symbol", "expiry_date"] + (extra or [])
+        grp = ["symbol"] + (extra or [])
+        out = []
+        for dd, pp in zip(days[1:], days[:-1]):
+            if dd in settle:
+                continue
+            m = g[dd].merge(g[pp], on=keys, suffixes=("", "_p"))
+            if m.empty:
+                continue
+            res = m.groupby(grp)[["oi", "oi_p"]].sum()
+            res = res[res["oi_p"] > 0]
+            res["pct"] = ((res["oi"] - res["oi_p"]) / res["oi_p"] * 100).clip(-50, 50)
+            res["trade_date"] = dd
+            out.append(res.reset_index())
+        return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
+
+    F = _fwd_oi(fno[fno["instrument"] == "FUTSTK"])
+    O = _fwd_oi(fno[fno["instrument"] == "OPTSTK"], extra=["option_type"])
+    if F.empty or O.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    FOI = F.pivot_table("pct", "trade_date", "symbol")
+    CE = O[O["option_type"] == "CE"].pivot_table("pct", "trade_date", "symbol")
+    PE = O[O["option_type"] == "PE"].pivot_table("pct", "trade_date", "symbol")
+
+    raw = {}
+    for bn, mem in buckets.items():
+        cols = [s for s in mem if s in R.columns]
+        sub = R[cols]
+        mu = DL[cols].rolling(_DELIV_BASE, min_periods=50).mean().shift(1)
+        sd = DL[cols].rolling(_DELIV_BASE, min_periods=50).std().shift(1)
+        raw[f"{bn} delivery"] = (((DL[cols] - mu) / sd.where(sd > 1e-9))
+                                 .replace([np.inf, -np.inf], np.nan).mean(axis=1))
+        raw[f"{bn} futures"] = (np.sign(sub) *
+                                FOI[[s for s in cols if s in FOI.columns]]
+                                .reindex(sub.index)).mean(axis=1)
+        raw[f"{bn} options"] = (
+            PE[[s for s in cols if s in PE.columns]].reindex(sub.index)
+            - CE[[s for s in cols if s in CE.columns]].reindex(sub.index)).mean(axis=1)
+    X = pd.DataFrame(raw).sort_index()
+    Z = ((X - X.rolling(_Z_WIN, min_periods=_Z_MIN).mean().shift(1)) /
+         X.rolling(_Z_WIN, min_periods=_Z_MIN).std().shift(1)
+         ).replace([np.inf, -np.inf], np.nan).dropna()
+
+    y = idx.set_index("trade_date")["pct_chg"].astype(float).sort_index()
+    lg = np.log1p(y / 100.0)
+    fwd = pd.DataFrame({
+        "d1": y.shift(-1),
+        "d5": np.expm1(lg.iloc[::-1].rolling(5).sum().iloc[::-1].shift(-1)) * 100.0,
+    })
+    ix = Z.index.intersection(fwd.index)
+    return Z.reindex(ix), fwd.reindex(ix)
+
+
+def get_flow_analogues(trade_date: date, fno_symbol: str = "NIFTY",
+                       k: int = 25) -> dict:
+    """The k past sessions whose flow state most resembles `trade_date`, and what
+    NIFTY did after them.
+
+    A DESCRIPTIVE LOOKUP. The matching is real and the outcomes are real; the
+    inference from one to the other is what does not hold.
+
+    AUDITED (scripts/nifty_flow_analogues.py, 947 sessions 2022-2026, walk-forward
+    with a purge gap of `horizon` sessions so a neighbour never shares forward days
+    with the day being predicted):
+      * The matching genuinely WORKS. The 25th-nearest neighbour sits at L1
+        distance 5.40 against 9.28 for two random days, and only 7.1% of random
+        pairs are closer. These are real analogues, not arbitrary days.
+      * AND IT BUYS NOTHING. |mean(25 NEAREST) - actual| = 1.444% against
+        |mean(25 FARTHEST) - actual| = 1.462%. The most similar days forecast the
+        outcome no better than the LEAST similar ones. That one comparison is the
+        whole verdict: similarity in this state space is not similarity in outcome.
+      * k nearest vs k RANDOM past days: 5d hit 54.5% vs 54.3% at k=50, and at
+        k=25 on 1d the RANDOM control WINS (51.2% vs 49.7%). No stability in k.
+      * No subspace rescues it -- 1-dim, 3-dim and 9-dim all null, and the best
+        cell (options-only, 5d, IC +0.074) flips to IC -0.013 at 1d.
+      * Recency does not help (last 250 / 500 sessions ~ all history).
+      * Beside the index's own close-strength the analogue dies: t +0.67 at 1d and
+        +0.21 at 5d, against CLR's +2.78.
+    The state space is effectively 5.6-dimensional (participation ratio 5.63 of 9),
+    so this is not simply the curse of dimensionality -- the neighbours really are
+    near. They just do not share a future.
+    """
+    out = {"ok": False, "note": "", "k": k,
+           "matches": pd.DataFrame(), "summary": {}}
+    Z, fwd = _flow_state_matrix(fno_symbol, trade_date)
+    if Z.empty:
+        out["note"] = "Not enough history to build the flow state."
+        return out
+    ts = pd.Timestamp(trade_date)
+    if ts not in Z.index:
+        out["note"] = (f"No usable flow state for {trade_date:%d %b %Y}. The "
+                       "futures and options legs need a non-settlement session "
+                       "with a prior session to compare against.")
+        return out
+    # strictly the PAST: a neighbour may never be today or later
+    past = Z.index[Z.index < ts]
+    if len(past) < 60:
+        out["note"] = "Fewer than 60 prior sessions carry a flow state."
+        return out
+    cur = Z.loc[ts]
+    dist = (Z.loc[past] - cur).abs().sum(axis=1).sort_values()
+    sel = dist.index[:k]
+    out["matches"] = pd.DataFrame({
+        "date": sel,
+        "distance": dist.loc[sel].values,
+        "d1": fwd.loc[sel, "d1"].values,
+        "d5": fwd.loc[sel, "d5"].values,
+    })
+    out["ok"] = True
+    base = fwd.loc[past]
+    for h in ("d1", "d5"):
+        v = out["matches"][h].dropna()
+        b = base[h].dropna()
+        out["summary"][h] = dict(
+            n=int(len(v)),
+            mean=float(v.mean()) if len(v) else None,
+            up=float((v > 0).mean() * 100) if len(v) else None,
+            base_mean=float(b.mean()), base_up=float((b > 0).mean() * 100),
+            best=float(v.max()) if len(v) else None,
+            worst=float(v.min()) if len(v) else None)
+    med = float(dist.median())
+    out["summary"]["match_quality"] = dict(
+        kth=float(dist.loc[sel].max()), median_random=med,
+        ratio=float(dist.loc[sel].max() / med) if med else None)
+    return out

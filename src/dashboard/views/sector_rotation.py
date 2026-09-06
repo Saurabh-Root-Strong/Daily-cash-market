@@ -6324,7 +6324,8 @@ def _ilc_chip(text: str, colour: str) -> str:
 def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
     from src.dashboard.cache.queries import (cached_index_largecap,
                                              cached_concentration_trend,
-                                             cached_state_base_rates)
+                                             cached_state_base_rates,
+                                             cached_flow_analogues)
     st.markdown(
         "Nifty is free-float **cap weighted**, so its 50 members do not move it "
         "equally. This panel splits the index into weight buckets and shows which "
@@ -6554,6 +6555,65 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
             "*not measurable here*, not as *real*. And the gap column's ordering "
             "is close-strength: control for CLR and the breadth signal goes to "
             "t=+0.35. Survivorship applies — this is today's 50 applied to history.")
+
+    # ── analogues: when the flow looked like this before ────────────────────
+    with st.expander("🔍 When the flow looked like today, what happened next?",
+                     expanded=False):
+        _an = cached_flow_analogues(selected_date, "NIFTY", 25)
+        if not _an.get("ok"):
+            st.info(_an.get("note") or "No flow analogues available.")
+        else:
+            mq = _an["summary"]["match_quality"]
+            st.caption(
+                f"The 25 past sessions whose 9-dimensional flow state (3 buckets x "
+                f"delivery / futures / options) is closest to this one. Matching is "
+                f"causal — only sessions BEFORE {selected_date:%d %b %Y} are "
+                f"eligible. The 25th match sits at distance {mq['kth']:.2f} against "
+                f"{mq['median_random']:.2f} for a typical pair, so these really are "
+                f"the near neighbours.")
+            cA, cB = st.columns(2)
+            for col, h, lab in ((cA, "d1", "Next session"),
+                                (cB, "d5", "Next 5 sessions")):
+                sm = _an["summary"][h]
+                col.metric(
+                    f"{lab} — analogue mean", f"{sm['mean']:+.2f}%",
+                    f"{sm['mean'] - sm['base_mean']:+.2f}pp vs all sessions",
+                    delta_color="off",
+                    help=f"Up {sm['up']:.0f}% of the 25 against a {sm['base_up']:.0f}% "
+                         f"base rate. Best {sm['best']:+.2f}%, worst "
+                         f"{sm['worst']:+.2f}% — the SPREAD is the point.")
+            _m = _an["matches"].copy()
+            _m["date"] = pd.to_datetime(_m["date"]).dt.strftime("%d %b %Y")
+            st.dataframe(
+                _m.rename(columns={"date": "Session", "distance": "Distance",
+                                   "d1": "Next day %", "d5": "Next 5 sessions %"}),
+                hide_index=True, use_container_width=True,
+                column_config={
+                    "Distance": st.column_config.NumberColumn("Distance", format="%.2f",
+                        help="L1 distance in standardised flow space. Smaller = "
+                             "more alike."),
+                    "Next day %": st.column_config.NumberColumn(format="%.2f"),
+                    "Next 5 sessions %": st.column_config.NumberColumn(format="%.2f")})
+            st.error(
+                "**These are genuine analogues and they do not predict - both "
+                "halves are measured.** `scripts/nifty_flow_analogues.py`, 947 "
+                "sessions, walk-forward with a purge gap so no neighbour shares "
+                "forward days with the day being scored:\n\n"
+                "- The matching **works**: the 25th neighbour sits at distance "
+                "5.40 against 9.28 for two random days, and only **7.1%** of "
+                "random pairs are closer.\n"
+                "- **And it buys nothing.** |mean(25 NEAREST) - actual| = "
+                "**1.444%** against |mean(25 FARTHEST) - actual| = **1.462%**. "
+                "The most similar days forecast the outcome no better than the "
+                "*least* similar ones.\n"
+                "- k nearest vs k **random** past days: 54.5% vs 54.3% at k=50, "
+                "and at k=25 next-day the random control *wins* (51.2% vs "
+                "49.7%).\n"
+                "- Beside close-strength the analogue dies (t +0.67 vs CLR "
+                "+2.78), no subspace rescues it, and recency does not help.\n\n"
+                "Read the **spread** between best and worst, not the mean. The "
+                "state space is effectively 5.6-dimensional, so the neighbours "
+                "really are near - they just do not share a future.")
 
     # ── the measured trend ───────────────────────────────────────────────────
     with st.expander("📈 How often does the index disagree with its own basket?",

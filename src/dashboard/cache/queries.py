@@ -777,3 +777,10 @@ def cached_state_base_rates(fno_symbol: str = "NIFTY", years: int = 5,
                             as_of: date | None = None) -> pd.DataFrame:
     from src.analytics.index_largecap import get_state_base_rates
     return get_state_base_rates(fno_symbol, years, as_of)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_flow_analogues(trade_date: date, fno_symbol: str = "NIFTY",
+                          k: int = 25) -> dict:
+    from src.analytics.index_largecap import get_flow_analogues
+    return get_flow_analogues(trade_date, fno_symbol, k)
