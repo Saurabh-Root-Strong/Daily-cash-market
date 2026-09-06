@@ -100,3 +100,61 @@ def test_flow_state_matrix_query_is_fast_enough_for_an_eager_expander():
     el = time.time() - t
     assert not Z.empty
     assert el < 8.0, f"flow state matrix took {el:.1f}s — the panel renders it eagerly"
+
+
+# ── points + per-bucket matching ─────────────────────────────────────────────
+
+def test_points_are_quoted_on_todays_level_not_the_analogue_date():
+    """NIFTY ran ~17,000 in 2022 and ~23,900 now. A raw historical point move is
+    not comparable across the window, so % is rescaled onto today's close."""
+    d = _dt.date(2026, 9, 4)
+    r = ilc.get_flow_analogues(d, "NIFTY", 25)
+    spot = r["spot"]
+    assert spot and 20000 < spot < 30000, f"implausible spot {spot}"
+    for h in ("d1", "d5"):
+        s = r["summary"][h]
+        assert s["mean_pts"] == pytest.approx(s["mean"] / 100 * spot)
+        assert s["best_pts"] == pytest.approx(s["best"] / 100 * spot)
+    m = r["matches"]
+    # compare only where the forward return exists; a match near the end of the
+    # sample can have a NaN horizon and NaN != NaN breaks a naive elementwise check
+    ok = m["d1"].notna()
+    assert ok.any()
+    import numpy as _np
+    assert _np.allclose(m.loc[ok, "d1_pts"], m.loc[ok, "d1"] / 100 * spot)
+
+
+def test_points_degrade_to_none_when_the_index_row_is_missing():
+    """index_data lagged daily_data by a session at least once this month. A
+    missing close must hide the points column, never render 0."""
+    import src.analytics.index_largecap as m
+    real = m._index_close
+    try:
+        m._index_close = lambda *a, **k: None
+        r = m.get_flow_analogues(_dt.date(2026, 9, 3), "NIFTY", 25)
+        assert r["ok"] and r["spot"] is None
+        assert r["summary"]["d1"]["mean_pts"] is None
+        assert r["summary"]["d1"]["mean"] is not None, "the % answer must survive"
+    finally:
+        m._index_close = real
+
+
+def test_bucket_analogues_match_each_bucket_on_its_own_three_legs():
+    r = ilc.get_bucket_analogues(_dt.date(2026, 9, 4), "NIFTY", 25)
+    assert r["ok"]
+    assert set(r["buckets"]) == {"Top 10", "Next 10", "Rest 30"}
+    for bn, blk in r["buckets"].items():
+        assert blk["n"] == 25
+        for h in ("d1", "d5"):
+            assert blk[h]["mean"] is not None
+            assert "k_range" in blk[h]
+    # matching on 3 legs must be LOOSER than on all 9, so the k-th neighbour is nearer
+    whole = ilc.get_flow_analogues(_dt.date(2026, 9, 4), "NIFTY", 25)
+    for bn, blk in r["buckets"].items():
+        assert blk["kth"] < whole["summary"]["match_quality"]["kth"], (
+            f"{bn}: a 3-dim match cannot be farther than the 9-dim one")
+
+
+def test_bucket_analogue_docstring_records_that_narrowing_does_not_help():
+    doc = ilc.get_bucket_analogues.__doc__ or ""
+    assert "-0.008" in doc and "50.0%" in doc, "the TOP10-only null must stay recorded"

@@ -6325,7 +6325,8 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
     from src.dashboard.cache.queries import (cached_index_largecap,
                                              cached_concentration_trend,
                                              cached_state_base_rates,
-                                             cached_flow_analogues)
+                                             cached_flow_analogues,
+                                             cached_bucket_analogues)
     st.markdown(
         "Nifty is free-float **cap weighted**, so its 50 members do not move it "
         "equally. This panel splits the index into weight buckets and shows which "
@@ -6510,6 +6511,92 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
         "and out of sample after Sep-2024 the next-day hit rate falls to **46.3%**. "
         "The top-10-only variant hits **44.6%**, *below a coin flip*. Read this "
         "block as **what positioning is doing**, never as where the index is going.")
+
+    # ── historical match: same numbers, what NIFTY did next ─────────────────
+    st.markdown("##### When these numbers occurred before — what NIFTY did next")
+    _fa = cached_flow_analogues(selected_date, "NIFTY", 25)
+    _ba = cached_bucket_analogues(selected_date, "NIFTY", 25)
+    if not _fa.get("ok"):
+        st.info(_fa.get("note") or "No historical match available.")
+    else:
+        _spot = _fa.get("spot")
+        _rows = []
+
+        def _add(label, blk, scope):
+            for h, hl in (("d1", "Next day"), ("d5", "Next 5 sessions")):
+                v = blk.get(h)
+                if not v:
+                    continue
+                kr = v.get("k_range")
+                _rows.append({
+                    "Matched on": label, "Horizon": hl, "Matches": v["n"],
+                    "Avg %": round(v["mean"], 2),
+                    "Avg points": None if v.get("mean_pts") is None
+                                  else round(v["mean_pts"]),
+                    "Up %": round(v["up"], 0),
+                    "Base up %": round(v["base_up"], 0),
+                    "Best": None if v.get("best_pts") is None else round(v["best_pts"]),
+                    "Worst": None if v.get("worst_pts") is None else round(v["worst_pts"]),
+                    "Range across k": ("-" if not kr
+                                       else f"{kr[0]:+.2f}% to {kr[1]:+.2f}%"
+                                            + (" !" if v.get("k_sign_flips") else "")),
+                    "_scope": scope})
+
+        _add("All 3 buckets", _fa["summary"], 0)
+        if _ba.get("ok"):
+            for _bn, _blk in _ba["buckets"].items():
+                _add(_bn + " only", _blk, 1)
+        _df = pd.DataFrame(_rows).drop(columns=["_scope"])
+        st.dataframe(_df, hide_index=True, use_container_width=True,
+                     column_config={
+                         "Matched on": st.column_config.TextColumn(
+                             "Matched on",
+                             help="Which legs had to look alike. 'All 3 buckets' "
+                                  "needs all nine numbers to line up; a single "
+                                  "bucket needs only its own delivery, futures and "
+                                  "options."),
+                         "Avg points": st.column_config.NumberColumn(
+                             "Avg points", format="%d",
+                             help="The average % move applied to TODAY'S level"
+                                  + (f" ({_spot:,.0f})" if _spot else "")
+                                  + ". Nifty ran ~17,000 in 2022 and ~23,900 now, "
+                                    "so a raw historical point move is not "
+                                    "comparable across the window."),
+                         "Best": st.column_config.NumberColumn(
+                             "Best", format="%d",
+                             help="Best single outcome among the matches, in points "
+                                  "on today's level."),
+                         "Worst": st.column_config.NumberColumn("Worst", format="%d"),
+                         "Base up %": st.column_config.TextColumn(
+                             "Base up %",
+                             help="How often NIFTY rose over the same horizon across "
+                                  "ALL sessions. The match only means something if "
+                                  "'Up %' departs from this."),
+                         "Range across k": st.column_config.TextColumn(
+                             "Range across k",
+                             help="How the average moves as the match list is cut at "
+                                  "k = 10 to 60. A '!' marks a horizon that changes "
+                                  "SIGN — there the point estimate is an artifact of "
+                                  "where the list was cut."),
+                     })
+        _mq = _fa["summary"]["match_quality"]
+        st.caption(
+            f"Matched against every session back to 2022, using only days BEFORE "
+            f"{selected_date:%d %b %Y} and skipping the last {_fa['purge']} sessions "
+            f"(a neighbour from last week shares most of its forward window with "
+            f"this one). The 25th match sits at distance {_mq['kth']:.2f} against "
+            f"{_mq['median_random']:.2f} for a typical day, so these are genuinely "
+            f"the closest states on record.")
+        st.error(
+            "**Read the Best/Worst columns, not the average.** Measured on 947 "
+            "sessions walk-forward: |mean(25 NEAREST) - actual| = **1.444%** "
+            "against |mean(25 FARTHEST) - actual| = **1.462%** - the most similar "
+            "days forecast NIFTY no better than the *least* similar ones. "
+            "k nearest vs k RANDOM past days is 54.5% vs 54.3%, and beside the "
+            "index's own close-strength the match dies (t +0.67 vs +2.78). "
+            "Single-bucket matching does not rescue it either (TOP10-only: IC "
+            "-0.008, 50.0% hit at 1 day). These are real analogues with a real "
+            "spread and no predictive content.")
 
     # ── state base rates ─────────────────────────────────────────────────────
     st.markdown("##### What has followed this state, historically")

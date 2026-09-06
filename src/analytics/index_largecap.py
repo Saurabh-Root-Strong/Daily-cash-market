@@ -74,7 +74,7 @@ from src.data.repository import query_dataframe
 __all__ = [
     "get_index_largecap", "IndexLargeCap", "BucketRow",
     "INDEX_BUCKETS", "get_concentration_trend",
-    "get_state_base_rates", "get_flow_analogues",
+    "get_state_base_rates", "get_flow_analogues", "get_bucket_analogues",
 ]
 
 # ── Bucket membership ─────────────────────────────────────────────────────────
@@ -873,7 +873,7 @@ def get_flow_analogues(trade_date: date, fno_symbol: str = "NIFTY",
     so this is not simply the curse of dimensionality -- the neighbours really are
     near. They just do not share a future.
     """
-    out = {"ok": False, "note": "", "k": k, "purge": purge,
+    out = {"ok": False, "note": "", "k": k, "purge": purge, "spot": None,
            "matches": pd.DataFrame(), "summary": {}}
     Z, fwd = _flow_state_matrix(fno_symbol, trade_date)
     if Z.empty:
@@ -910,6 +910,15 @@ def get_flow_analogues(trade_date: date, fno_symbol: str = "NIFTY",
         "d5": fwd.loc[sel, "d5"].values,
     })
     out["ok"] = True
+    out["spot"] = _index_close(INDEX_BUCKETS[fno_symbol]["index_name"], trade_date)
+    _sp = out["spot"]
+    # Points are quoted on TODAY's level, not the level that prevailed when the
+    # analogue happened: NIFTY ran ~17,000 in 2022 and ~23,900 now, so a raw
+    # historical point move is not comparable across the window.
+    _pts = (lambda x: (x / 100.0 * _sp) if _sp else None)
+    for c in ("d1", "d5"):
+        out["matches"][c + "_pts"] = (out["matches"][c] / 100.0 * _sp
+                                      if _sp else np.nan)
     base = fwd.loc[past]
     for h in ("d1", "d5"):
         v = out["matches"][h].dropna()
@@ -920,7 +929,11 @@ def get_flow_analogues(trade_date: date, fno_symbol: str = "NIFTY",
             up=float((v > 0).mean() * 100) if len(v) else None,
             base_mean=float(b.mean()), base_up=float((b > 0).mean() * 100),
             best=float(v.max()) if len(v) else None,
-            worst=float(v.min()) if len(v) else None)
+            worst=float(v.min()) if len(v) else None,
+            mean_pts=_pts(float(v.mean())) if len(v) else None,
+            best_pts=_pts(float(v.max())) if len(v) else None,
+            worst_pts=_pts(float(v.min())) if len(v) else None,
+            base_mean_pts=_pts(float(b.mean())))
     med = float(dist.median())
     out["summary"]["match_quality"] = dict(
         kth=float(dist.loc[sel].max()), median_random=med,
@@ -945,3 +958,114 @@ def get_flow_analogues(trade_date: date, fno_symbol: str = "NIFTY",
         out["summary"][h]["k_range"] = (min(ms), max(ms))
         out["summary"][h]["k_sign_flips"] = bool(min(ms) < 0 < max(ms))
     return out
+
+
+def _match_block(Z: pd.DataFrame, fwd: pd.DataFrame, ts, k: int, purge: int,
+                 cols: list, spot: Optional[float]) -> Optional[dict]:
+    """One nearest-neighbour match over `cols`, priced in % AND in index POINTS.
+
+    POINTS ARE QUOTED ON TODAY'S LEVEL, not on the level that prevailed when the
+    analogue happened. Nifty ran ~17,000 in 2022 and ~23,900 now, so a raw
+    historical point move is not comparable across the window and would make old
+    analogues look small. `pct/100 * spot` answers the question actually being
+    asked: if that same move repeated FROM HERE, how many points is it?
+    """
+    past = Z.index[Z.index < ts]
+    if purge > 0 and len(past) > purge:
+        past = past[:-purge]
+    if len(past) < 60:
+        return None
+    sub = Z[cols]
+    dist = (sub.loc[past] - sub.loc[ts]).abs().sum(axis=1).sort_values()
+    sel = dist.index[:k]
+    base = fwd.loc[past]
+    res = {"n": int(len(sel)), "kth": float(dist.loc[sel].max()),
+           "median_random": float(dist.median()), "dates": list(sel)}
+    for h in ("d1", "d5"):
+        v = fwd.loc[sel, h].dropna()
+        b = base[h].dropna()
+        if v.empty:
+            res[h] = None
+            continue
+        pts = (lambda x: (x / 100.0 * spot) if spot else None)
+        res[h] = dict(
+            n=int(len(v)), mean=float(v.mean()), up=float((v > 0).mean() * 100),
+            best=float(v.max()), worst=float(v.min()),
+            base_mean=float(b.mean()), base_up=float((b > 0).mean() * 100),
+            mean_pts=pts(float(v.mean())), best_pts=pts(float(v.max())),
+            worst_pts=pts(float(v.min())),
+            base_mean_pts=pts(float(b.mean())))
+    # k-sensitivity: k is a choice, and on at least one worked example the
+    # next-day mean flips sign between k=10 and k=40.
+    sweep = {}
+    for kk in (10, 15, 25, 40, 60):
+        if kk > len(dist):
+            continue
+        ss = dist.index[:kk]
+        sweep[kk] = {h: dict(mean=float(fwd.loc[ss, h].dropna().mean()),
+                             up=float((fwd.loc[ss, h].dropna() > 0).mean() * 100))
+                     for h in ("d1", "d5")}
+    res["k_sweep"] = sweep
+    for h in ("d1", "d5"):
+        if res.get(h) is None or not sweep:
+            continue
+        ms = [v[h]["mean"] for v in sweep.values()]
+        res[h]["k_range"] = (min(ms), max(ms))
+        res[h]["k_sign_flips"] = bool(min(ms) < 0 < max(ms))
+    return res
+
+
+def get_bucket_analogues(trade_date: date, fno_symbol: str = "NIFTY",
+                         k: int = 25, purge: int = 5) -> dict:
+    """Per-bucket analogues: match on ONE bucket's three legs at a time.
+
+    Answers "when the Top 10 looked like this, what did NIFTY do next?" separately
+    from the same question about the Next 10 and the Rest 30, instead of requiring
+    all nine dimensions to line up at once.
+
+    STILL DESCRIPTIVE. The 3-dim-per-bucket variant is one of the subspaces the
+    audit already priced (scripts/nifty_flow_analogues.py): TOP10-only matching
+    returns IC -0.008 and a 50.0% hit rate at 1 day, IC -0.025 and 49.7% at 5
+    days. Narrowing the state space does not rescue the null -- it was never the
+    dimensionality that was wrong, since the neighbours are demonstrably near
+    (25th match at distance 5.40 against 9.28 for a random pair) and still share
+    no future.
+    """
+    out = {"ok": False, "note": "", "k": k, "purge": purge,
+           "spot": None, "buckets": {}}
+    meta = INDEX_BUCKETS.get(fno_symbol)
+    if meta is None:
+        out["note"] = f"No bucket map for {fno_symbol}."
+        return out
+    Z, fwd = _flow_state_matrix(fno_symbol, trade_date)
+    if Z.empty:
+        out["note"] = "Not enough history to build the flow state."
+        return out
+    ts = pd.Timestamp(trade_date)
+    if ts not in Z.index:
+        out["note"] = (f"No usable flow state for {trade_date:%d %b %Y}. The "
+                       "futures and options legs need a non-settlement session "
+                       "with a prior session to compare against.")
+        return out
+    out["spot"] = _index_close(meta["index_name"], trade_date)
+    for bn in meta["buckets"]:
+        cols = [c for c in Z.columns if c.startswith(f"{bn} ")]
+        if len(cols) != 3:
+            continue
+        blk = _match_block(Z, fwd, ts, k, purge, cols, out["spot"])
+        if blk is not None:
+            out["buckets"][bn] = blk
+    out["ok"] = bool(out["buckets"])
+    if not out["ok"] and not out["note"]:
+        out["note"] = "Fewer than 60 prior sessions carry a flow state."
+    return out
+
+
+def _index_close(index_name: str, trade_date: date) -> Optional[float]:
+    """Closing level, used only to express historical % moves in today's points."""
+    df = query_dataframe(
+        "SELECT close_val FROM index_data WHERE index_name = ? AND trade_date = ?",
+        [index_name, trade_date])
+    if df.empty or pd.isna(df.iloc[0, 0]):
+        return None
+    return float(df.iloc[0, 0])

@@ -784,3 +784,10 @@ def cached_flow_analogues(trade_date: date, fno_symbol: str = "NIFTY",
                           k: int = 25) -> dict:
     from src.analytics.index_largecap import get_flow_analogues
     return get_flow_analogues(trade_date, fno_symbol, k)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_bucket_analogues(trade_date: date, fno_symbol: str = "NIFTY",
+                            k: int = 25) -> dict:
+    from src.analytics.index_largecap import get_bucket_analogues
+    return get_bucket_analogues(trade_date, fno_symbol, k)
