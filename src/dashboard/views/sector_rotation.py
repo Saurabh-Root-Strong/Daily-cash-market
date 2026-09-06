@@ -6419,6 +6419,38 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
         })
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True,
                  column_config={
+                     "Bucket": st.column_config.TextColumn(
+                         "Bucket",
+                         help="Which slice of the Nifty 50. Top 10 = the ten "
+                              "biggest by index weight (RELIANCE, HDFCBANK, "
+                              "ICICIBANK...). Next 10 = ranks 11-20. Rest 30 = "
+                              "everything else."),
+                     "Return %": st.column_config.NumberColumn(
+                         "Return %", format="%.2f",
+                         help="Plain average of the bucket's stock returns today. "
+                              "If 5 stocks rose 1% and 5 fell 1%, this is 0.00. "
+                              "It is NOT the bucket's contribution to the index."),
+                     "Adv": st.column_config.TextColumn(
+                         "Adv",
+                         help="How many of the bucket closed UP. '4/10' means 4 of "
+                              "the 10 rose and 6 fell."),
+                     "Adv %": st.column_config.NumberColumn(
+                         "Adv %", format="%.0f",
+                         help="The same thing as a percentage. 4 of 10 up = 40. "
+                              "Above 50 means most of the bucket rose."),
+                     "Delivery %": st.column_config.NumberColumn(
+                         "Delivery %", format="%.1f",
+                         help="Of all shares traded, the share actually DELIVERED "
+                              "to buyers instead of bought and sold the same day. "
+                              "65 means 65% was real buying, not intraday churn. "
+                              "Big stocks always sit higher, so compare using "
+                              "Deliv z, not this."),
+                     "Futures OI %": st.column_config.NumberColumn(
+                         "Futures OI %", format="%.2f",
+                         help="Change in the number of open futures contracts vs "
+                              "yesterday, averaged across the bucket. +2 means 2% "
+                              "more open positions (new money coming in); -2 means "
+                              "positions were closed."),
                      "Deliv z": st.column_config.NumberColumn(
                          "Deliv z", format="%.2f",
                          help="Mean of each stock's delivery z against ITS OWN "
@@ -6438,10 +6470,10 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                               "DTE bucket; the expiry session itself is suppressed."),
                      "F&O names": st.column_config.TextColumn(
                          "F&O names",
-                         help="How many of the bucket had a usable near-month "
-                              "futures read. fno_bhavcopy starts 2024-07 and "
-                              "coverage averages ~42% across the 50, so a low "
-                              "count means the futures column is thin, not calm."),
+                         help="How many of the bucket's stocks actually have "
+                              "futures trading. '10/10' means all ten - a solid "
+                              "read. '4/30' would mean only 4 of 30 had data, so "
+                              "the futures columns beside it are thin, not calm."),
                  })
 
     for b in d.rows:
@@ -6477,16 +6509,60 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
         })
     st.dataframe(pd.DataFrame(_flow), hide_index=True, use_container_width=True,
                  column_config={
+                     "Bucket": st.column_config.TextColumn(
+                         "Bucket",
+                         help="Top 10 = the ten biggest Nifty stocks by weight. "
+                              "Next 10 = ranks 11-20. Rest 30 = the other thirty."),
+                     "Delivery": st.column_config.TextColumn(
+                         "Delivery",
+                         help="Was real buying unusually HEAVY or LIGHT today, "
+                              "against these same stocks' own last 100 days? "
+                              "Heavy = investors taking delivery rather than day "
+                              "trading. Marked heavy above +0.3, light below -0.3."),
+                     "Deliv z": st.column_config.NumberColumn(
+                         "Deliv z", format="%.2f",
+                         help="The number behind the Delivery word. 0 = a normal "
+                              "day. +1.13 = well above these stocks' own normal. "
+                              "-1 = unusually quiet."),
+                     "Futures": st.column_config.TextColumn(
+                         "Futures",
+                         help="What futures traders did. 'long build / covering' = "
+                              "buyers adding positions or shorts closing "
+                              "(supportive). 'short build / unwind' = sellers "
+                              "adding or longs exiting (pressure). 'mixed' = the "
+                              "bucket disagrees with itself."),
+                     "Fut OI %": st.column_config.NumberColumn(
+                         "Fut OI %", format="%.2f",
+                         help="How much the number of open futures contracts "
+                              "changed vs yesterday. +0.25 = 0.25% more open "
+                              "positions. Negative = positions were closed. "
+                              "Counted across ALL expiry months, so a position "
+                              "rolling to next month is not mistaken for an exit."),
+                     "Call OI %": st.column_config.NumberColumn(
+                         "Call OI %", format="%.2f",
+                         help="Change in open CALL option positions vs yesterday. "
+                              "Rising calls usually means sellers writing calls "
+                              "above the market - they expect a ceiling."),
+                     "Put OI %": st.column_config.NumberColumn(
+                         "Put OI %", format="%.2f",
+                         help="Change in open PUT option positions vs yesterday. "
+                              "Rising puts usually means sellers writing puts "
+                              "below the market - they expect a floor."),
                      "Options": st.column_config.TextColumn(
-                         "Options", help="CE vs PE TOTAL FORWARD OI change, summed "
-                         "over every live expiry and every strike. Call side "
-                         "building relative to the put side reads as call writing; "
-                         "put side building reads as put writing."),
+                         "Options",
+                         help="Which option side grew faster today. Example: calls "
+                              "+4.3% and puts +2.0% = 'call side heavier', which "
+                              "leans bearish (traders selling calls expect a "
+                              "ceiling). Puts growing faster leans bullish. Within "
+                              "0.25pp of each other = 'balanced'."),
                      "Bucket score": st.column_config.NumberColumn(
                          "Bucket score", format="%.2f",
-                         help="Mean of the three legs, each in [-1, +1]. A summary "
-                              "of positioning, NOT a forecast — see the measured "
-                              "hit rate below."),
+                         help="The three columns above averaged into one number, "
+                              "from -1 (all bearish) to +1 (all bullish). Example: "
+                              "delivery heavy (+1), futures short build (-1), calls "
+                              "heavier (-1) averages to -0.33. It SUMMARISES "
+                              "positioning; it does not predict the index - the "
+                              "measured hit rate is right below this table."),
                  })
     _ns = d.net_score
     if _ns is not None:
@@ -6559,29 +6635,53 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
         st.dataframe(
             pd.DataFrame(_disp), hide_index=True, use_container_width=True,
             column_config={
+                "Session": st.column_config.TextColumn(
+                    "Session",
+                    help="A past trading day whose nine flow numbers looked like "
+                         "today's. The first row is today itself, for comparison - "
+                         "read across it, then down."),
                 "Alike": st.column_config.ProgressColumn(
                     "Alike", format="%d%%", min_value=0, max_value=100,
-                    help="How closely that session's nine flow numbers matched "
-                         "today's. 100% would be identical."),
+                    help="How closely that day matched today across all nine "
+                         "numbers. 100% would be an identical day. These are the "
+                         "closest days on record, not perfect twins - the top "
+                         "match is typically 30-45%."),
                 "Delivery z": st.column_config.TextColumn(
                     "Delivery z  (T · N · R)",
-                    help="Top 10 · Next 10 · Rest 30, each against its own "
-                         "100-day normal. Compare the row to the today row."),
+                    help="Three numbers: Top 10, then Next 10, then Rest 30. Each "
+                         "is that bucket's delivery against its own 100-day "
+                         "normal. Example: today reads +1.13 / +0.58 / +0.42, and "
+                         "a row showing +1.29 / +0.63 / +0.44 is a close match."),
                 "Futures OI %": st.column_config.TextColumn(
                     "Futures OI %  (T · N · R)",
-                    help="Signed futures pressure per bucket: total forward OI "
-                         "change against the stocks' own price direction."),
+                    help="Three numbers: Top 10, Next 10, Rest 30. Positive = "
+                         "futures positions grew while prices rose, or shrank "
+                         "while prices fell (supportive). Negative = the "
+                         "bearish combination."),
                 "Call vs put": st.column_config.TextColumn(
                     "Call vs put  (T · N · R)",
-                    help="Which option side built faster. call = call side "
-                         "heavier, put = put side heavier, bal = balanced."),
+                    help="Which option side grew faster in each bucket. "
+                         "'call' = calls grew faster (leans bearish), "
+                         "'put' = puts grew faster (leans bullish), "
+                         "'bal' = neither. Example: 'call · call · bal'."),
                 "Next day pts": st.column_config.NumberColumn(
                     "Next day pts", format="%d",
                     help="That session's % move applied to TODAY'S level"
                          + (f" ({_spot:,.0f})" if _spot else "")
                          + ". Nifty ran ~17,000 in 2022 and ~23,900 now, so raw "
                            "historical points are not comparable across the window."),
-                "Next 5d pts": st.column_config.NumberColumn("Next 5d pts", format="%d"),
+                "Next day %": st.column_config.NumberColumn(
+                    "Next day %", format="%.2f",
+                    help="What NIFTY actually did on the session AFTER that day. "
+                         "+0.25 means it closed 0.25% higher the next day."),
+                "Next 5 sessions %": st.column_config.NumberColumn(
+                    "Next 5 sessions %", format="%.2f",
+                    help="What NIFTY did over the following FIVE sessions - "
+                         "roughly the next week - measured from that day's close."),
+                "Next 5d pts": st.column_config.NumberColumn(
+                    "Next 5d pts", format="%d",
+                    help="The same week move in NIFTY points at today's level, so "
+                         "old and recent rows are directly comparable."),
             })
         _s1, _s5 = _fa["summary"]["d1"], _fa["summary"]["d5"]
         _up1, _up5 = int(round(_s1["up"] * _s1["n"] / 100)), int(round(_s5["up"] * _s5["n"] / 100))
@@ -6655,7 +6755,47 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                 "state": "State", "days": "Days", "gap_bps": "Gap bps",
                 "gap_up": "Gap up %", "d1_bps": "1d bps", "d1_up": "1d up %",
                 "d5_bps": "5d bps", "d5_up": "5d up %"}),
-            hide_index=True, use_container_width=True)
+            hide_index=True, use_container_width=True,
+            column_config={
+                "State": st.column_config.TextColumn(
+                    "State",
+                    help="Which half of the index rose. 'Broad up' = both the "
+                         "Top 10 and the Rest 30 mostly rose. 'Top-10 carried' = "
+                         "the heavyweights rose while most of the other 30 fell - "
+                         "the narrow rally you asked about. 'Top-10 lagged' is the "
+                         "reverse. Every session falls in exactly one."),
+                "Days": st.column_config.NumberColumn(
+                    "Days", format="%d",
+                    help="How many past sessions were in this state. The bottom "
+                         "row is every session, for comparison."),
+                "Gap bps": st.column_config.NumberColumn(
+                    "Gap bps", format="%.1f",
+                    help="Average OVERNIGHT move: from that day's close to the "
+                         "next morning's open. 100 bps = 1.00%, so 16.1 means "
+                         "about 0.16% - roughly 38 NIFTY points at 24,000."),
+                "Gap up %": st.column_config.NumberColumn(
+                    "Gap up %", format="%.1f",
+                    help="How often the next morning opened HIGHER. Compare with "
+                         "the bottom row: if a state shows 69% against a 62% "
+                         "all-sessions rate, it opened up more often than usual."),
+                "1d bps": st.column_config.NumberColumn(
+                    "1d bps", format="%.1f",
+                    help="Average close-to-close move on the NEXT session. "
+                         "100 bps = 1.00%."),
+                "1d up %": st.column_config.NumberColumn(
+                    "1d up %", format="%.1f",
+                    help="How often the next session closed higher. The "
+                         "all-sessions rate is about 52%, so anything near 52 is "
+                         "no better than a coin flip."),
+                "5d bps": st.column_config.NumberColumn(
+                    "5d bps", format="%.1f",
+                    help="Average move over the next FIVE sessions - about a week. "
+                         "Treat this column as unmeasurable: this data cannot "
+                         "resolve anything smaller than roughly 36 bps at a week."),
+                "5d up %": st.column_config.NumberColumn(
+                    "5d up %", format="%.1f",
+                    help="How often NIFTY was higher a week later."),
+            })
         st.caption(
             "Every session lands in exactly one state, so this is the record, "
             "not a fitted rule. **The gap column is the only one this data can "
@@ -6664,75 +6804,6 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
             "*not measurable here*, not as *real*. And the gap column's ordering "
             "is close-strength: control for CLR and the breadth signal goes to "
             "t=+0.35. Survivorship applies — this is today's 50 applied to history.")
-
-    # ── analogues: when the flow looked like this before ────────────────────
-    with st.expander("🔍 When the flow looked like today, what happened next?",
-                     expanded=False):
-        _an = cached_flow_analogues(selected_date, "NIFTY", 25)
-        if not _an.get("ok"):
-            st.info(_an.get("note") or "No flow analogues available.")
-        else:
-            mq = _an["summary"]["match_quality"]
-            st.caption(
-                f"The 25 past sessions whose 9-dimensional flow state (3 buckets x "
-                f"delivery / futures / options) is closest to this one. Matching is "
-                f"causal — only sessions BEFORE {selected_date:%d %b %Y} are "
-                f"eligible. The 25th match sits at distance {mq['kth']:.2f} against "
-                f"{mq['median_random']:.2f} for a typical pair, so these really are "
-                f"the near neighbours.")
-            cA, cB = st.columns(2)
-            for col, h, lab in ((cA, "d1", "Next session"),
-                                (cB, "d5", "Next 5 sessions")):
-                sm = _an["summary"][h]
-                lo, hi = sm["k_range"]
-                col.metric(
-                    f"{lab} — analogue mean", f"{sm['mean']:+.2f}%",
-                    f"{sm['mean'] - sm['base_mean']:+.2f}pp vs all sessions",
-                    delta_color="off",
-                    help=f"Up {sm['up']:.0f}% of the {_an['k']} against a "
-                         f"{sm['base_up']:.0f}% base rate. Best {sm['best']:+.2f}%, "
-                         f"worst {sm['worst']:+.2f}% — the SPREAD is the point.")
-                col.caption(
-                    f"Across k = 10 to 60 this runs **{lo:+.2f}% to {hi:+.2f}%**"
-                    + ("  ⚠️ **and changes sign**" if sm["k_sign_flips"] else ""))
-            if any(_an["summary"][h]["k_sign_flips"] for h in ("d1", "d5")):
-                st.warning(
-                    "**The number above is not stable in k.** k=25 is a choice, "
-                    "not a measurement, and at least one horizon changes SIGN "
-                    "across k = 10 to 60. Treat the range as the answer and the "
-                    "point estimate as an artifact of where the list was cut.")
-            _m = _an["matches"].copy()
-            _m["date"] = pd.to_datetime(_m["date"]).dt.strftime("%d %b %Y")
-            st.dataframe(
-                _m.rename(columns={"date": "Session", "distance": "Distance",
-                                   "d1": "Next day %", "d5": "Next 5 sessions %"}),
-                hide_index=True, use_container_width=True,
-                column_config={
-                    "Distance": st.column_config.NumberColumn("Distance", format="%.2f",
-                        help="L1 distance in standardised flow space. Smaller = "
-                             "more alike."),
-                    "Next day %": st.column_config.NumberColumn(format="%.2f"),
-                    "Next 5 sessions %": st.column_config.NumberColumn(format="%.2f")})
-            st.error(
-                "**These are genuine analogues and they do not predict - both "
-                "halves are measured.** `scripts/nifty_flow_analogues.py`, 947 "
-                "sessions, walk-forward with a purge gap so no neighbour shares "
-                "forward days with the day being scored:\n\n"
-                "- The matching **works**: the 25th neighbour sits at distance "
-                "5.40 against 9.28 for two random days, and only **7.1%** of "
-                "random pairs are closer.\n"
-                "- **And it buys nothing.** |mean(25 NEAREST) - actual| = "
-                "**1.444%** against |mean(25 FARTHEST) - actual| = **1.462%**. "
-                "The most similar days forecast the outcome no better than the "
-                "*least* similar ones.\n"
-                "- k nearest vs k **random** past days: 54.5% vs 54.3% at k=50, "
-                "and at k=25 next-day the random control *wins* (51.2% vs "
-                "49.7%).\n"
-                "- Beside close-strength the analogue dies (t +0.67 vs CLR "
-                "+2.78), no subspace rescues it, and recency does not help.\n\n"
-                "Read the **spread** between best and worst, not the mean. The "
-                "state space is effectively 5.6-dimensional, so the neighbours "
-                "really are near - they just do not share a future.")
 
     # ── the measured trend ───────────────────────────────────────────────────
     with st.expander("📈 How often does the index disagree with its own basket?",
@@ -6747,7 +6818,41 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                     "abs_spread": "|Carry spread| pp",
                     "carried_days": "Carried (days)", "carried_pct": "Carried %",
                     "dragged_days": "Dragged (days)", "dragged_pct": "Dragged %"}),
-                hide_index=True, use_container_width=True)
+                hide_index=True, use_container_width=True,
+                column_config={
+                    "Year": st.column_config.NumberColumn(
+                        "Year", format="%d",
+                        help="Calendar year. Only full years are shown."),
+                    "Sessions": st.column_config.NumberColumn(
+                        "Sessions", format="%d",
+                        help="Trading days counted that year. Part-years are "
+                              "dropped - a 100-day stub is not comparable with a "
+                              "full year."),
+                    "|Carry spread| pp": st.column_config.NumberColumn(
+                        "|Carry spread| pp", format="%.3f",
+                        help="How far the index typically drifted from a simple "
+                             "average of its 50 stocks, ignoring direction. "
+                             "Bigger = the heavyweights and the rest went their "
+                             "own ways more often."),
+                    "Carried (days)": st.column_config.NumberColumn(
+                        "Carried (days)", format="%d",
+                        help="Days the index CLOSED UP while fewer than half its "
+                             "own 50 stocks rose - the heavyweights dragged it "
+                             "green on their own."),
+                    "Carried %": st.column_config.NumberColumn(
+                        "Carried %", format="%.1f",
+                        help="The same as a share of that year's sessions. Do NOT "
+                             "read the column as a trend - see the note below the "
+                             "table; it does not replicate on a basket that is not "
+                             "today's index list."),
+                    "Dragged (days)": st.column_config.NumberColumn(
+                        "Dragged (days)", format="%d",
+                        help="The opposite: the index closed DOWN even though more "
+                             "than half its stocks rose."),
+                    "Dragged %": st.column_config.NumberColumn(
+                        "Dragged %", format="%.1f",
+                        help="The same as a share of that year's sessions."),
+                })
             st.caption(
                 "**Carried** = the index rose while under half its own members did. "
                 "**Dragged** = it fell while over half advanced.\n\n"

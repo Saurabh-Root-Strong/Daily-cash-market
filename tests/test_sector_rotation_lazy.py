@@ -79,3 +79,43 @@ def test_deselecting_falls_back_instead_of_blanking(spy, monkeypatch):
     assert spy == ["_render_smart_money"], (
         "a stray second click on the active chip must fall back to the first "
         "panel, not render an empty page")
+
+
+def test_every_index_largecap_column_has_a_tooltip():
+    """Six tables on this panel, ~40 columns. Most shipped with no help text at
+    all, which is how "Deliv z" and "Fut OI %" reached the screen unexplained."""
+    import re
+    from pathlib import Path
+    src = Path("src/dashboard/views/sector_rotation.py").read_text(encoding="utf-8")
+    start = src.index("def _render_index_largecap")
+    nxt = re.search(r"\ndef ", src[start + 10:])
+    body = src[start:] if nxt is None else src[start:start + 10 + nxt.start()]
+
+    blocks = []
+    for m in re.finditer(r"column_config=\{", body):
+        i, depth = m.end(), 1
+        while depth and i < len(body):
+            depth += (body[i] == "{") - (body[i] == "}")
+            i += 1
+        blocks.append(body[m.end():i])
+    assert len(blocks) >= 5, f"expected >=5 configured tables, found {len(blocks)}"
+
+    missing = []
+    for b in blocks:
+        for col in re.findall(r'"([^"]+)":\s*st\.column_config\.\w+\(', b):
+            seg = b[b.index(f'"{col}": st.column_config'):]
+            nx = re.search(r'\n\s+"[^"]+":\s*st\.column_config', seg)
+            if nx:
+                seg = seg[:nx.start()]
+            if "help=" not in seg:
+                missing.append(col)
+    assert not missing, f"columns rendered with no tooltip: {missing}"
+
+
+def test_the_duplicate_analogue_expander_is_gone():
+    """The session list superseded it; leaving both rendered the same 25 matches
+    twice, the second time with nine unlabelled raw columns."""
+    from pathlib import Path
+    src = Path("src/dashboard/views/sector_rotation.py").read_text(encoding="utf-8")
+    assert "When the flow looked like today" not in src
+    assert src.count("When these numbers occurred before") == 1
