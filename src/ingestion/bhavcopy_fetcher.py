@@ -40,6 +40,22 @@ _COL_MAP: dict[str, str] = {
     "TtlNbOfTxsExctd": "no_of_trades",
 }
 
+# Pre-UDiFF ("legacy") bhavcopy carries the same fields under different names.
+# NSE served this format until mid-2024 and still serves it for older dates.
+_LEGACY_COL_MAP: dict[str, str] = {
+    "SYMBOL":      "symbol",
+    "SERIES":      "series",
+    "PREVCLOSE":   "prev_close",
+    "OPEN":        "open_price",
+    "HIGH":        "high_price",
+    "LOW":         "low_price",
+    "LAST":        "last_price",
+    "CLOSE":       "close_price",
+    "TOTTRDQTY":   "ttl_trd_qnty",
+    "TOTTRDVAL":   "turnover_lacs",   # already RUPEES here, same as UDiFF
+    "TOTALTRADES": "no_of_trades",
+}
+
 _SCHEMA_COLS = [
     "trade_date", "symbol", "series",
     "prev_close", "open_price", "high_price", "low_price",
@@ -65,16 +81,23 @@ class BhavCopyFetcher(BaseFetcher):
     def _url_candidates(self, trade_date: date) -> list:
         """Ordered fallback chain for bhavcopy ZIP."""
         d = trade_date.strftime("%Y%m%d")
-        dm = trade_date.strftime("%d%m%Y")
+        # NSE's legacy path is cm<DD><MON><YYYY>bhav.csv.zip -- day, MONTH NAME,
+        # year (cm01FEB2020bhav.csv.zip). This used to build cm<DDMMYYYY> with a
+        # numeric month, which NSE 404s, so the legacy fallback never once fired
+        # and every pre-UDiFF date silently returned "holiday/weekend".
+        legacy = (f"cm{trade_date.day:02d}"
+                  f"{trade_date.strftime('%b').upper()}{trade_date.year}bhav.csv.zip")
         return [
             self.build_url(trade_date),    # primary: nsearchives (from config)
             # Fallback 1: archives domain alias
             f"https://archives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{d}_F_0000.csv.zip",
             # Fallback 2: older UDiFF format variant
             f"https://nsearchives.nseindia.com/content/cm/BhavCopy_NSE_CM_0_0_0_{d}_F_0000.zip",
-            # Fallback 3: very old bhavcopy format (pre-UDiFF, still on NSE archives)
+            # Fallback 3: pre-UDiFF format, still served for older dates
+            f"https://nsearchives.nseindia.com/content/historical/EQUITIES/"
+            f"{trade_date.year}/{trade_date.strftime('%b').upper()}/{legacy}",
             f"https://archives.nseindia.com/content/historical/EQUITIES/"
-            f"{trade_date.year}/{trade_date.strftime('%b').upper()}/cm{dm}bhav.csv.zip",
+            f"{trade_date.year}/{trade_date.strftime('%b').upper()}/{legacy}",
         ]
 
     def fetch(self, trade_date: date) -> pd.DataFrame:
@@ -101,6 +124,28 @@ class BhavCopyFetcher(BaseFetcher):
 def transform_to_schema(raw_df: pd.DataFrame, trade_date: date) -> pd.DataFrame:
     """Filter, rename, and cast raw bhavcopy CSV to the daily_data schema."""
     df = raw_df.copy()
+    df.columns = [str(c).strip() for c in df.columns]
+
+    # The legacy file has no Sgmt/SctySrs columns and different field names, so
+    # rename it into the UDiFF vocabulary before the shared path below runs.
+    if "TckrSymb" not in df.columns and "SYMBOL" in df.columns:
+        df = df.rename(columns=_LEGACY_COL_MAP)
+        df = df[df["series"].isin(_EQUITY_SERIES)]
+        df["trade_date"] = trade_date
+        for c in ("prev_close", "open_price", "high_price", "low_price",
+                  "last_price", "close_price", "ttl_trd_qnty",
+                  "turnover_lacs", "no_of_trades"):
+            if c in df.columns:
+                df[c] = pd.to_numeric(df[c], errors="coerce")
+        df["turnover_lacs"] = df["turnover_lacs"] / 100_000
+        vol = df["ttl_trd_qnty"].replace(0, pd.NA)
+        df["avg_price"] = (df["turnover_lacs"] * 100_000) / vol
+        df["deliv_qty"] = None
+        df["deliv_per"] = None
+        for c in _SCHEMA_COLS:
+            if c not in df.columns:
+                df[c] = None
+        return df[_SCHEMA_COLS].dropna(subset=["symbol", "close_price"])
 
     # Keep only CM segment equity series
     if "Sgmt" in df.columns:

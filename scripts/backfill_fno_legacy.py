@@ -103,6 +103,10 @@ def main() -> int:
     ap.add_argument("--start", default="2022-01-01")
     ap.add_argument("--end", default="2024-07-23")
     ap.add_argument("--sleep", type=float, default=0.35)
+    ap.add_argument("--weekends", action="store_true",
+                    help="also try Sat/Sun. NSE runs special live sessions on "
+                         "weekends (Budget days, Muhurat), and skipping them left "
+                         "2023-11-12 out of the F&O table entirely.")
     ap.add_argument("--batch", type=int, default=20,
                     help="sessions per upsert. The write costs ~20s regardless of "
                          "size, so batching dominates total runtime.")
@@ -115,7 +119,7 @@ def main() -> int:
     todo = []
     d = start
     while d <= end:
-        if d.weekday() < 5 and d not in have:
+        if (a.weekends or d.weekday() < 5) and d not in have:
             todo.append(d)
         d += dt.timedelta(days=1)
     print(f"already have {len(have)} F&O sessions; {len(todo)} weekdays to try "
