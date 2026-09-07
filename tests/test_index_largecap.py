@@ -266,3 +266,42 @@ def test_expiry_session_suppresses_options_too():
     assert out.is_expiry_session
     for b in out.rows:
         assert b.opt_valid == 0 and b.ce_oi_pct is None and b.opt_read is None
+
+
+# ── which expiry the OI read uses ────────────────────────────────────────────
+
+def test_oi_counts_every_live_expiry_not_just_the_front_month():
+    """Measured (scripts/ilc_expiry_choice.py): matching each contract to ITSELF,
+    the FRONT contract sheds -54.99%/day at 0-1 DTE, -37.67% at 2 DTE and -31.99%
+    at 4-5 DTE, settling only at 9-12 DTE. So a near-month read rolled 1-2 days
+    before expiry is far too late. Excluding settlement sessions, near-month-only
+    runs sd 12.79 with a 20.88pp expiry-week gap against sd 1.23 and 0.03pp for
+    the total. The loader must keep summing every forward expiry."""
+    import inspect
+    src = inspect.getsource(ilc._load_futures)
+    assert "expiry_date > ?" in src, "the forward-expiry filter is gone"
+    assert "GROUP BY" not in src.upper().split("WHERE")[0], "unexpected shape"
+    doc = ilc._load_futures.__doc__ or ""
+    assert "-37.67" in doc or "-37.7" in doc, "the DTE-2 bleed measurement must stay"
+    assert "9-12" in doc, "the DTE at which bleed settles must stay recorded"
+
+
+def test_expiry_context_is_reported_for_the_reader():
+    """The panel could not previously say WHICH expiry its OI came from."""
+    from datetime import date as _d
+    out = ilc.get_index_largecap(_d(2026, 9, 4), "NIFTY")
+    assert out.front_expiry is not None and out.days_to_expiry is not None
+    assert out.front_expiry > _d(2026, 9, 4), "the front month must be in the future"
+    assert 0 < out.near_oi_share <= 100
+    assert out.near_oi_share > 50, (
+        "the front month should hold most of the forward OI; measured 84% of "
+        "futures and 91% of options OI across 2022-2026")
+
+
+def test_front_expiry_excludes_a_contract_settling_today():
+    """On a settlement session the expiring contract is no longer 'forward', so
+    the front month must already point at the NEXT series."""
+    from datetime import date as _d
+    out = ilc.get_index_largecap(_d(2026, 8, 25), "NIFTY")
+    assert out.is_expiry_session
+    assert out.front_expiry > _d(2026, 8, 25)

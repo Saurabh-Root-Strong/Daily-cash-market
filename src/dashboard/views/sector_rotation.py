@@ -6486,6 +6486,21 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
 
     # ── flow summary: delivery + futures + options, per bucket ──────────────
     st.markdown("##### Flow read — delivery, futures OI, options OI")
+    if d.front_expiry:
+        _dte = d.days_to_expiry
+        _when = ("settles today" if _dte == 0 else
+                 "settles tomorrow" if _dte == 1 else f"{_dte} days away")
+        st.caption(
+            f"**Which expiry these OI numbers use: all of them.** Front month is "
+            f"**{d.front_expiry:%d %b %Y}** ({_when}), holding "
+            f"{d.near_oi_share:.0f}% of forward open interest. Every live expiry "
+            f"month is counted, with each contract compared against ITSELF on the "
+            f"prior session — so a position rolling from this month to the next "
+            f"nets to zero instead of reading as an exit. Measured, the front "
+            f"contract alone sheds **-37.7% a day at 2 days to expiry** and does "
+            f"not settle until 9-12 days out, so a near-month read with a "
+            f"late roll would print basket-wide unwinding every month "
+            f"(`scripts/ilc_expiry_choice.py`).")
     _flow = []
     for b in d.rows:
         _sc = b.flow_score

@@ -210,6 +210,11 @@ class IndexLargeCap:
     # the front contract settles and positions roll in. The futures columns are
     # suppressed rather than shown as a basket-wide build.
     is_expiry_session: bool = False
+    # Which contract month is the front one, and how far away it is. Shown so the
+    # reader can see WHERE IN THE CYCLE the OI numbers were taken.
+    front_expiry:  Optional[date] = None
+    days_to_expiry: Optional[int] = None
+    near_oi_share: Optional[float] = None   # % of forward OI in the front month
 
     @property
     def net_score(self) -> Optional[float]:
@@ -302,6 +307,29 @@ def _load_futures(symbols: tuple, trade_date: date) -> pd.DataFrame:
 
     Both days are summed over the SAME forward set (expiry > trade_date), so the
     comparison is apples-to-apples across an expiry boundary too.
+
+    WHY NOT NEAR-MONTH-WITH-A-ROLL, which is the usual desk convention
+    (scripts/ilc_expiry_choice.py, 1,155 sessions). The front month does hold most
+    of the interest -- 84.1% of stock-futures OI and 90.8% of stock-options OI --
+    so the instinct is right. But matching each contract to ITSELF, which removes
+    the contract-switch artifact entirely, genuine roll bleed on the front
+    contract runs:
+        DTE 0-1  -54.99%    DTE 4-5   -31.99%    DTE  9-12  -0.65%
+        DTE 2    -37.67%    DTE 6-8    -5.04%    DTE 13-20  +0.11%
+    So a roll "one or two days before expiry" is far too late: at DTE 2 the front
+    is already shedding 37.7% a day with 100% of rows below -5%. It does not
+    settle down until DTE 9-12, a week and a half out.
+
+    And even rolled correctly, near-month-only is far worse than the sum. With
+    settlement sessions excluded, as this panel excludes them:
+        TOTAL forward   sd 1.23   expiry-week +0.447% vs other +0.416%  gap 0.03pp
+        near + next     sd 1.26   expiry-week +0.151% vs other +0.301%  gap 0.15pp
+        near month only sd 12.79  expiry-week -22.93% vs other -2.05%   gap 20.88pp
+    Near-only is ten times noisier and would print basket-wide "unwinding" every
+    expiry week. Near+next tracks the total at correlation 0.97 (sign disagrees on
+    4-5% of sessions) but is marginally worse on both measures, and the far months
+    it drops are only 1.0% of futures OI. The SUM is the only continuous measure:
+    while the front bleeds, the next fills, and only their total is flat.
     """
     ph = ", ".join("?" * len(symbols))
     return query_dataframe(f"""
@@ -511,6 +539,22 @@ def get_index_largecap(trade_date: date, fno_symbol: str = "NIFTY") -> IndexLarg
            else _opt_change(_load_options(all_syms, trade_date), trade_date))
     out.rows = [_bucket_row(lbl, mem, hist, today, oi, opt)
                 for lbl, mem in meta["buckets"].items()]
+    _exp = query_dataframe(f"""
+        WITH f AS (
+            SELECT expiry_date, SUM(open_interest) AS oi
+            FROM fno_bhavcopy
+            WHERE instrument IN ('FUTSTK','OPTSTK') AND open_interest > 0
+              AND symbol IN ({", ".join("?" * len(all_syms))})
+              AND trade_date = ? AND expiry_date > trade_date
+            GROUP BY 1)
+        SELECT expiry_date, oi, SUM(oi) OVER () AS tot FROM f ORDER BY expiry_date
+    """, [*all_syms, trade_date])
+    if not _exp.empty:
+        _f = _exp.iloc[0]
+        out.front_expiry = pd.to_datetime(_f["expiry_date"]).date()
+        out.days_to_expiry = (out.front_expiry - trade_date).days
+        if _f["tot"]:
+            out.near_oi_share = float(_f["oi"] / _f["tot"] * 100)
     return out
 
 
