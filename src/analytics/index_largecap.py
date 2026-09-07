@@ -108,7 +108,20 @@ INDEX_BUCKETS: dict[str, dict] = {
 # docstring); these are share-of-index approximations and the composite was
 # tested under equal weighting too, with the same null result.
 _BUCKET_WEIGHT = {"Top 10": 0.46, "Next 10": 0.24, "Rest 30": 0.30}
-_DELIV_BASE = 100      # sessions the delivery normal is measured over
+# Sessions the delivery normal is measured over. 21 = roughly one trading month.
+#
+# Measured against a 100-session alternative (scripts/ilc_deliv_baseline.py):
+# delivery IS persistent -- bucket-level lag-21 autocorrelation runs +0.32 (Top 10),
+# +0.57 (Next 10), +0.64 (Rest 30) -- so the worry is that a short baseline chases
+# the very move it should be measuring and prints ~0 when the signal is strongest.
+# That does not happen. The two agree at correlation +0.91, fire the +-0.3 band at
+# nearly the same rate (59.3% vs 60.5% on Top 10), and on the top decile of
+# SUSTAINED 10-session delivery shifts the short window is consistently LARGER,
+# not smaller: ratios 1.04x to 1.28x across all three buckets in both directions.
+# A tighter window also tracks regime changes faster, which is the point.
+# The cost is that one unusual session moves it ~5x more (see unusual_session).
+_DELIV_BASE = 21
+_DELIV_MINP = max(10, _DELIV_BASE // 2)   # never exceed the window -- see below
 _MIN_COVER  = 0.60     # below this share of a bucket present, the row is unreliable
 
 
@@ -122,7 +135,8 @@ class BucketRow:
     dec:          int = 0
     adv_pct:      Optional[float] = None
     deliv_pct:    Optional[float] = None     # equal-weight delivery %
-    deliv_z:      Optional[float] = None     # vs the bucket's own 100d normal
+    deliv_z:      Optional[float] = None     # vs the bucket's own 21-session normal
+    deliv_trail:  list = field(default_factory=list)   # last 4 sessions, newest first
     fut_long:     int = 0                    # OI-price matrix counts (near month)
     fut_short:    int = 0
     fut_cover:    int = 0
@@ -442,13 +456,20 @@ def _bucket_row(label: str, members: tuple, hist: pd.DataFrame,
         prior = wide[wide.index < t["trade_date"].iloc[0]].tail(_DELIV_BASE)
         cur = wide.reindex([t["trade_date"].iloc[0]]).iloc[0] if \
             t["trade_date"].iloc[0] in wide.index else None
-        if cur is not None and len(prior) >= 30:
+        if cur is not None and len(prior) >= _DELIV_MINP:
             mu, sd = prior.mean(), prior.std()
             ok = (sd > 1e-9) & mu.notna() & cur.notna()
             if ok.any():
                 z = ((cur[ok] - mu[ok]) / sd[ok]).replace([np.inf, -np.inf], np.nan).dropna()
                 if len(z):
                     row.deliv_z = float(z.mean())
+        # last 4 sessions of the bucket's mean delivery %, newest first, so the
+        # DIRECTION is visible rather than just today's level
+        _recent = wide[wide.index <= t["trade_date"].iloc[0]].tail(4)
+        if not _recent.empty:
+            row.deliv_trail = [round(float(v), 1)
+                               for v in _recent.mean(axis=1).iloc[::-1]
+                               if pd.notna(v)]
 
     ft = fut_today[fut_today["symbol"].isin(mem)] if not fut_today.empty else pd.DataFrame()
     if not ft.empty:
@@ -894,8 +915,12 @@ def _flow_state_matrix(fno_symbol: str, as_of: date, years: int = 5,
     for bn, mem in buckets.items():
         cols = [s for s in mem if s in R.columns]
         sub = R[cols]
-        mu = DL[cols].rolling(_DELIV_BASE, min_periods=50).mean().shift(1)
-        sd = DL[cols].rolling(_DELIV_BASE, min_periods=50).std().shift(1)
+        # min_periods must be derived from the window, never a literal: it was
+        # hardcoded at 50, so shortening _DELIV_BASE to 21 would have made
+        # min_periods exceed the window and turned EVERY z into NaN, silently
+        # emptying the analogue state matrix.
+        mu = DL[cols].rolling(_DELIV_BASE, min_periods=_DELIV_MINP).mean().shift(1)
+        sd = DL[cols].rolling(_DELIV_BASE, min_periods=_DELIV_MINP).std().shift(1)
         raw[f"{bn} delivery"] = (((DL[cols] - mu) / sd.where(sd > 1e-9))
                                  .replace([np.inf, -np.inf], np.nan).mean(axis=1))
         raw[f"{bn} futures"] = (np.sign(sub) *

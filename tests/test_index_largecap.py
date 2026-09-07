@@ -351,3 +351,40 @@ def test_today_row_uses_nan_not_none_for_unknown_outcomes():
     block = src[i:i + 600]
     assert '"Next day %": None' not in block, "today row still emits a bare None"
     assert 'float("nan")' in block
+
+
+# ── delivery: 21-session baseline + 4-session trail ─────────────────────────
+
+def test_min_periods_can_never_exceed_the_delivery_window():
+    """The state matrix hardcoded min_periods=50. Shortening _DELIV_BASE to 21
+    would have made min_periods larger than the window, turning EVERY z into NaN
+    and silently emptying the analogue engine — the same failure mode already hit
+    once on the 250-session z windows."""
+    assert ilc._DELIV_MINP <= ilc._DELIV_BASE
+    import inspect
+    src = inspect.getsource(ilc._flow_state_matrix)
+    assert "min_periods=50" not in src, "min_periods is hardcoded again"
+    assert "min_periods=_DELIV_MINP" in src
+    Z, _ = ilc._flow_state_matrix("NIFTY", __import__("datetime").date(2026, 9, 7))
+    assert not Z.empty and Z.shape[1] == 9
+
+
+def test_delivery_trail_is_four_sessions_newest_first():
+    from datetime import date as _d
+    out = ilc.get_index_largecap(_d(2026, 9, 7), "NIFTY")
+    for r in out.rows:
+        assert len(r.deliv_trail) == 4, f"{r.label}: {r.deliv_trail}"
+        assert all(0 <= v <= 100 for v in r.deliv_trail)
+        # the first entry is TODAY, so it must equal the bucket's delivery %
+        assert r.deliv_trail[0] == pytest.approx(r.deliv_pct, abs=0.05), (
+            f"{r.label}: trail starts at {r.deliv_trail[0]} but today is {r.deliv_pct}")
+
+
+def test_delivery_baseline_is_a_trading_month_and_records_why():
+    """21 sessions was chosen against a measured alternative, not by taste."""
+    assert ilc._DELIV_BASE == 21
+    import inspect
+    src = inspect.getsource(ilc)
+    head = src[:src.index("@dataclass")]
+    assert "+0.64" in head, "the Rest-30 lag-21 autocorrelation must stay recorded"
+    assert "1.28x" in head, "the sustained-move ratio must stay recorded"

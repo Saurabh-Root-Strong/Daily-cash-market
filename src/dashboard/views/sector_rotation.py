@@ -6411,7 +6411,10 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
             "Return %": None if b.ret_pct is None else round(b.ret_pct, 2),
             "Adv": f"{b.adv}/{b.n_present}",
             "Adv %": None if b.adv_pct is None else round(b.adv_pct, 0),
-            "Delivery %": None if b.deliv_pct is None else round(b.deliv_pct, 1),
+            "Delivery % (last 4)": (", ".join(f"{v:.1f}" for v in b.deliv_trail)
+                                    if b.deliv_trail else
+                                    ("-" if b.deliv_pct is None
+                                     else f"{b.deliv_pct:.1f}")),
             "Deliv z": None if b.deliv_z is None else round(b.deliv_z, 2),
             "Futures OI %": None if b.fut_oi_pct is None else round(b.fut_oi_pct, 2),
             "Futures read": lean,
@@ -6438,13 +6441,16 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                          "Adv %", format="%.0f",
                          help="The same thing as a percentage. 4 of 10 up = 40. "
                               "Above 50 means most of the bucket rose."),
-                     "Delivery %": st.column_config.NumberColumn(
-                         "Delivery %", format="%.1f",
+                     "Delivery % (last 4)": st.column_config.TextColumn(
+                         "Delivery % (last 4)",
                          help="Of all shares traded, the share actually DELIVERED "
                               "to buyers instead of bought and sold the same day. "
                               "65 means 65% was real buying, not intraday churn. "
-                              "Big stocks always sit higher, so compare using "
-                              "Deliv z, not this."),
+                              "FOUR sessions, TODAY FIRST then going back, so the "
+                              "direction is visible: '60.4, 65.6, 57.5, 63.7' means "
+                              "today 60.4 against 65.6 yesterday. Big stocks always "
+                              "sit higher than small ones, so judge the LEVEL with "
+                              "Deliv z, not with these raw numbers."),
                      "Futures OI %": st.column_config.NumberColumn(
                          "Futures OI %", format="%.2f",
                          help="Change in the number of open futures contracts vs "
@@ -6518,6 +6524,8 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
             "Delivery": ("—" if b.deliv_z is None else
                          "🟢 heavy" if b.deliv_z > 0.3 else
                          "🔴 light" if b.deliv_z < -0.3 else "⚪ normal"),
+            "Delivery % (last 4)": (", ".join(f"{v:.1f}" for v in b.deliv_trail)
+                                    if b.deliv_trail else "-"),
             "Deliv z": None if b.deliv_z is None else round(b.deliv_z, 2),
             "Futures": {1: "🟢 long build / covering", -1: "🔴 short build / unwind",
                         0: "⚪ mixed", None: "—"}[b.fut_lean],
@@ -6540,14 +6548,22 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                      "Delivery": st.column_config.TextColumn(
                          "Delivery",
                          help="Was real buying unusually HEAVY or LIGHT today, "
-                              "against these same stocks' own last 100 days? "
+                              "against these same stocks' own last 21 sessions? "
                               "Heavy = investors taking delivery rather than day "
                               "trading. Marked heavy above +0.3, light below -0.3."),
+                     "Delivery % (last 4)": st.column_config.TextColumn(
+                         "Delivery % (last 4)",
+                         help="The raw delivery share for FOUR sessions, TODAY "
+                              "FIRST then going back. '60.4, 65.6, 57.5, 63.7' "
+                              "means today 60.4 against 65.6 yesterday - falling. "
+                              "The Delivery word beside it judges the LEVEL; this "
+                              "shows the DIRECTION."),
                      "Deliv z": st.column_config.NumberColumn(
                          "Deliv z", format="%.2f",
-                         help="The number behind the Delivery word. 0 = a normal "
-                              "day. +1.13 = well above these stocks' own normal. "
-                              "-1 = unusually quiet."),
+                         help="The number behind the Delivery word: today against "
+                              "these same stocks' own last 21 sessions. 0 = a "
+                              "normal day. +1 = one standard deviation above "
+                              "normal. -1 = unusually quiet."),
                      "Futures": st.column_config.TextColumn(
                          "Futures",
                          help="What futures traders did. 'long build / covering' = "
