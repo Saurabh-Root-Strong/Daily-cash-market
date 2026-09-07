@@ -215,6 +215,14 @@ class IndexLargeCap:
     front_expiry:  Optional[date] = None
     days_to_expiry: Optional[int] = None
     near_oi_share: Optional[float] = None   # % of forward OI in the front month
+    # Set on Budget days, Muhurat and other special sessions. These are REAL
+    # sessions and belong in the data, but they are short and thin, so their
+    # delivery reads reflect the session TYPE rather than investor behaviour:
+    # 2026-02-01 (Budget Sunday) prints delivery z of -1.75/-2.30/-2.36 across the
+    # three buckets on 117 Cr of turnover against a 172 Cr weekday, and Muhurat
+    # 2023-11-12 runs the other way at 64.1% delivery against ~53% on its
+    # neighbours. Shown as a caveat rather than suppressed.
+    unusual_session: Optional[str] = None
 
     @property
     def net_score(self) -> Optional[float]:
@@ -549,6 +557,23 @@ def get_index_largecap(trade_date: date, fno_symbol: str = "NIFTY") -> IndexLarg
             GROUP BY 1)
         SELECT expiry_date, oi, SUM(oi) OVER () AS tot FROM f ORDER BY expiry_date
     """, [*all_syms, trade_date])
+    _turn = query_dataframe(f"""
+        SELECT trade_date, SUM(turnover_lacs) AS t
+        FROM daily_data
+        WHERE series IN ('EQ','SM','ST') AND trade_date <= ?
+          AND trade_date > (?::date - 45)
+        GROUP BY 1 ORDER BY 1
+    """, [trade_date, trade_date])
+    if len(_turn) >= 6:
+        _cur = float(_turn.iloc[-1]["t"])
+        _norm = float(_turn.iloc[:-1]["t"].median())
+        _why = []
+        if trade_date.weekday() >= 5:
+            _why.append(f"a {trade_date:%A} session")
+        if _norm > 0 and _cur < 0.6 * _norm:
+            _why.append(f"turnover {_cur / _norm * 100:.0f}% of the recent norm")
+        if _why:
+            out.unusual_session = " and ".join(_why)
     if not _exp.empty:
         _f = _exp.iloc[0]
         out.front_expiry = pd.to_datetime(_f["expiry_date"]).date()

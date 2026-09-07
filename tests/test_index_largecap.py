@@ -305,3 +305,49 @@ def test_front_expiry_excludes_a_contract_settling_today():
     out = ilc.get_index_largecap(_d(2026, 8, 25), "NIFTY")
     assert out.is_expiry_session
     assert out.front_expiry > _d(2026, 8, 25)
+
+
+# ── special sessions, and the two display defects the screenshots surfaced ───
+
+def test_special_sessions_are_flagged_but_ordinary_ones_are_not():
+    """Budget days and Muhurat are REAL sessions and belong in the data, but they
+    are short and thin, so their delivery reads describe the session type. The
+    2026 Budget Sunday prints deliv z -1.75/-2.30/-2.36 on 117 Cr against a
+    172 Cr weekday. 2022-08-08 is a plain Monday and must NOT be flagged."""
+    from datetime import date as _d
+    assert ilc.get_index_largecap(_d(2026, 2, 1), "NIFTY").unusual_session
+    assert ilc.get_index_largecap(_d(2025, 2, 1), "NIFTY").unusual_session
+    muhurat = ilc.get_index_largecap(_d(2023, 11, 12), "NIFTY").unusual_session
+    assert muhurat and "turnover" in muhurat, "the thin-session reason should fire"
+    assert ilc.get_index_largecap(_d(2022, 8, 8), "NIFTY").unusual_session is None
+    assert ilc.get_index_largecap(_d(2026, 9, 4), "NIFTY").unusual_session is None
+
+
+def test_the_six_backfilled_sessions_render_and_carry_data():
+    from datetime import date as _d
+    for day in (_d(2020, 2, 1), _d(2022, 8, 8), _d(2023, 11, 12),
+                _d(2024, 3, 2), _d(2025, 2, 1), _d(2026, 2, 1)):
+        out = ilc.get_index_largecap(day, "NIFTY")
+        assert out.data_ok, f"{day} has no constituent data"
+        assert out.rows and all(r.n_present > 0 for r in out.rows), day
+
+
+def test_futures_columns_in_the_two_tables_are_not_both_called_the_same_thing():
+    """The Flow read shows the plain mean OI change; the session list shows it
+    SIGNED by each stock's price move. On 04 Sep 2026 Next 10 read +0.25 plain and
+    -0.72 signed - opposite signs under what used to be the same column name."""
+    from pathlib import Path
+    src = Path("src/dashboard/views/sector_rotation.py").read_text(encoding="utf-8")
+    assert '"Futures pressure": _trip(' in src, "session list column not renamed"
+    assert src.count('"Futures OI %  (T · N · R)"') == 0, "old colliding header remains"
+
+
+def test_today_row_uses_nan_not_none_for_unknown_outcomes():
+    """A None makes the column object-typed and Streamlit prints the literal text
+    'None' in today's row of the session list."""
+    from pathlib import Path
+    src = Path("src/dashboard/views/sector_rotation.py").read_text(encoding="utf-8")
+    i = src.index('"Session": f"{selected_date:%d %b %Y}  ← today"')
+    block = src[i:i + 600]
+    assert '"Next day %": None' not in block, "today row still emits a bare None"
+    assert 'float("nan")' in block

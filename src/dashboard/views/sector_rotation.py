@@ -6485,6 +6485,15 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                 unsafe_allow_html=True)
 
     # ── flow summary: delivery + futures + options, per bucket ──────────────
+    if d.unusual_session:
+        st.warning(
+            f"**This is a special session — {d.unusual_session}.** NSE runs live "
+            "sessions on Budget days and for Muhurat trading, and they are short "
+            "and thin. The delivery reads below describe the SESSION TYPE more "
+            "than investor behaviour: the 2026 Budget Sunday printed delivery z "
+            "of -1.75 / -2.30 / -2.36 across the three buckets, while Muhurat "
+            "2023 ran the other way at 64% delivery against ~53% on its "
+            "neighbours. The numbers are correct; read them with that in mind.")
     st.markdown("##### Flow read — delivery, futures OI, options OI")
     if d.front_expiry:
         _dte = d.days_to_expiry
@@ -6629,10 +6638,12 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
             "Session": f"{selected_date:%d %b %Y}  ← today",
             "Alike": None,
             "Delivery z": _trip(_today, "delivery"),
-            "Futures OI %": _trip(_today, "futures"),
+            "Futures pressure": _trip(_today, "futures"),
             "Call vs put": _optrip(_today),
-            "Next day %": None, "Next day pts": None,
-            "Next 5 sessions %": None, "Next 5d pts": None,
+            # NaN, not None: a None here makes the whole column object-typed and
+            # Streamlit prints the literal text "None" in today's row.
+            "Next day %": float("nan"), "Next day pts": float("nan"),
+            "Next 5 sessions %": float("nan"), "Next 5d pts": float("nan"),
         }]
         _far = float(_m["distance"].max()) or 1.0
         for _, r in _m.iterrows():
@@ -6640,12 +6651,15 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                 "Session": pd.Timestamp(r["date"]).strftime("%d %b %Y"),
                 "Alike": round(100 * (1 - r["distance"] / (_far * 1.15)), 0),
                 "Delivery z": _trip(r, "delivery"),
-                "Futures OI %": _trip(r, "futures"),
+                "Futures pressure": _trip(r, "futures"),
                 "Call vs put": _optrip(r),
                 "Next day %": round(r["d1"], 2),
-                "Next day pts": None if pd.isna(r.get("d1_pts")) else round(r["d1_pts"]),
-                "Next 5 sessions %": None if pd.isna(r["d5"]) else round(r["d5"], 2),
-                "Next 5d pts": None if pd.isna(r.get("d5_pts")) else round(r["d5_pts"]),
+                "Next day pts": float("nan") if pd.isna(r.get("d1_pts"))
+                                else round(r["d1_pts"]),
+                "Next 5 sessions %": float("nan") if pd.isna(r["d5"])
+                                     else round(r["d5"], 2),
+                "Next 5d pts": float("nan") if pd.isna(r.get("d5_pts"))
+                               else round(r["d5_pts"]),
             })
         st.dataframe(
             pd.DataFrame(_disp), hide_index=True, use_container_width=True,
@@ -6667,12 +6681,17 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                          "is that bucket's delivery against its own 100-day "
                          "normal. Example: today reads +1.13 / +0.58 / +0.42, and "
                          "a row showing +1.29 / +0.63 / +0.44 is a close match."),
-                "Futures OI %": st.column_config.TextColumn(
-                    "Futures OI %  (T · N · R)",
-                    help="Three numbers: Top 10, Next 10, Rest 30. Positive = "
-                         "futures positions grew while prices rose, or shrank "
-                         "while prices fell (supportive). Negative = the "
-                         "bearish combination."),
+                "Futures pressure": st.column_config.TextColumn(
+                    "Futures pressure  (T · N · R)",
+                    help="NOT the same number as 'Fut OI %' in the Flow read "
+                         "table above — that one is the plain average OI change, "
+                         "this one is the OI change SIGNED by each stock's price "
+                         "move, which is what the matching uses. Positive = "
+                         "positions grew while prices rose (or shrank while "
+                         "prices fell). Negative = the bearish combination. They "
+                         "can disagree in sign: on 04 Sep 2026 Next 10 read "
+                         "+0.25 plain but -0.72 signed, because OI rose mostly "
+                         "on stocks that FELL."),
                 "Call vs put": st.column_config.TextColumn(
                     "Call vs put  (T · N · R)",
                     help="Which option side grew faster in each bucket. "
