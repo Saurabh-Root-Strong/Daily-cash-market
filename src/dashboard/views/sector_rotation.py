@@ -6527,6 +6527,8 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
             "Delivery % (last 4)": (", ".join(f"{v:.1f}" for v in b.deliv_trail)
                                     if b.deliv_trail else "-"),
             "Deliv z": None if b.deliv_z is None else round(b.deliv_z, 2),
+            "Activity": (None if b.turnover_vs_norm is None
+                         else round(b.turnover_vs_norm, 0)),
             "Futures": {1: "🟢 long build / covering", -1: "🔴 short build / unwind",
                         0: "⚪ mixed", None: "—"}[b.fut_lean],
             "Fut OI %": None if b.fut_oi_pct is None else round(b.fut_oi_pct, 2),
@@ -6563,7 +6565,21 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                          help="The number behind the Delivery word: today against "
                               "these same stocks' own last 21 sessions. 0 = a "
                               "normal day. +1 = one standard deviation above "
-                              "normal. -1 = unusually quiet."),
+                              "normal. -1 = unusually quiet. READ IT WITH Activity "
+                              "-- on its own a rising share cannot tell you whether "
+                              "delivery grew or volume shrank."),
+                     "Activity": st.column_config.NumberColumn(
+                         "Activity %", format="%+d",
+                         help="Today's total traded value against this bucket's own "
+                              "last 21 sessions. +35 means 35% busier than normal. "
+                              "PAIR IT WITH Delivery: rupees delivered = delivery "
+                              "share x turnover, so both up = a genuine delivery "
+                              "surge; share up while Activity is flat or negative "
+                              "means the share only rose because trading dried up. "
+                              "On 09 Sep 2026 Top 10 ran share 64.1% on Activity "
+                              "+35% (real, delivery +46% in rupees) while Rest 30 "
+                              "ran share 56.9% on Activity +4% (flat -- its rupee "
+                              "delivery was actually 1% BELOW normal)."),
                      "Futures": st.column_config.TextColumn(
                          "Futures",
                          help="What futures traders did. 'long build / covering' = "

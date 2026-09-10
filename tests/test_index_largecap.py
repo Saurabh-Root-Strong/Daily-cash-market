@@ -388,3 +388,37 @@ def test_delivery_baseline_is_a_trading_month_and_records_why():
     head = src[:src.index("@dataclass")]
     assert "+0.64" in head, "the Rest-30 lag-21 autocorrelation must stay recorded"
     assert "1.28x" in head, "the sustained-move ratio must stay recorded"
+
+
+# ── delivery share vs activity: the ratio ambiguity ─────────────────────────
+
+def test_activity_is_turnover_vs_norm_not_delivery_value():
+    """Delivery value = share x turnover, and a delivery-VALUE z correlates +0.94
+    to +0.95 with a turnover z over 1,153 sessions — it is a 'busy day' indicator
+    wearing a delivery label. The SHARE carries the independent information
+    (0.39-0.56 with value), so the panel shows the other FACTOR, not the product."""
+    from datetime import date as _d
+    out = ilc.get_index_largecap(_d(2026, 9, 9), "NIFTY")
+    by = {r.label: r for r in out.rows}
+    assert by["Top 10"].turnover_vs_norm == pytest.approx(34.5, abs=1.0)
+    assert by["Rest 30"].turnover_vs_norm == pytest.approx(3.5, abs=1.0)
+    # the case that motivated it: Rest 30's share reads mildly firm while its
+    # rupee delivery is actually BELOW normal, because activity is flat
+    assert by["Rest 30"].deliv_z > 0
+    assert by["Rest 30"].turnover_vs_norm < 10
+
+
+def test_activity_degrades_to_none_without_enough_history():
+    d = ilc.BucketRow(label="Top 10", n_members=10, n_present=10)
+    assert d.turnover_vs_norm is None, "no history must not read as 0% (normal)"
+
+
+def test_delivery_tooltip_tells_the_reader_to_pair_the_two():
+    from pathlib import Path
+    src = Path("src/dashboard/views/sector_rotation.py").read_text(encoding="utf-8")
+    assert '"Activity": st.column_config' in src
+    # the pairing rule and the worked example must both survive, wherever they sit
+    # the phrase wraps across a source line break, so match the contiguous half
+    assert "share x turnover" in src, "the value = share x turnover rule is gone"
+    assert "trading dried up" in src, "the ratio-ambiguity warning is gone"
+    assert "READ IT WITH Activity" in src, "the Deliv z tooltip no longer points at Activity"

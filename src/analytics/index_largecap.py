@@ -137,6 +137,14 @@ class BucketRow:
     deliv_pct:    Optional[float] = None     # equal-weight delivery %
     deliv_z:      Optional[float] = None     # vs the bucket's own 21-session normal
     deliv_trail:  list = field(default_factory=list)   # last 4 sessions, newest first
+    # Turnover against the bucket's own 21-session norm, in %. This is the OTHER
+    # factor in delivery value (value = delivery share x turnover), and it is the
+    # only way to tell a genuine delivery surge from a ratio that rose because
+    # volume fell. Deliberately NOT the rupee delivery value: measured over 1,153
+    # sessions, a delivery-VALUE z correlates +0.94 to +0.95 with a turnover z, so
+    # it is a "busy day" indicator wearing a delivery label. The delivery SHARE
+    # carries the independent information (it shares only 0.39-0.56 with value).
+    turnover_vs_norm: Optional[float] = None
     fut_long:     int = 0                    # OI-price matrix counts (near month)
     fut_short:    int = 0
     fut_cover:    int = 0
@@ -470,6 +478,13 @@ def _bucket_row(label: str, members: tuple, hist: pd.DataFrame,
             row.deliv_trail = [round(float(v), 1)
                                for v in _recent.mean(axis=1).iloc[::-1]
                                if pd.notna(v)]
+        if "turnover_lacs" in h.columns:
+            tw = h.pivot_table("turnover_lacs", "trade_date", "symbol").sum(axis=1)
+            _today_t = t["trade_date"].iloc[0]
+            _base = tw[tw.index < _today_t].tail(_DELIV_BASE)
+            if _today_t in tw.index and len(_base) >= _DELIV_MINP and _base.mean() > 0:
+                row.turnover_vs_norm = float(
+                    tw[_today_t] / _base.mean() * 100 - 100)
 
     ft = fut_today[fut_today["symbol"].isin(mem)] if not fut_today.empty else pd.DataFrame()
     if not ft.empty:
