@@ -6570,16 +6570,16 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                               "delivery grew or volume shrank."),
                      "Activity": st.column_config.NumberColumn(
                          "Activity %", format="%+d",
-                         help="Today's total traded value against this bucket's own "
-                              "last 21 sessions. +35 means 35% busier than normal. "
-                              "PAIR IT WITH Delivery: rupees delivered = delivery "
-                              "share x turnover, so both up = a genuine delivery "
-                              "surge; share up while Activity is flat or negative "
-                              "means the share only rose because trading dried up. "
-                              "On 09 Sep 2026 Top 10 ran share 64.1% on Activity "
-                              "+35% (real, delivery +46% in rupees) while Rest 30 "
-                              "ran share 56.9% on Activity +4% (flat -- its rupee "
-                              "delivery was actually 1% BELOW normal)."),
+                         help="How BUSY these stocks were today, compared with a "
+                              "normal day. Normal = their average over the last 21 "
+                              "sessions. Example: they usually trade Rs 10,000 Cr "
+                              "a day; today they traded Rs 9,000 Cr, so Activity = "
+                              "-10 (10% quieter). +20 would mean 20% busier. "
+                              "WHY IT SITS NEXT TO DELIVERY: delivery % is a share "
+                              "of the day's trading, so it can rise just because "
+                              "the day was quiet. If delivery % goes UP but "
+                              "Activity is NEGATIVE, fewer rupees were actually "
+                              "delivered - do not read it as real buying."),
                      "Futures": st.column_config.TextColumn(
                          "Futures",
                          help="What futures traders did. 'long build / covering' = "

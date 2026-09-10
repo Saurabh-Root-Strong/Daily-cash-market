@@ -418,7 +418,8 @@ def test_delivery_tooltip_tells_the_reader_to_pair_the_two():
     src = Path("src/dashboard/views/sector_rotation.py").read_text(encoding="utf-8")
     assert '"Activity": st.column_config' in src
     # the pairing rule and the worked example must both survive, wherever they sit
-    # the phrase wraps across a source line break, so match the contiguous half
-    assert "share x turnover" in src, "the value = share x turnover rule is gone"
-    assert "trading dried up" in src, "the ratio-ambiguity warning is gone"
+    # the ratio-ambiguity warning, in plain words, with a timeless example
+    assert "can rise just because" in src, "the ratio-ambiguity warning is gone"
+    assert "fewer rupees were actually" in src, "the consequence is no longer stated"
+    assert "Rs 10,000 Cr" in src, "the worked example is gone"
     assert "READ IT WITH Activity" in src, "the Deliv z tooltip no longer points at Activity"
