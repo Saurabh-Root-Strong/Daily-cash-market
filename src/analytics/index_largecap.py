@@ -145,6 +145,12 @@ class BucketRow:
     # it is a "busy day" indicator wearing a delivery label. The delivery SHARE
     # carries the independent information (it shares only 0.39-0.56 with value).
     turnover_vs_norm: Optional[float] = None
+    # Rupee delivery today and its 21-session normal, in Cr. Used ONLY to
+    # prove or disprove a delivery reading in the tooltip -- deliberately
+    # not a column: a delivery-value z correlates +0.94..+0.95 with a
+    # turnover z, so as a standalone number it just says 'busy day'.
+    deliv_value_cr: Optional[float] = None
+    deliv_value_norm_cr: Optional[float] = None
     fut_long:     int = 0                    # OI-price matrix counts (near month)
     fut_short:    int = 0
     fut_cover:    int = 0
@@ -485,6 +491,13 @@ def _bucket_row(label: str, members: tuple, hist: pd.DataFrame,
             if _today_t in tw.index and len(_base) >= _DELIV_MINP and _base.mean() > 0:
                 row.turnover_vs_norm = float(
                     tw[_today_t] / _base.mean() * 100 - 100)
+            # delivered value = delivery share x traded value
+            _dv = (h.assign(_d=h['deliv_per'] / 100 * h['turnover_lacs'])
+                   .pivot_table('_d', 'trade_date', 'symbol').sum(axis=1))
+            _dvb = _dv[_dv.index < _today_t].tail(_DELIV_BASE)
+            if _today_t in _dv.index and len(_dvb) >= _DELIV_MINP:
+                row.deliv_value_cr = float(_dv[_today_t] / 100)
+                row.deliv_value_norm_cr = float(_dvb.mean() / 100)
 
     ft = fut_today[fut_today["symbol"].isin(mem)] if not fut_today.empty else pd.DataFrame()
     if not ft.empty:

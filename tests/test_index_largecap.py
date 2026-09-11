@@ -413,13 +413,47 @@ def test_activity_degrades_to_none_without_enough_history():
     assert d.turnover_vs_norm is None, "no history must not read as 0% (normal)"
 
 
-def test_delivery_tooltip_tells_the_reader_to_pair_the_two():
-    from pathlib import Path
-    src = Path("src/dashboard/views/sector_rotation.py").read_text(encoding="utf-8")
-    assert '"Activity": st.column_config' in src
-    # the pairing rule and the worked example must both survive, wherever they sit
-    # the ratio-ambiguity warning, in plain words, with a timeless example
-    assert "can rise just because" in src, "the ratio-ambiguity warning is gone"
-    assert "fewer rupees were actually" in src, "the consequence is no longer stated"
-    assert "Rs 10,000 Cr" in src, "the worked example is gone"
-    assert "READ IT WITH Activity" in src, "the Deliv z tooltip no longer points at Activity"
+# ── the live Delivery / Activity tooltip ─────────────────────────────────────
+
+def _pair(day):
+    from src.dashboard.views.sector_rotation import _ilc_pair_help
+    return _ilc_pair_help(ilc.get_index_largecap(day, "NIFTY").rows, day)
+
+
+def test_pair_tooltip_carries_the_rule_and_a_live_example():
+    from datetime import date as _d
+    t = _pair(_d(2026, 9, 10))
+    for case in ("**Real**", "**Don't trust it**", "Busy, but mostly day-trading",
+                 "Quiet, nothing happening"):
+        assert case in t, f"rule line missing: {case!r}"
+    assert "**On 10 Sep 2026:**" in t, "the example must be for the SELECTED date"
+    assert "Rs 4,289 Cr against a normal Rs 5,145 Cr" in t
+
+
+def test_pair_tooltip_flags_the_trap_only_when_the_rupees_really_fell():
+    """10 Sep Rest 30: z +0.21 but rupees -17% -> trap. 09 Sep Rest 30: z +0.11,
+    rupees -1% -> NOT a trap, that is noise."""
+    from datetime import date as _d
+    assert "**Rest 30 is the trap today.**" in _pair(_d(2026, 9, 10))
+    assert "is the trap today" not in _pair(_d(2026, 9, 9))
+
+
+def test_pair_tooltip_never_contradicts_the_delivery_column():
+    """Without a dead band, 09 Sep Rest 30 (z +0.11, Activity +4%) was labelled
+    'Real - more of it delivered' while its rupee delivery FELL 1%, and while the
+    Delivery column beside it said 'normal'."""
+    from datetime import date as _d
+    t = _pair(_d(2026, 9, 9))
+    rest = next(l for l in t.splitlines() if l.startswith("- Rest 30"))
+    assert "delivery normal" in rest
+    assert "Real" not in rest
+    assert "about the usual rupees delivered" in rest
+
+
+def test_rupee_delivery_equals_share_times_turnover():
+    """deliv_value is derived as delivery share x traded value. It must match the
+    independent deliv_qty x avg_price figure to the crore."""
+    from datetime import date as _d
+    by = {r.label: r for r in ilc.get_index_largecap(_d(2026, 9, 10), "NIFTY").rows}
+    assert by["Top 10"].deliv_value_cr == pytest.approx(5141, abs=2)
+    assert by["Rest 30"].deliv_value_norm_cr == pytest.approx(5145, abs=2)

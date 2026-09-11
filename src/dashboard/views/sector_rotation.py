@@ -6321,6 +6321,89 @@ def _ilc_chip(text: str, colour: str) -> str:
             f"font-size:0.82rem;white-space:nowrap'>{text}</span>")
 
 
+
+# Dead bands for the live Delivery/Activity read. The delivery band is the SAME
+# +-0.3 the Delivery column uses to print heavy/light, so the tooltip can never
+# call a bucket "delivery up" while the column beside it says "normal". Without a
+# band, 09 Sep 2026 Rest 30 (z +0.11, Activity +4%) was labelled "Real - more of it
+# delivered" while its rupee delivery actually FELL 1%.
+_PAIR_Z_BAND = 0.3      # delivery z
+_PAIR_ACT_BAND = 5.0    # Activity %
+_PAIR_RS_BAND = 5.0     # rupee delivery change %, for the verdict
+
+
+def _ilc_pair_help(rows: list, when: date) -> str:
+    """Tooltip for the Delivery z + Activity pair, with a LIVE worked example.
+
+    The rule is fixed. The example is computed from the selected session, because
+    any hard-coded example ("Rest 30 today is the trap") is only true on one date
+    and reads as nonsense on every other. The verdict on each bucket is anchored
+    on the RUPEES actually delivered, which is the ground truth the share and the
+    activity are only two halves of.
+    """
+    def _dz(v):
+        return "↑" if v > _PAIR_Z_BAND else "↓" if v < -_PAIR_Z_BAND else "→"
+
+    def _da(v):
+        return "↑" if v > _PAIR_ACT_BAND else "↓" if v < -_PAIR_ACT_BAND else "→"
+
+    rule = {
+        ("↑", "↑"): "**Real** — more money, and more of it delivered",
+        ("↑", "↓"): "**Don't trust it** — the day was quiet, not the buying strong",
+        ("↓", "↑"): "Busy, but mostly day-trading",
+        ("↓", "↓"): "Quiet, nothing happening",
+    }
+    word_d = {"↑": "heavy", "↓": "light", "→": "normal"}
+    word_a = {"↑": "busier", "↓": "quieter", "→": "normal"}
+
+    parts = [
+        "**Activity tells you whether a delivery reading is real.** Delivery % is a "
+        "SHARE of the day's trading, so it can go up for two very different "
+        "reasons: more people really took delivery (real buying), or the day was "
+        "just quiet, so the same delivered stock became a bigger share of a smaller "
+        "total (looks like buying, isn't).",
+        "**The one rule to remember:**",
+        "- Delivery ↑ + Activity ↑ → " + rule[("↑", "↑")],
+        "- Delivery ↑ + Activity ↓ → " + rule[("↑", "↓")],
+        "- Delivery ↓ + Activity ↑ → " + rule[("↓", "↑")],
+        "- Delivery ↓ + Activity ↓ → " + rule[("↓", "↓")],
+        f"(Delivery counts as ↑/↓ beyond ±{_PAIR_Z_BAND} z, the same line the "
+        f"Delivery column uses; Activity beyond ±{_PAIR_ACT_BAND:.0f}%.)",
+        f"**On {when:%d %b %Y}:**",
+    ]
+    traps = []
+    for b in rows:
+        if b.deliv_z is None or b.turnover_vs_norm is None:
+            parts.append(f"- {b.label}: not enough history to read")
+            continue
+        kd, ka = _dz(b.deliv_z), _da(b.turnover_vs_norm)
+        line = (f"- {b.label}: delivery {word_d[kd]} (z {b.deliv_z:+.2f}), "
+                f"{word_a[ka]} day (Activity {b.turnover_vs_norm:+.0f}%)")
+        if (kd, ka) in rule:
+            line += f" → {kd}{ka} " + rule[(kd, ka)].replace("**", "")
+        if b.deliv_value_cr is not None and b.deliv_value_norm_cr:
+            chg = b.deliv_value_cr / b.deliv_value_norm_cr * 100 - 100
+            verdict = ("more rupees delivered" if chg > _PAIR_RS_BAND else
+                       "fewer rupees delivered" if chg < -_PAIR_RS_BAND else
+                       "about the usual rupees delivered")
+            line += (f". In rupees: Rs {b.deliv_value_cr:,.0f} Cr against a normal "
+                     f"Rs {b.deliv_value_norm_cr:,.0f} Cr ({chg:+.0f}%) — {verdict}.")
+            # the illusion: the share reads above normal, the rupees are down
+            if b.deliv_z > 0 and chg < -_PAIR_RS_BAND:
+                traps.append((b.label, b.deliv_z, b.turnover_vs_norm,
+                              b.deliv_value_cr, b.deliv_value_norm_cr, chg))
+        parts.append(line)
+    for lab, z, act, v, n, chg in traps:
+        parts.append(
+            f"**{lab} is the trap today.** Its delivery z is positive ({z:+.2f}), "
+            f"so the share looks firm — but Activity is {act:+.0f}%, so the day was "
+            f"much "
+            f"quieter. In rupees it actually delivered Rs {v:,.0f} Cr against a "
+            f"normal Rs {n:,.0f} Cr — {abs(chg):.0f}% LESS. The positive delivery "
+            f"z is an illusion created by the quiet day.")
+    # paragraphs get a blank line between them; bullet lines stay tight
+    return "\n\n".join(parts).replace("\n\n- ", "\n- ")
+
 def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
     from src.dashboard.cache.queries import (cached_index_largecap,
                                              cached_concentration_trend,
@@ -6541,6 +6624,7 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                         "call writing": "🔴 call writing", None: "—"}[b.opt_read],
             "Bucket score": None if _sc is None else round(_sc, 2),
         })
+    _pair_help = _ilc_pair_help(d.rows, selected_date)
     st.dataframe(pd.DataFrame(_flow), hide_index=True, use_container_width=True,
                  column_config={
                      "Bucket": st.column_config.TextColumn(
@@ -6562,24 +6646,10 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                               "shows the DIRECTION."),
                      "Deliv z": st.column_config.NumberColumn(
                          "Deliv z", format="%.2f",
-                         help="The number behind the Delivery word: today against "
-                              "these same stocks' own last 21 sessions. 0 = a "
-                              "normal day. +1 = one standard deviation above "
-                              "normal. -1 = unusually quiet. READ IT WITH Activity "
-                              "-- on its own a rising share cannot tell you whether "
-                              "delivery grew or volume shrank."),
+                         help=_pair_help),
                      "Activity": st.column_config.NumberColumn(
                          "Activity %", format="%+d",
-                         help="How BUSY these stocks were today, compared with a "
-                              "normal day. Normal = their average over the last 21 "
-                              "sessions. Example: they usually trade Rs 10,000 Cr "
-                              "a day; today they traded Rs 9,000 Cr, so Activity = "
-                              "-10 (10% quieter). +20 would mean 20% busier. "
-                              "WHY IT SITS NEXT TO DELIVERY: delivery % is a share "
-                              "of the day's trading, so it can rise just because "
-                              "the day was quiet. If delivery % goes UP but "
-                              "Activity is NEGATIVE, fewer rupees were actually "
-                              "delivered - do not read it as real buying."),
+                         help=_pair_help),
                      "Futures": st.column_config.TextColumn(
                          "Futures",
                          help="What futures traders did. 'long build / covering' = "
