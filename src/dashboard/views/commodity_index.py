@@ -28,14 +28,28 @@ _KINDS = {
 }
 
 
+# |rank correlation| a sample of 26 independent weeks exceeds by chance only
+# about 1 time in 20. Below it, "Opposite" would be a coin reading tea leaves.
+_LINK_BAND = 0.4
+
+
 def _link_word(r: float | None) -> str:
     if r is None:
         return "not enough weeks"
-    if r <= -0.3:
+    if r <= -_LINK_BAND:
         return "Opposite"
-    if r >= 0.3:
+    if r >= _LINK_BAND:
         return "Together"
     return "Unrelated"
+
+
+def _rank_word(p: float | None, unit: str) -> str | None:
+    """'bigger than 97% of weeks' for a rise, 'a fall deeper than 98%' for a fall."""
+    if p is None:
+        return None
+    if p >= 0.5:
+        return f"rise bigger than {p:.0%} of {unit}"
+    return f"fall deeper than {1 - p:.0%} of {unit}"
 
 
 def _pct(v, d=2):
@@ -53,23 +67,29 @@ def _rail(commodity: str, lab: str) -> None:
             f"days, sharp one-day jumps, big 5/10/20-session moves × 14 indices × "
             f"next day / next 5 / 10 / 20 sessions). {g['nominal']} looked "
             f"'significant' — about the {g['chance']} that pure chance produces — and "
-            f"**none survive** a correction for testing that many things. Example: "
-            f"after crude rose 5+ sessions in a row, Nifty's next day averaged "
-            f"{cr['n50_up5_next_day']:+.3f}% against {cr['n50_base_next_day']:+.3f}% "
-            f"on an ordinary day — a gap well inside luck.\n\n"
+            f"**none survive** a correction for testing that many things.\n\n"
             f"**What IS true: crude and Nifty often move at the same time — but which "
             f"way depends on the year** (see *Year by year* below: it runs from about "
             f"{max(by.values()):+.1f} to {min(by.values()):+.1f}, where −1 = always "
             f"opposite and +1 = always together). Over the whole period it is about "
-            f"zero. **2026 is the strongest opposite year on record**, so what you "
-            f"see on the chart this year is real. But it describes the same week, and "
-            f"it does not predict "
-            f"itself: the last half-year's direction matched the next half-year's "
-            f"only {cr['regime_sign_agree']:.0%} of the time ({cr['regime_halves']} "
-            f"half-years). Even inside an 'opposite' spell, a crude-up week did not "
-            f"lead a weak Nifty NEXT week (t {cr['neg_regime_next_week_t']:+.2f}). "
-            f"By the time crude's move is known, Nifty has usually already reacted "
-            f"at the open.")
+            f"zero. **2026 is the strongest opposite year on record** (as of the "
+            f"Sep 2026 study), so what you see on the chart this year is real. But it "
+            f"describes the same week, and it has not predicted itself: the last 26 "
+            f"weeks' direction matched the next 13 weeks' {cr['regime_sign_agree']:.0%} "
+            f"of the time ({cr['regime_steps']} tries; of the strong readings only "
+            f"{cr['regime_strong_held']} held). Inside an 'opposite' spell a crude-up "
+            f"week was followed by a weaker Nifty week, but not measurably (t "
+            f"{cr['neg_regime_next_week_t']:+.2f} on 26 weeks — too few to call). In "
+            f"2026 much of the reaction came at the next open (crude's day vs Nifty's "
+            f"next gap {cr['gap_corr_2026']:+.2f}), before a trade off the MCX close "
+            f"was possible.\n\n"
+            f"**The rupee matters more than the oil, most years.** MCX crude = "
+            f"dollar crude × USD/INR. Split apart over 2018-2026, the rupee's "
+            f"same-week link to Nifty is {cr['usdinr_link_full']:+.2f} (a weaker rupee "
+            f"goes with a weaker Nifty in every period) while dollar crude's is "
+            f"{cr['usd_crude_link_full']:+.2f}. 2026 is the exception — dollar crude "
+            f"alone is {cr['usd_crude_link_2026']:+.2f} even with the rupee held "
+            f"fixed. Neither forecasts next week.")
     else:
         note = STUDY["survivor_note"].get(commodity)
         head = (f"**{lab}: {g['tests']:,} tests, {g['nominal']} nominal hits vs "
@@ -121,21 +141,19 @@ def render_commodity_index(selected_date: date) -> None:
     # ── today's read ─────────────────────────────────────────────────────────
     st.markdown(f"#### {lab} right now — MCX close {s.mcx_date:%d %b %Y}")
     m = st.columns(5)
-    m[0].metric("Price (₹)", f"{s.close:,.0f}", _pct(s.r1),
+    m[0].metric("Price (₹)", f"{s.close:,.0f}", _pct(s.r1), delta_color="off",
                 help=f"Last MCX close on or before {selected_date:%d %b}. The small "
                      "number is the one-session change. MCX trades until 23:30, "
                      "after NSE has closed, so this move is news Nifty has NOT seen "
                      "yet — it shows up in Nifty's NEXT open.")
-    m[1].metric("Last 5 sessions", _pct(s.r5, 1),
-                None if s.pct5 is None else f"bigger than {s.pct5:.0%} of weeks",
-                delta_color="off",
+    m[1].metric("Last 5 sessions", _pct(s.r5, 1), _rank_word(s.pct5, "weeks"),
+                delta_color="off", delta_arrow="off",
                 help="Move over the last 5 MCX sessions, and how it ranks against "
                      "every 5-session move of the previous 3 years. Example: "
-                     "'bigger than 97% of weeks' = one of the largest weekly rises "
-                     "in 3 years.")
-    m[2].metric("Last 20 sessions", _pct(s.r20, 1),
-                None if s.pct20 is None else f"bigger than {s.pct20:.0%} of months",
-                delta_color="off",
+                     "'rise bigger than 97% of weeks' = one of the largest weekly "
+                     "rises in 3 years; 'fall deeper than 90%' = a big weekly fall.")
+    m[2].metric("Last 20 sessions", _pct(s.r20, 1), _rank_word(s.pct20, "months"),
+                delta_color="off", delta_arrow="off",
                 help="Same idea over about a month (20 sessions).")
     streak = (f"up {s.up_streak} in a row" if s.up_streak else
               f"down {s.dn_streak} in a row" if s.dn_streak else "flat")
@@ -145,13 +163,17 @@ def render_commodity_index(selected_date: date) -> None:
                      "back to back.")
     m[4].metric(f"Moving vs {index}", _link_word(s.corr_26w),
                 None if s.corr_26w is None else f"{s.corr_26w:+.2f} over {s.weeks_26w} weeks",
-                delta_color="off",
+                delta_color="off", delta_arrow="off",
                 help="How the two moved in the SAME week over the last 26 weeks "
-                     "(rank correlation, −1 to +1). −0.6 = in most weeks when the "
-                     "commodity rose, the index fell. It describes the recent past; it is NOT a "
+                     f"(rank correlation, −1 to +1). −0.6 = in most weeks when the "
+                     f"commodity rose, the index fell. 'Opposite' / 'Together' only "
+                     f"beyond ±{_LINK_BAND} — with 26 weeks, smaller readings happen "
+                     f"by chance. It describes the recent past; it is NOT a "
                      "forecast — the study found this relationship flips from year "
                      "to year and does not predict itself.")
-    if s.lag_note:
+    if s.stale:
+        st.error(s.lag_note)
+    elif s.lag_note:
         st.caption(s.lag_note)
     if s.corr_full is not None:
         st.caption(f"Since July 2018 the same-week link is {s.corr_full:+.2f} "
@@ -162,6 +184,8 @@ def render_commodity_index(selected_date: date) -> None:
     if not paths.empty:
         st.markdown(f"**Last 12 months, both rebased to 100** — above 100 = higher "
                     f"than a year ago")
+        st.caption("Commodity line = the quoted MCX front-month price, so it takes a "
+                   "small step at each monthly contract roll.")
         st.line_chart(paths, height=260, color=["#60a5fa", "#f59e0b"])
 
     # ── pattern lookup ───────────────────────────────────────────────────────
@@ -196,7 +220,8 @@ def render_commodity_index(selected_date: date) -> None:
                 f"since July 2018. Try a smaller number.")
     else:
         st.markdown(f"**{sm['label']}** — happened **{sm['episodes']} times** since "
-                    f"July 2018.")
+                    f"July 2018 (a new time only after at least "
+                    f"{max(sm['window'], 5)} sessions without it).")
         cols = st.columns(3)
         for col, key, name in ((cols[0], "next1", "Next day"),
                                (cols[1], "next5", "Next 5 sessions"),
@@ -205,17 +230,29 @@ def render_commodity_index(selected_date: date) -> None:
             if not x["n"]:
                 continue
             diff = x["avg"] - x["base_avg"]
-            luck = "inside the luck band" if abs(diff) <= x["noise"] else "OUTSIDE the luck band"
+            if x["noise"] is None:
+                luck, band = "too few to judge", "not computed — fewer than 3 independent cases"
+            else:
+                luck = ("inside the luck band" if abs(diff) <= x["noise"]
+                        else "outside the luck band")
+                band = f"±{x['noise'] * 100:.2f}%"
             col.metric(f"{index} — {name}", _pct(x["avg"]),
                        f"{diff * 100:+.2f}% vs a normal day",
-                       delta_color="off",
+                       delta_color="off", delta_arrow="off",
                        help=f"Average {index} move after the pattern, close to close. "
-                            f"Ordinary days: {_pct(x['base_avg'])}. The luck band is "
-                            f"±{x['noise'] * 100:.2f}% — the gap {x['n']} random "
-                            f"ordinary days would often show by chance. Inside it = "
-                            f"you cannot tell this apart from any other day.")
+                            f"Ordinary days: {_pct(x['base_avg'])}. Luck band: {band} "
+                            f"— how far the average of {x['n_eff']} random ordinary "
+                            f"days lands from normal about 1 time in 20 "
+                            f"({x['n_eff']} = the cases whose windows do not overlap). "
+                            f"Outside it on ONE pattern means little: try 20 patterns "
+                            f"and about one lands outside by chance — the study tried "
+                            f"{STUDY['cumulative_tests']:,}.")
             col.caption(f"Up {x['up']:.0%} of {x['n']} times (normal: "
                         f"{x['base_up']:.0%}) · {luck}")
+        if sm.get("today_in"):
+            st.info(f"**{lab} is in this pattern right now** (MCX close "
+                    f"{sm['today_mcx']:%d %b %Y}). The table is what followed it before "
+                    f"— a record, not a forecast.")
 
         tab = pd.DataFrame({
             f"{lab} date": pd.to_datetime(ev.mcx_date).dt.date,

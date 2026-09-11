@@ -170,3 +170,68 @@ def test_every_commodity_index_column_has_a_tooltip():
 def test_panel_is_on_the_sector_rotation_page():
     from src.dashboard.views import sector_rotation as sr
     assert "🛢️ Commodity vs Index" in sr._PANELS
+
+
+# ── audit 2026-09-11: one test per confirmed bug ──────────────────────────────
+def test_a_return_across_a_source_hole_is_not_a_one_day_move(temp_db):
+    """CFM's 2 Jul 2018 crude row carried +12.9% -- the whole 31 May -> 2 Jul
+    move across the missing June -- and read as a one-session spike."""
+    from src.data.repository import get_repository
+    days = [date(2019, 1, 1) + timedelta(days=i) for i in range(10)]
+    days += [date(2019, 3, 1) + timedelta(days=i) for i in range(10)]   # 50-day hole
+    r = [0.001] * 10 + [0.129] + [0.001] * 9
+    get_repository().replace_commodity_daily(pd.DataFrame({
+        "trade_date": days, "commodity": "CRUDE OIL", "symbol": "X",
+        "expiry_date": days, "close": 100.0, "ret1": r, "turnover_cr": 1.0}))
+    p = ci.load_commodity("CRUDE OIL")
+    assert p.loc["2019-03-01", "ret1"] == 0.0
+    f = ci.commodity_features(p)
+    after = f.loc["2019-03-01":"2019-03-04"]
+    assert after["r5"].isna().all(), "a 5-session window spanning the hole was computed"
+    assert f.loc["2019-03-06", "r5"] == pytest.approx(1.001 ** 5 - 1)
+
+
+def test_a_rally_hovering_at_the_line_is_one_event_not_many():
+    m = pd.Series([True, False, True, False, False, True, False, False, False,
+                   False, False, False, True])
+    s = ci.episode_starts(m, cooldown=5)
+    assert s.tolist().count(True) == 2, "on/off/on within the cooldown was recounted"
+    assert ci._independent(np.array([0, 3, 20, 22, 45]), 20) == 3
+
+
+def test_one_episode_does_not_crash_and_says_too_few(temp_db):
+    days, _ = _seed()
+    ev, sm = ci.get_pattern_episodes(days[-1], "CRUDE OIL", "Nifty 50", "up_streak", n=5)
+    assert sm["episodes"] == 1
+    assert sm["next1"]["noise"] is None and sm["next1"]["n_eff"] == 1
+
+
+def test_a_stopped_sync_is_flagged_not_explained_away(temp_db):
+    days, _ = _seed()
+    from src.data.repository import get_repository, query_dataframe
+    # drop the last 6 MCX sessions, as if the sync had stopped a week ago
+    cut = days[-7]
+    df = query_dataframe("SELECT * FROM commodity_daily WHERE trade_date <= ?", [cut])
+    get_repository().replace_commodity_daily(df)
+    s = ci.get_commodity_state(days[-1], "CRUDE OIL", "Nifty 50")
+    assert s.stale and "sync" in s.lag_note
+    s2 = ci.get_commodity_state(days[-7], "CRUDE OIL", "Nifty 50")
+    assert not s2.stale
+
+
+def test_today_in_pattern_uses_the_latest_mcx_close(temp_db):
+    days, _ = _seed()
+    _, sm = ci.get_pattern_episodes(days[200], "CRUDE OIL", "Nifty 50", "up_streak", n=5)
+    assert sm["today_in"] and sm["today_mcx"] == days[200]
+    _, sm = ci.get_pattern_episodes(days[-1], "CRUDE OIL", "Nifty 50", "up_streak", n=5)
+    assert not sm["today_in"]
+
+
+def test_rail_carries_the_rupee_split_and_no_contradicting_example():
+    from pathlib import Path
+    body = Path("src/dashboard/views/commodity_index.py").read_text(encoding="utf-8")
+    assert "usdinr_link_full" in body and "n50_up5_next_day" not in body, (
+        "the rail quoted an every-day-of-the-streak average right above the "
+        "once-per-episode lookup, which showed a different number for the same "
+        "label")
+    assert ci.STUDY["crude"]["usdinr_link_full"] < -0.3
