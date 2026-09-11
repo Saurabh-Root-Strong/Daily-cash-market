@@ -71,6 +71,17 @@ def run_daily_pipeline(write_marker: bool = True) -> int:
     except Exception as exc:
         print(f"FII/DII cash fetch failed (non-fatal): {exc}")
 
+    # MCX commodity futures (crude, gold, ...) copied from the Commodity_Forex_Market
+    # project for the Commodity vs Index panel. MCX closes at 23:30, so a 19:30 run
+    # carries crude through the PREVIOUS session; the panel says which MCX date it read.
+    try:
+        from src.ingestion.commodity_sync import sync_commodities
+        n = sync_commodities()
+        if n:
+            print(f"Commodity sync: {n} rows from Commodity_Forex_Market")
+    except Exception as exc:
+        print(f"Commodity sync failed (non-fatal): {exc}")
+
     # Fill prediction outcomes AFTER ingestion completes.
     # CLI sits above all layers and may call both ingestion and analytics.
     # update_outcomes fills any matured pending row, so date.today() (a maturity
@@ -118,6 +129,13 @@ def cmd_daily(_args) -> int:
     """Scheduled daily entrypoint (run_daily.bat) — delegates to the canonical pipeline
     that the dashboard Refresh button also uses, so both paths stay identical."""
     return run_daily_pipeline()
+
+
+def cmd_sync_commodity(_args) -> int:
+    from src.ingestion.commodity_sync import sync_commodities
+    n = sync_commodities()
+    print(f"Commodity sync: {n} rows")
+    return 0 if n else 1
 
 
 def cmd_seed_sectors(_args) -> int:
@@ -357,6 +375,8 @@ def main() -> int:
     bp2.add_argument("days", nargs="?", default=None,
                      help="Number of trading days to backfill (default 60)")
 
+    sub.add_parser("sync-commodity",
+                   help="Copy MCX commodity futures (crude, gold, ...) from Commodity_Forex_Market")
     sub.add_parser("fetch-fpi-monthly",
                    help="Auto-fetch current month's FPI data from NSDL (no login needed)")
 
@@ -371,6 +391,7 @@ def main() -> int:
         "backfill-fno":        cmd_backfill_fno,
         "fill-gaps":           cmd_fill_gaps,
         "daily":               cmd_daily,
+        "sync-commodity":      cmd_sync_commodity,
         "seed-sectors":        cmd_seed_sectors,
         "reload-overrides":    cmd_reload_overrides,
         "import-fpi":          cmd_import_fpi,

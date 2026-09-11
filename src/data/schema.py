@@ -224,6 +224,25 @@ def initialize_schema() -> None:
             last_updated TIMESTAMP DEFAULT now()
         )
         """,
+        # MCX commodity futures, copied from the Commodity_Forex_Market project by
+        # src/ingestion/commodity_sync.py. One row per commodity per MCX session:
+        # the roll-safe front month (held while >= 5 days to expiry) and `ret1`,
+        # the return of the contract held from the previous session -- so a roll
+        # never shows up as a price move. A COPY, not a live read: CFM's own
+        # scheduled writer needs its DuckDB file free four times a day.
+        """
+        CREATE TABLE IF NOT EXISTS commodity_daily (
+            trade_date   DATE    NOT NULL,
+            commodity    VARCHAR NOT NULL,
+            symbol       VARCHAR,
+            expiry_date  DATE,
+            close        DOUBLE,
+            ret1         DOUBLE,
+            turnover_cr  DOUBLE,
+            synced_at    TIMESTAMP DEFAULT now(),
+            PRIMARY KEY (trade_date, commodity)
+        )
+        """,
     )
 
     # ── Non-destructive migrations (ALTER TABLE — may already exist) ───────────

@@ -791,3 +791,37 @@ def cached_bucket_analogues(trade_date: date, fno_symbol: str = "NIFTY",
                             k: int = 25) -> dict:
     from src.analytics.index_largecap import get_bucket_analogues
     return get_bucket_analogues(trade_date, fno_symbol, k)
+
+
+# ── Commodity vs Index ────────────────────────────────────────────────────────
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def cached_commodity_state(trade_date: date, commodity: str, index: str):
+    from src.analytics.commodity_index import get_commodity_state
+    return get_commodity_state(trade_date, commodity, index)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def cached_commodity_episodes(trade_date: date, commodity: str, index: str,
+                              kind: str, n: int, thr: float, k: int):
+    from src.analytics.commodity_index import get_pattern_episodes
+    return get_pattern_episodes(trade_date, commodity, index, kind, n=n, thr=thr, k=k)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def cached_commodity_yearly(trade_date: date, commodity: str, index: str,
+                            up_thr: float) -> pd.DataFrame:
+    from src.analytics.commodity_index import get_yearly_link
+    return get_yearly_link(trade_date, commodity, index, up_thr)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def cached_commodity_index_link(trade_date: date, commodity: str) -> pd.DataFrame:
+    from src.analytics.commodity_index import get_index_link
+    return get_index_link(trade_date, commodity)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def cached_commodity_paths(trade_date: date, commodity: str, index: str,
+                           sessions: int) -> pd.DataFrame:
+    from src.analytics.commodity_index import get_rebased_paths
+    return get_rebased_paths(trade_date, commodity, index, sessions)

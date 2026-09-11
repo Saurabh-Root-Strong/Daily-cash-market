@@ -289,6 +289,31 @@ class MarketDataRepository:
             """)
         return len(df)
 
+    def replace_commodity_daily(self, df: pd.DataFrame) -> int:
+        """Replace the whole history of every commodity present in `df`.
+
+        Whole-series replace rather than a date upsert: the front-month series is
+        rebuilt from scratch on every sync, and a late MCX correction or a
+        backfilled hole can change which contract was front on an old date.
+        """
+        if df.empty:
+            return 0
+        cols = ["trade_date", "commodity", "symbol", "expiry_date", "close",
+                "ret1", "turnover_cr"]
+        df = df[cols]
+        names = df["commodity"].unique().tolist()
+        ph = ", ".join("?" * len(names))
+        with self._cm.connect() as conn:
+            conn.execute("BEGIN")
+            conn.execute(f"DELETE FROM commodity_daily WHERE commodity IN ({ph})", names)
+            conn.register("_cmd_df", df)
+            conn.execute(f"""
+                INSERT INTO commodity_daily ({", ".join(cols)}, synced_at)
+                SELECT {", ".join(cols)}, now() FROM _cmd_df
+            """)
+            conn.execute("COMMIT")
+        return len(df)
+
     def upsert_index_data(self, df: pd.DataFrame) -> int:
         if df.empty:
             return 0

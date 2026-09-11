@@ -6272,8 +6272,9 @@ _SEASON = "🗓️ Month-Wise Best/Worst"
 _OPER = "🕵️ Operator Footprint"
 _NEXT = "🧭 Market Next Month"
 _ILC  = "🏛️ Index & Large Cap"
+_CMD  = "🛢️ Commodity vs Index"
 
-_PANELS = (_SMART, _TILT, _CLOCK, _RS, _SEASON, _OPER, _NEXT, _ILC)
+_PANELS = (_SMART, _TILT, _CLOCK, _RS, _SEASON, _OPER, _NEXT, _ILC, _CMD)
 
 
 def render(selected_date: date, min_turnover: float, all_dates: list | None = None) -> None:
@@ -6309,6 +6310,14 @@ def render(selected_date: date, min_turnover: float, all_dates: list | None = No
         _render_market_next_month(selected_date)
     elif panel == _ILC:
         _render_index_largecap(selected_date, min_turnover)
+    elif panel == _CMD:
+        _render_commodity_index(selected_date)
+
+
+def _render_commodity_index(selected_date: date) -> None:
+    # Lives in its own module: this file is already ~400 KB.
+    from src.dashboard.views.commodity_index import render_commodity_index
+    render_commodity_index(selected_date)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
