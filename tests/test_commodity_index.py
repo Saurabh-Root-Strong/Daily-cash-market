@@ -297,3 +297,54 @@ def test_a_dead_market_is_flagged_on_the_page():
     s = ci.get_commodity_state(date(2026, 9, 11), "NICKEL", "Nifty Metal")
     assert s.liquid_note and "stopped trading" in s.liquid_note
     assert not ci.get_commodity_state(date(2026, 9, 11), "COPPER", "Nifty Metal").liquid_note
+
+
+# ── month ahead ───────────────────────────────────────────────────────────────
+def test_month_ahead_separates_same_month_from_next_month():
+    m = ci.get_month_ahead(date(2026, 9, 11), "COPPER")
+    t = m["table"].set_index("sector")
+    assert m["months"] > 60 and 1 <= m["quintile"] <= 5
+    # copper's same-month partner is the metal sector, by a distance
+    assert t.same_month_ic.idxmax() == "Nifty Metal"
+    assert t.loc["Nifty Metal", "beta"] > 0.3
+    # the implied co-move is beta x this month's commodity move, nothing else
+    assert t.loc["Nifty Metal", "implied_same_month"] == pytest.approx(
+        t.loc["Nifty Metal", "beta"] * m["month_move"], rel=1e-9)
+    # next-month numbers must come from a handful of months and carry a band
+    assert 3 <= t.next_month_n.max() <= 30
+    assert t.next_month_band.notna().all()
+
+
+def test_month_ahead_reads_nothing_after_the_selected_date():
+    early = ci.get_month_ahead(date(2025, 9, 11), "COPPER")
+    late = ci.get_month_ahead(date(2026, 9, 11), "COPPER")
+    assert early["month_move"] != late["month_move"]
+    assert early["mcx_date"] <= date(2025, 9, 11)
+
+
+def test_frozen_monthly_verdict_is_a_null_and_says_why():
+    mo = ci.STUDY["monthly"]
+    # the walk-forward ranking was WRONG, not right -- the page must not sell it
+    assert mo["wf_ic"] < 0 and mo["wf_pos_share"] < 0.5
+    # single pairs: nothing survives, and the best is below a shuffled search
+    assert mo["pair_fdr"] == 0
+    assert mo["pair_rc_best"] < mo["pair_rc_null_median"]
+    assert mo["pair_rc_p"] > 0.10
+    # and the honest power statement: what could have been seen at all
+    assert mo["ic_needed"] == pytest.approx(1.96 / (mo["months"] ** 0.5), abs=0.01)
+    # the same-MONTH exposure is the part that is real
+    assert mo["same_month_fdr"] >= 10
+    assert mo["same_month_top"]["COPPER/Nifty Metal"][0] > 0.4
+
+
+def test_per_one_percent_column_is_not_scaled_twice():
+    """beta is already sector-% per commodity-%: scaling it by 100 printed
+    '+13.07%' for a sector that moves 0.13% per 1% of crude."""
+    from pathlib import Path
+    body = Path("src/dashboard/views/commodity_index.py").read_text(encoding="utf-8")
+    i = body.index('"Per 1% move"')
+    assert "t.beta * 100" not in body[i:i + 200]
+    m = ci.get_month_ahead(date(2026, 9, 11), "COPPER")
+    assert abs(m["table"].beta).max() < 2.0, (
+        "a sector moving more than 2% for each 1% of a commodity would be a "
+        "unit error, not a market")

@@ -831,3 +831,9 @@ def cached_commodity_paths(trade_date: date, commodity: str, index: str,
 def cached_sector_matrix(trade_date: date, years: float, sector_only: bool) -> dict:
     from src.analytics.commodity_index import get_sector_matrix
     return get_sector_matrix(trade_date, years, sector_only)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def cached_month_ahead(trade_date: date, commodity: str) -> dict:
+    from src.analytics.commodity_index import get_month_ahead
+    return get_month_ahead(trade_date, commodity)

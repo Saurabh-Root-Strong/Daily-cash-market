@@ -44,6 +44,7 @@ __all__ = [
     "liquid_years",
     "CommodityState", "get_commodity_state", "get_pattern_episodes",
     "get_yearly_link", "get_index_link", "get_rebased_paths",
+    "get_sector_matrix", "get_month_ahead",
 ]
 
 # name in commodity_daily -> plain label
@@ -173,6 +174,27 @@ STUDY = {
         "lead_hac_t": 4.22, "lead_overlap_adjusted": 1.57,
         # commodity weekly returns are not independent bets
         "gold_silver_corr": 0.80, "copper_zinc_corr": 0.65,
+    },
+    # ── monthly (scripts/commodity_sector_monthly.py), 94 months Aug 2018-Jul 2026
+    "monthly": {
+        "months": 94, "ic_needed": 0.20,
+        # walk-forward: betas fitted on earlier months only, sectors ranked by
+        # this month's commodity moves, scored against next month's excess
+        "wf_months": 58, "wf_ic": -0.105, "wf_t": -2.41, "wf_pos_share": 0.34,
+        "wf_spread": -0.72, "wf_spread_t": -1.34,
+        "wf_ic_h1": -0.155, "wf_ic_h2": -0.055,
+        "wf_own_momentum_ic": 0.046,
+        # single pairs, non-overlapping months
+        "pair_tests": 252, "pair_nominal": 15, "pair_chance": 13, "pair_fdr": 0,
+        "pair_rc_best": 3.17, "pair_rc_null_median": 3.40, "pair_rc_p": 0.70,
+        # same-MONTH co-move, which is what the scenario table uses
+        "same_month_fdr": 13, "same_month_tests": 117,
+        "same_month_top": {"COPPER/Nifty Metal": (0.54, 0.58),
+                           "ALUMINIUM/Nifty Metal": (0.53, 0.66),
+                           "ZINC/Nifty Metal": (0.45, 0.46),
+                           "COPPER/Nifty Commodities": (0.40, 0.24),
+                           "SILVER/Nifty Metal": (0.32, 0.21),
+                           "GOLD/Nifty Realty": (-0.26, -0.40)},
     },
     "crude": {
         "tests": 1680,
@@ -678,6 +700,91 @@ def get_sector_matrix(as_of: date, years: float = 6.0,
     return {"rho": rho, "beta": beta.reindex_like(rho), "weeks": weeks,
             "band": float(band), "sector_only": sector_only,
             "years": years, "as_of": as_of}
+
+
+_MONTH = 21          # sessions in a "month" for the month-ahead table
+
+
+def get_month_ahead(as_of: date, commodity: str, years: float = 8.2) -> dict:
+    """Where the commodity stands this month, and what that has meant.
+
+    Two columns that must never be confused:
+
+      `implied_same_month` -- the co-move that goes WITH this commodity move in
+          the SAME month (beta x the move). Measured, strong for metals, and
+          not a forecast: it is what tends to have happened alongside, and it
+          is what tells you the risk in a position you already hold.
+
+      `next_month_*` -- what the sector actually did over the FOLLOWING month
+          when this commodity was in the same state. Base rates. The study
+          found ranking sectors this way scored a rank IC of -0.105 (t -2.41)
+          -- i.e. slightly WRONG -- so these are shown with their luck band and
+          no arrow.
+    """
+    p = load_commodity(commodity, as_of, min_median_turnover_cr=MATRIX_MIN_MEDIAN_CR)
+    _, c = load_index_ohlc(SECTOR_MATRIX, as_of)
+    if p.empty or c.empty or "Nifty 50" not in c:
+        return {}
+    start = c.index.max() - pd.Timedelta(days=int(years * 365.25))
+    days = c.index[c.index >= start]
+    lvl = p["lvl"].reindex(days, method="ffill")
+    mom = lvl / lvl.shift(_MONTH) - 1
+    now = mom.iloc[-1]
+    if pd.isna(now):
+        return {}
+    rank = float((mom.dropna() <= now).mean())
+    mkt = c["Nifty 50"].reindex(days)
+
+    # non-overlapping month grid, anchored on the latest session
+    pos = np.arange(len(days))[::-1][::_MONTH][::-1]
+    pos = pos[pos >= _MONTH]
+    x = mom.values[pos]
+    fwd_pos = pos + _MONTH
+    ok_fwd = fwd_pos < len(days)
+    # the state we are in now, in quintile terms
+    qs = pd.qcut(pd.Series(x).dropna(), 5, labels=False, duplicates="drop")
+    q_now = int(pd.Series([now]).apply(
+        lambda v: (pd.Series(x).dropna() <= v).mean() * 5).clip(0, 4.999).iloc[0])
+
+    rows = []
+    for ix in SECTOR_MATRIX:
+        if ix == "Nifty 50" or ix not in c:
+            continue
+        px = c[ix].reindex(days)
+        ex_same = (px / px.shift(_MONTH) - 1) - (mkt / mkt.shift(_MONTH) - 1)
+        g = pd.DataFrame({"x": mom, "y": ex_same}).dropna()
+        g = g.loc[g.index.isin(days[pos])]
+        if len(g) < 40:
+            continue
+        var = float(g.x.var())
+        beta = float(g.x.cov(g.y) / var) if var else np.nan
+        ic = float(g.x.rank().corr(g.y.rank()))
+        # forward month, entered after this month's close
+        fex = ((px.shift(-_MONTH) / px - 1) - (mkt.shift(-_MONTH) / mkt - 1))
+        fv = fex.values[pos][ok_fwd]
+        xv = x[ok_fwd]
+        qq = pd.qcut(pd.Series(xv), 5, labels=False, duplicates="drop")
+        sel = (qq == q_now).values & ~np.isnan(fv)
+        base = fv[~np.isnan(fv)]
+        nxt = fv[sel]
+        rows.append(dict(
+            sector=ix, same_month_ic=ic, beta=beta,
+            implied_same_month=beta * now if pd.notna(beta) else np.nan,
+            actual_same_month=float(ex_same.iloc[-1]) if pd.notna(ex_same.iloc[-1]) else np.nan,
+            next_month_mean=float(np.mean(nxt)) if len(nxt) else np.nan,
+            next_month_n=int(len(nxt)),
+            next_month_base=float(np.mean(base)) if len(base) else np.nan,
+            next_month_band=(float(2 * np.std(base, ddof=1) / np.sqrt(len(nxt)))
+                             if len(nxt) > 2 and len(base) > 2 else np.nan)))
+    df = pd.DataFrame(rows)
+    if df.empty:
+        return {}
+    df = df.reindex(df.same_month_ic.abs().sort_values(ascending=False).index)
+    months = int(len(pd.Series(x).dropna()))
+    return {"commodity": commodity, "as_of": as_of, "month_move": float(now),
+            "month_rank": rank, "quintile": q_now + 1, "months": months,
+            "band": float(1.96 / np.sqrt(max(months, 2))), "table": df,
+            "mcx_date": p.index[-1].date()}
 
 
 def get_rebased_paths(as_of: date, commodity: str, index: str,

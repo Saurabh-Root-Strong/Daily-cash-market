@@ -117,6 +117,7 @@ def render_commodity_index(selected_date: date) -> None:
                                              cached_commodity_paths,
                                              cached_commodity_state,
                                              cached_commodity_yearly,
+                                             cached_month_ahead,
                                              cached_sector_matrix)
     st.markdown(
         "Does a move in **crude oil** (or gold, silver, natural gas, copper) move "
@@ -425,6 +426,117 @@ def render_commodity_index(selected_date: date) -> None:
                     "Last 26 weeks", format="%+.2f",
                     help=_h.format(lab=lab.lower()) + " Last six months only."),
             })
+
+    # ── this month and next ─────────────────────────────────────────────────
+    st.divider()
+    mo = STUDY["monthly"]
+    st.markdown(f"#### This month and next — {lab.lower()}")
+    ma = cached_month_ahead(selected_date, commodity)
+    if not ma:
+        st.info("Not enough monthly history for this commodity.")
+    else:
+        mv, rk = ma["month_move"], ma["month_rank"]
+        word = ("one of its biggest up-months" if rk >= 0.9 else
+                "one of its biggest down-months" if rk <= 0.1 else
+                "an ordinary month")
+        st.markdown(
+            f"**{lab} is {mv * 100:+.1f}% over the last 21 sessions** "
+            f"(bigger than {rk:.0%} of months since 2018 — {word}, group "
+            f"{ma['quintile']} of 5).")
+        st.warning(
+            f"**The forecast column below is empty on purpose.** Ranking sectors by "
+            f"their commodity exposure was tested properly — sensitivities fitted "
+            f"only on earlier months, sectors scored from that month's commodity "
+            f"moves, then compared with what they did NEXT month over "
+            f"{mo['wf_months']} months. The ranking scored {mo['wf_ic']:+.3f} "
+            f"(t {mo['wf_t']:+.2f}), i.e. slightly **wrong**, right only "
+            f"{mo['wf_pos_share']:.0%} of months; the top-minus-bottom basket lost "
+            f"{abs(mo['wf_spread']):.2f}% a month. Single commodity→sector pairs: "
+            f"{mo['pair_tests']} tests, {mo['pair_nominal']} nominal vs "
+            f"{mo['pair_chance']} by chance, {mo['pair_fdr']} survive, and the best "
+            f"one (t {mo['pair_rc_best']:.2f}) is below the median of a shuffled "
+            f"search (t {mo['pair_rc_null_median']:.2f}), p {mo['pair_rc_p']:.2f}. "
+            f"With {mo['months']} months, only an IC above {mo['ic_needed']:.2f} "
+            f"could have been detected at all — so this is 'no usable signal', "
+            f"measured, not 'no signal exists'.\n\n"
+            f"**What the table IS for:** the same-month columns are the exposure you "
+            f"already carry. If you hold metal stocks while copper moves, you are "
+            f"long copper whether you meant to be or not.")
+
+        t = ma["table"].head(8).copy()
+        band = ma["band"]
+        mtab = pd.DataFrame({
+            "Sector": t.sector,
+            "Same-month link": t.same_month_ic,
+            # beta is already "sector % per commodity %" -- scaling it by 100
+            # printed +13.07% where the truth is +0.13% per 1% move
+            "Per 1% move": t.beta,
+            "Goes with this month": t.implied_same_month * 100,
+            "Actually did": t.actual_same_month * 100,
+            "Next month (similar months)": t.next_month_mean * 100,
+            "Normal next month": t.next_month_base * 100,
+            "Luck band ±": t.next_month_band * 100,
+        })
+        st.dataframe(
+            mtab.style.format({
+                "Same-month link": "{:+.2f}", "Per 1% move": "{:+.2f}%",
+                "Goes with this month": "{:+.1f}%", "Actually did": "{:+.1f}%",
+                "Next month (similar months)": "{:+.1f}%",
+                "Normal next month": "{:+.1f}%", "Luck band ±": "{:.1f}%"},
+                na_rep="—"),
+            hide_index=True, width="stretch",
+            column_config={
+                "Sector": st.column_config.Column(
+                    "Sector", help="Nifty index, measured against Nifty 50 so a "
+                                   "good month for the whole market does not count."),
+                "Same-month link": st.column_config.Column(
+                    "Same-month link",
+                    help=f"Rank correlation of monthly moves, −1 to +1, over "
+                         f"{ma['months']} months. Beyond ±{band:.2f} is more than "
+                         f"chance. Example: +0.51 for copper and Nifty Metal = they "
+                         f"rose and fell together in most months."),
+                "Per 1% move": st.column_config.Column(
+                    "Per 1% move",
+                    help="How much the sector moved against the market for each 1% "
+                         "the commodity moved, in the SAME month. Example: +0.56 "
+                         "means copper +10% went with Nifty Metal about +5.6% "
+                         "better than the market."),
+                "Goes with this month": st.column_config.Column(
+                    "Goes with this month",
+                    help="The previous column applied to this month's actual "
+                         "commodity move. It is the co-move that usually "
+                         "accompanies a move this size — NOT a forecast of "
+                         "anything, and the month it describes has already "
+                         "happened."),
+                "Actually did": st.column_config.Column(
+                    "Actually did",
+                    help="What the sector really did over the same 21 sessions, "
+                         "against the market. Compare it with the column before: a "
+                         "big gap means the sector moved for reasons other than "
+                         "this commodity."),
+                "Next month (similar months)": st.column_config.Column(
+                    "Next month (similar months)",
+                    help="Average of what this sector did over the FOLLOWING month, "
+                         "in past months when the commodity sat in the same group "
+                         "of 5. A base rate from a handful of months, not a "
+                         "forecast — compare it with the two columns after it."),
+                "Normal next month": st.column_config.Column(
+                    "Normal next month",
+                    help="What the sector does against the market in an ordinary "
+                         "month. If the previous column is not clearly away from "
+                         "this one, nothing is being said."),
+                "Luck band ±": st.column_config.Column(
+                    "Luck band ±",
+                    help="Two standard errors. A difference smaller than this is "
+                         "what a handful of random months produce by chance — and "
+                         "almost every row here is inside it."),
+            })
+        inside = int((((t.next_month_mean - t.next_month_base).abs())
+                      <= t.next_month_band).sum())
+        st.caption(
+            f"{inside} of {len(t)} sectors sit inside their luck band for next "
+            f"month · base rates use {int(t.next_month_n.max())} past months in "
+            f"this group · the same-month columns use {ma['months']} months")
 
     # ── commodity x sector map ───────────────────────────────────────────────
     st.divider()
