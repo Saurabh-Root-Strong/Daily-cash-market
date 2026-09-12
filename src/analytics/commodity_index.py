@@ -41,6 +41,7 @@ __all__ = [
     "COMMODITIES", "INDEX_CHOICES", "PATTERNS", "START", "STUDY",
     "load_commodity", "load_index_ohlc", "commodity_features",
     "align_to_sessions", "index_outcomes", "pattern_mask", "episode_starts",
+    "liquid_years",
     "CommodityState", "get_commodity_state", "get_pattern_episodes",
     "get_yearly_link", "get_index_link", "get_rebased_paths",
 ]
@@ -48,11 +49,29 @@ __all__ = [
 # name in commodity_daily -> plain label
 COMMODITIES = {
     "CRUDE OIL": "Crude oil",
+    "NATURALGAS": "Natural gas",
     "GOLD": "Gold",
     "SILVER": "Silver",
-    "NATURALGAS": "Natural gas",
     "COPPER": "Copper",
+    "ZINC": "Zinc",
+    "ALUMINIUM": "Aluminium",
+    "LEAD": "Lead",
+    "NICKEL": "Nickel",
 }
+
+# Sectors for the commodity x sector map. The last three are controls: if Bank,
+# IT or Pharma showed a strong metal link, the method would be measuring the
+# market, not the metal.
+SECTOR_MATRIX = [
+    "Nifty Metal", "Nifty Commodities", "Nifty Oil & Gas", "Nifty Energy",
+    "Nifty PSE", "Nifty Auto", "Nifty Consumer Durables", "Nifty FMCG",
+    "Nifty Infrastructure", "Nifty Realty", "NIFTY Midcap 100",
+    "NIFTY Smallcap 100", "Nifty 50", "Nifty Bank", "Nifty IT", "Nifty Pharma",
+]
+
+# A commodity-year whose MEDIAN front-month session is below this is not a
+# market: MCX NICKEL's median day is Rs 1 Cr from 2022, LEAD's Rs 18 Cr by 2026.
+MATRIX_MIN_MEDIAN_CR = 50.0
 
 INDEX_CHOICES = [
     "Nifty 50", "Nifty Bank", "NIFTY Midcap 100", "NIFTY Smallcap 100",
@@ -121,6 +140,40 @@ STUDY = {
             "Silver's one survivor is Nifty Metal's opening gap after a +3% silver day: "
             "a reaction that happens overnight, not something you can trade."),
     },
+    # ── commodity x sector matrix (scripts/commodity_sector_matrix.py,
+    # _survivors.py, _reality_check.py), 6 years to 11 Sep 2026 ──────────────
+    "matrix": {
+        "window": "Sep 2020 – Sep 2026", "weeks": 297,
+        "same_week_pairs": 144, "same_week_fdr": 24, "sector_only_fdr": 19,
+        "forward_tests": 5024, "forward_nominal": 374, "forward_chance": 251,
+        "forward_fdr": 9,
+        # Reality Check: 10,385 tests, best real statistic vs the best the SAME
+        # search finds on circular-shifted commodities (500 shifts)
+        "rc_tests": 10385, "rc_best": 8.01, "rc_null_95": 5.92, "rc_p": 0.000,
+        "rc_beats": ["COPPER 1-day crash -> Nifty Metal opening gap",
+                     "ZINC 1-day crash -> Nifty Metal opening gap",
+                     "ALUMINIUM 1-day crash -> Nifty Metal opening gap"],
+        # every tradable candidate, measured against that same search-aware bar
+        "rc_candidates": {
+            "NATURALGAS 10d top 10% -> Nifty Energy next day": 2.83,
+            "LEAD up 3+ -> Nifty PSE next 20 days": 1.57,
+            "CRUDE OIL 10d bottom 10% -> Nifty FMCG next day": 2.12,
+            "COPPER up 3+ -> Nifty Metal next day": 1.71,
+        },
+        # strongest same-week exposures, sector minus Nifty 50: (rho, beta)
+        "top_exposures": {
+            "COPPER/Nifty Metal": (0.43, 0.49), "ALUMINIUM/Nifty Metal": (0.40, 0.45),
+            "ZINC/Nifty Metal": (0.37, 0.34), "SILVER/Nifty Metal": (0.30, 0.21),
+            "GOLD/Nifty Metal": (0.23, 0.31), "CRUDE OIL/Nifty Metal": (0.18, 0.12),
+            "COPPER/Nifty Commodities": (0.28, 0.18),
+            "CRUDE OIL/Nifty Oil & Gas": (0.035, 0.035),
+            "ZINC/Nifty FMCG": (-0.20, -0.14), "COPPER/Nifty FMCG": (-0.16, -0.13),
+        },
+        # the LEAD lesson: a 20-day return sampled daily is not 65 observations
+        "lead_hac_t": 4.22, "lead_overlap_adjusted": 1.57,
+        # commodity weekly returns are not independent bets
+        "gold_silver_corr": 0.80, "copper_zinc_corr": 0.65,
+    },
     "crude": {
         "tests": 1680,
         "nominal": 101,
@@ -156,14 +209,38 @@ STUDY = {
 
 
 # ── loading ──────────────────────────────────────────────────────────────────
-def load_commodity(commodity: str, as_of: Optional[date] = None) -> pd.DataFrame:
-    """Front-month series for one commodity: close, ret1, chained level."""
+def liquid_years(commodity: str, floor_cr: float) -> set[int]:
+    """Calendar years whose MEDIAN front-month session traded at least floor_cr.
+
+    MCX NICKEL's median session is Rs 1 Cr from 2022 and LEAD's Rs 18 Cr by
+    2026: the closes exist, but they are quotes, not a market.
+    """
+    df = query_dataframe(
+        "SELECT year(trade_date) y, median(turnover_cr) m FROM commodity_daily "
+        "WHERE commodity = ? GROUP BY 1", [commodity])
+    return {int(r.y) for r in df.itertuples() if float(r.m) >= floor_cr}
+
+
+def load_commodity(commodity: str, as_of: Optional[date] = None,
+                   min_median_turnover_cr: float = 0.0) -> pd.DataFrame:
+    """Front-month series for one commodity: close, ret1, chained level.
+
+    `min_median_turnover_cr` drops illiquid calendar years. It is applied HERE,
+    before the break detection below, so that a window spanning a dropped year
+    is treated as a gap rather than measured straight across it -- filtering
+    after loading would print a year-long move as a 10-session one.
+    """
     sql = ("SELECT trade_date, close, ret1 FROM commodity_daily "
            "WHERE commodity = ? AND trade_date >= ?")
     params: list = [commodity, START.date()]
     if as_of is not None:
         sql += " AND trade_date <= ?"
         params.append(as_of)
+    if min_median_turnover_cr > 0:
+        keep = liquid_years(commodity, min_median_turnover_cr)
+        if not keep:
+            return pd.DataFrame(columns=["close", "ret1", "lvl", "brk"])
+        sql += " AND year(trade_date) IN (" + ", ".join(str(y) for y in sorted(keep)) + ")"
     df = query_dataframe(sql + " ORDER BY trade_date", params)
     if df.empty:
         return pd.DataFrame(columns=["close", "ret1", "lvl", "brk"])
@@ -340,6 +417,7 @@ class CommodityState:
     weeks_26w: int = 0
     lag_note: str = ""
     stale: bool = False                  # MCX data is more than one session behind
+    liquid_note: str = ""                # set when this commodity barely trades now
     extras: dict = field(default_factory=dict)
 
 
@@ -390,6 +468,19 @@ def get_commodity_state(as_of: date, commodity: str = "CRUDE OIL",
         setattr(s, a, None if pd.isna(v) else float(v))
     s.up_streak = int(last.up_streak)
     s.dn_streak = int(last.dn_streak)
+    # is this still a market? MCX nickel and lead have all but stopped trading,
+    # and a price nobody traded at cannot be compared with anything.
+    med = query_dataframe(
+        "SELECT median(turnover_cr) m FROM commodity_daily WHERE commodity = ? "
+        "AND year(trade_date) = ?", [commodity, as_of.year])
+    if not med.empty and pd.notna(med.m.iloc[0]) and float(med.m.iloc[0]) < MATRIX_MIN_MEDIAN_CR:
+        yrs = sorted(liquid_years(commodity, MATRIX_MIN_MEDIAN_CR))
+        s.liquid_note = (
+            f"**MCX {COMMODITIES.get(commodity, commodity).lower()} has all but "
+            f"stopped trading**: the median {as_of.year} session is Rs "
+            f"{float(med.m.iloc[0]):,.0f} Cr. Its closes are quotes, not a market, so "
+            f"recent readings mean little"
+            + (f" — it last traded properly in {yrs[-1]}." if yrs else "."))
     _, c = load_index_ohlc([index], as_of)
     if s.mcx_date < as_of:
         # NSE sessions the MCX copy is behind. One is normal (MCX closes at 23:30,
@@ -523,6 +614,70 @@ def get_index_link(as_of: date, commodity: str) -> pd.DataFrame:
                          corr_26w=_corr(w.tail(26).cmd5, w.tail(26).idx5),
                          since=w.index[0].date()))
     return pd.DataFrame(rows)
+
+
+def _matrix_weekly(as_of: date, years: float, commodities: list[str],
+                    sectors: list[str]):
+    """Non-overlapping 5-session returns for every commodity and sector."""
+    _, c = load_index_ohlc(sectors, as_of)
+    if c.empty:
+        return None, None, None
+    have = [s for s in sectors if s in c.columns and c[s].notna().sum() > 100]
+    start = c.index.max() - pd.Timedelta(days=int(years * 365.25))
+    days = c.index[c.index >= start]
+    if len(days) < 120:
+        return None, None, None
+    cols = {}
+    for cm in commodities:
+        p = load_commodity(cm, as_of, min_median_turnover_cr=MATRIX_MIN_MEDIAN_CR)
+        if len(p) < 250:
+            continue
+        cols[cm] = p["lvl"].reindex(days, method="ffill")
+    if not cols:
+        return None, None, None
+    cw = pd.DataFrame(cols, index=days)
+    cw = cw / cw.shift(5) - 1
+    iw = c[have].reindex(days)
+    iw = iw / iw.shift(5) - 1
+    pos = np.arange(len(days))[::-1][::5][::-1]     # anchored on the latest week
+    return cw.iloc[pos], iw.iloc[pos], have
+
+
+def get_sector_matrix(as_of: date, years: float = 6.0,
+                      sector_only: bool = True) -> dict:
+    """Same-week link between every commodity and every sector.
+
+    `sector_only` subtracts Nifty 50 from each sector first, which answers "is
+    this about the SECTOR" rather than "was it a good week for everything".
+    Returns rank correlations, betas (1% commodity move -> beta% sector move),
+    and the number of independent weeks behind them.
+    """
+    cw, iw, sectors = _matrix_weekly(as_of, years, list(COMMODITIES), SECTOR_MATRIX)
+    if cw is None:
+        return {}
+    mkt = iw["Nifty 50"] if "Nifty 50" in iw else None
+    rho = pd.DataFrame(index=sectors, columns=cw.columns, dtype=float)
+    beta = rho.copy()
+    for ix in sectors:
+        y = iw[ix]
+        if sector_only and mkt is not None:
+            if ix == "Nifty 50":
+                continue                      # the market minus itself is zero
+            y = y - mkt
+        for cm in cw.columns:
+            g = pd.DataFrame({"x": cw[cm], "y": y}).dropna()
+            if len(g) < 60:
+                continue
+            rho.loc[ix, cm] = float(g.x.rank().corr(g.y.rank()))
+            v = float(g.x.var())
+            beta.loc[ix, cm] = float(g.x.cov(g.y) / v) if v else np.nan
+    rho = rho.dropna(how="all").dropna(axis=1, how="all")
+    weeks = int(len(cw.dropna(how="all")))
+    # |rho| a sample this size clears by chance about 1 time in 20
+    band = 1.96 / np.sqrt(max(weeks, 2))
+    return {"rho": rho, "beta": beta.reindex_like(rho), "weeks": weeks,
+            "band": float(band), "sector_only": sector_only,
+            "years": years, "as_of": as_of}
 
 
 def get_rebased_paths(as_of: date, commodity: str, index: str,

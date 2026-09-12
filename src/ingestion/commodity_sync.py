@@ -30,7 +30,11 @@ CFM_DIR = Path(os.environ.get("DCM_CFM_DIR",
                               r"D:\Python Projects\Commodity_Forex_Market"))
 
 # Names as CFM stores them in contract_daily.commodity.
-SYNC_COMMODITIES = ["CRUDE OIL", "GOLD", "SILVER", "NATURALGAS", "COPPER"]
+# CFM's own liquidity list: below these, the front month goes days without a
+# trade and a "return" is a stale quote. NICKEL and LEAD are thin from 2024 --
+# kept, but the study gates every session on turnover.
+SYNC_COMMODITIES = ["CRUDE OIL", "GOLD", "SILVER", "NATURALGAS", "COPPER",
+                    "ZINC", "ALUMINIUM", "LEAD", "NICKEL"]
 
 
 def _open_cfm(db: Path, tries: int = 10) -> duckdb.DuckDBPyConnection:

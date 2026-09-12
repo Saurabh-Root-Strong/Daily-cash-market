@@ -825,3 +825,9 @@ def cached_commodity_paths(trade_date: date, commodity: str, index: str,
                            sessions: int) -> pd.DataFrame:
     from src.analytics.commodity_index import get_rebased_paths
     return get_rebased_paths(trade_date, commodity, index, sessions)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def cached_sector_matrix(trade_date: date, years: float, sector_only: bool) -> dict:
+    from src.analytics.commodity_index import get_sector_matrix
+    return get_sector_matrix(trade_date, years, sector_only)

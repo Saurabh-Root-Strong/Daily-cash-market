@@ -155,7 +155,7 @@ def test_every_commodity_index_column_has_a_tooltip():
             depth += (body[i] == "{") - (body[i] == "}")
             i += 1
         blocks.append(body[m.end():i])
-    assert len(blocks) == 3
+    assert len(blocks) >= 5, f'expected the 3 lookup tables + 2 matrix tables, got {len(blocks)}'
     missing = []
     for b in blocks:
         for mm in re.finditer(r'\n\s+(f?"[^"]+"):\s*st\.column_config\.\w+\(', b):
@@ -235,3 +235,65 @@ def test_rail_carries_the_rupee_split_and_no_contradicting_example():
         "once-per-episode lookup, which showed a different number for the same "
         "label")
     assert ci.STUDY["crude"]["usdinr_link_full"] < -0.3
+
+
+# ── commodity x sector matrix ─────────────────────────────────────────────────
+def test_liquidity_gate_is_applied_before_break_detection(temp_db):
+    """Dropping a dead year AFTER loading would measure a 10-session window
+    straight across the hole -- the same class of bug as the June-2018 one."""
+    from src.data.repository import get_repository
+    days = _weekdays(date(2019, 1, 1), 260) + _weekdays(date(2021, 1, 1), 260)
+    r = [0.001] * 520
+    get_repository().replace_commodity_daily(pd.DataFrame({
+        "trade_date": days, "commodity": "NICKEL", "symbol": "N",
+        "expiry_date": days, "close": 100.0, "ret1": r,
+        # 2019 trades Rs 500 Cr, 2021 trades Rs 1 Cr -- a dead market
+        "turnover_cr": [500.0] * 260 + [1.0] * 260}))
+    p = ci.load_commodity("NICKEL", min_median_turnover_cr=50.0)
+    assert set(p.index.year) == {2019}
+    all_years = ci.load_commodity("NICKEL")
+    assert set(all_years.index.year) == {2019, 2021}
+    f = ci.commodity_features(p)
+    assert f.r10.notna().sum() > 200
+
+
+def test_sector_matrix_finds_metal_and_leaves_the_controls_alone():
+    m = ci.get_sector_matrix(date(2026, 9, 11), years=6.0, sector_only=True)
+    rho, band = m["rho"], m["band"]
+    assert m["weeks"] > 200 and 0 < band < 0.2
+    # copper is the metal sector's commodity, by a distance
+    assert rho.loc["Nifty Metal", "COPPER"] > 0.35
+    assert rho.loc["Nifty Metal", "COPPER"] == rho["COPPER"].max()
+    # ...and the controls show nothing
+    for ctrl in ("Nifty Bank", "Nifty IT", "Nifty Pharma"):
+        assert abs(rho.loc[ctrl, "COPPER"]) < band * 2, (
+            f"{ctrl} should not track copper; if it does, the method is "
+            f"measuring the market rather than the metal")
+    # the market cannot be compared with itself once it is subtracted
+    assert "Nifty 50" not in rho.index
+    assert "Nifty 50" in ci.get_sector_matrix(
+        date(2026, 9, 11), years=6.0, sector_only=False)["rho"].index
+
+
+def test_sector_matrix_never_reads_past_the_selected_date():
+    early = ci.get_sector_matrix(date(2024, 6, 28), years=6.0)
+    late = ci.get_sector_matrix(date(2026, 9, 11), years=6.0)
+    assert early["rho"].loc["Nifty Metal", "COPPER"] != late["rho"].loc["Nifty Metal", "COPPER"]
+
+
+def test_frozen_matrix_verdict_says_only_the_gap_beat_the_search():
+    m = ci.STUDY["matrix"]
+    assert m["rc_best"] > m["rc_null_95"], "the headline claim is that ONE thing beat it"
+    assert all("gap" in x for x in m["rc_beats"]), (
+        "everything that beat the search-aware null is an opening gap -- if a "
+        "tradable one is ever added, the page's wording must change with it")
+    for label, stat in m["rc_candidates"].items():
+        assert stat < m["rc_null_95"], f"{label} is quoted as a candidate but beats the bar"
+    # the overlap lesson, kept where it can be seen
+    assert m["lead_overlap_adjusted"] < 2 < m["lead_hac_t"]
+
+
+def test_a_dead_market_is_flagged_on_the_page():
+    s = ci.get_commodity_state(date(2026, 9, 11), "NICKEL", "Nifty Metal")
+    assert s.liquid_note and "stopped trading" in s.liquid_note
+    assert not ci.get_commodity_state(date(2026, 9, 11), "COPPER", "Nifty Metal").liquid_note

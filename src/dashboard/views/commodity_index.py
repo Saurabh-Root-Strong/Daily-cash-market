@@ -15,7 +15,8 @@ from datetime import date
 import pandas as pd
 import streamlit as st
 
-from src.analytics.commodity_index import (COMMODITIES, INDEX_CHOICES, STUDY,
+from src.analytics.commodity_index import (COMMODITIES, INDEX_CHOICES,
+                                           MATRIX_MIN_MEDIAN_CR, STUDY,
                                            pattern_label)
 
 _KINDS = {
@@ -57,7 +58,7 @@ def _pct(v, d=2):
 
 
 def _rail(commodity: str, lab: str) -> None:
-    g = STUDY["grid"][commodity]
+    g = STUDY["grid"].get(commodity)          # None for the four matrix-only ones
     cr = STUDY["crude"]
     by = cr["same_week_corr_by_year"]
     if commodity == "CRUDE OIL":
@@ -90,6 +91,15 @@ def _rail(commodity: str, lab: str) -> None:
             f"{cr['usd_crude_link_full']:+.2f}. 2026 is the exception — dollar crude "
             f"alone is {cr['usd_crude_link_2026']:+.2f} even with the rupee held "
             f"fixed. Neither forecasts next week.")
+    elif g is None:
+        m = STUDY["matrix"]
+        st.warning(
+            f"**{lab} was tested inside the commodity × sector map, not on its own "
+            f"grid.** {m['window']}, {m['rc_tests']:,} tests across nine commodities "
+            f"and sixteen indices. The only readings that beat the same search run "
+            f"on shuffled data are base-metal crashes landing in Nifty Metal's "
+            f"OPENING GAP — a reaction, not a trade. Nothing here forecasts a "
+            f"sector; the map below is an exposure fact, not a signal.")
     else:
         note = STUDY["survivor_note"].get(commodity)
         head = (f"**{lab}: {g['tests']:,} tests, {g['nominal']} nominal hits vs "
@@ -106,7 +116,8 @@ def render_commodity_index(selected_date: date) -> None:
                                              cached_commodity_index_link,
                                              cached_commodity_paths,
                                              cached_commodity_state,
-                                             cached_commodity_yearly)
+                                             cached_commodity_yearly,
+                                             cached_sector_matrix)
     st.markdown(
         "Does a move in **crude oil** (or gold, silver, natural gas, copper) move "
         "the Indian market? This panel lines up **MCX (Multi Commodity Exchange)** "
@@ -137,6 +148,8 @@ def render_commodity_index(selected_date: date) -> None:
         return
 
     _rail(commodity, lab)
+    if s.liquid_note:
+        st.error(s.liquid_note)
 
     # ── today's read ─────────────────────────────────────────────────────────
     st.markdown(f"#### {lab} right now — MCX close {s.mcx_date:%d %b %Y}")
@@ -413,6 +426,110 @@ def render_commodity_index(selected_date: date) -> None:
                     help=_h.format(lab=lab.lower()) + " Last six months only."),
             })
 
+    # ── commodity x sector map ───────────────────────────────────────────────
+    st.divider()
+    m = STUDY["matrix"]
+    st.markdown("#### Which sector moves with which commodity")
+    st.markdown(
+        f"Every commodity against every sector, {m['window']}, in "
+        f"non-overlapping weeks. This is **exposure, not prediction**: it says "
+        f"the two moved together in the same week, which is what you need for "
+        f"position risk — not what you need to buy the sector tomorrow.")
+    st.warning(
+        f"**The forecast version is empty, and that is measured.** "
+        f"{m['forward_tests']:,} forward tests (commodity move → sector next day / "
+        f"week / month): {m['forward_nominal']} looked significant against "
+        f"{m['forward_chance']} expected by chance, and when the same search is run "
+        f"on shuffled commodities ({m['rc_tests']:,} tests, 500 shuffles) the ONLY "
+        f"readings that beat it are **base-metal crashes hitting Nifty Metal's "
+        f"opening gap** — which happens overnight, before you can act. Every "
+        f"tradable candidate falls inside the noise of the search: natural gas → "
+        f"Energy next day scores "
+        f"{m['rc_candidates']['NATURALGAS 10d top 10% -> Nifty Energy next day']:.2f} "
+        f"against a {m['rc_null_95']:.2f} bar, and lead → PSE over 20 days drops from "
+        f"t {m['lead_hac_t']:.2f} to {m['lead_overlap_adjusted']:.2f} once "
+        f"overlapping windows are counted honestly.")
+
+    mode = st.radio(
+        "Show", ["Sector on its own (market removed)", "Raw sector move"],
+        horizontal=True, key="ci_matrix_mode",
+        help="'Sector on its own' subtracts Nifty 50 from each sector first, so a "
+             "week when everything rose does not make every sector look like a "
+             "commodity play. Example: copper vs Nifty Metal is +0.39 raw and "
+             "+0.43 once the market is removed — it is genuinely about metal "
+             "stocks. Most other pairs shrink towards zero instead.")
+    try:
+        mx = cached_sector_matrix(selected_date, 6.0,
+                                  mode.startswith("Sector on its own"))
+    except Exception as exc:                                   # noqa: BLE001
+        st.error(f"Matrix unavailable: {exc}")
+        mx = {}
+    if mx:
+        rho, band = mx["rho"], mx["band"]
+
+        def _tint(v):
+            if pd.isna(v):
+                return ""
+            if v >= band * 2:
+                return "color:#16a34a;font-weight:700"
+            if v >= band:
+                return "color:#16a34a"
+            if v <= -band * 2:
+                return "color:#dc2626;font-weight:700"
+            if v <= -band:
+                return "color:#dc2626"
+            return "color:#9ca3af"
+
+        show = rho.copy()
+        show.index.name = "Sector"
+        cfg = {c: st.column_config.NumberColumn(
+            COMMODITIES.get(c, c), format="%+.2f",
+            help=f"How {COMMODITIES.get(c, c).lower()} and this sector moved in the "
+                 f"SAME week, −1 to +1, over {mx['weeks']} weeks. "
+                 f"Beyond ±{band:.2f} is more than chance; grey is nothing. "
+                 f"Example: +0.43 = in most weeks they rose and fell together.")
+            for c in rho.columns}
+        st.dataframe(show.reset_index().style.format(
+            {c: "{:+.2f}" for c in rho.columns}, na_rep="—").map(
+                _tint, subset=list(rho.columns)),
+            hide_index=True, width="stretch",
+            column_config={"Sector": st.column_config.TextColumn(
+                "Sector", help="Nifty index. Bank, IT and Pharma are controls — "
+                               "they should show nothing, and mostly do."), **cfg})
+        st.caption(
+            f"{mx['weeks']} independent weeks · anything between −{band:.2f} and "
+            f"+{band:.2f} is indistinguishable from chance · "
+            + ("sector minus Nifty 50" if mx["sector_only"] else "raw sector move"))
+
+        b = mx["beta"]
+        pairs = (rho.stack().rename("link").reset_index()
+                 .rename(columns={"level_0": "Sector", "level_1": "cm"}))
+        pairs["Move for a 1% commodity move"] = [
+            b.loc[r.Sector, r.cm] for r in pairs.itertuples()]
+        pairs["Commodity"] = pairs.cm.map(lambda c: COMMODITIES.get(c, c))
+        pairs = pairs.reindex(pairs.link.abs().sort_values(ascending=False).index)
+        st.markdown("**Strongest links**")
+        st.dataframe(
+            pairs.head(10)[["Commodity", "Sector", "link",
+                            "Move for a 1% commodity move"]],
+            hide_index=True, width="stretch",
+            column_config={
+                "Commodity": st.column_config.TextColumn(
+                    "Commodity", help="MCX front-month futures, in rupees."),
+                "Sector": st.column_config.TextColumn(
+                    "Sector", help="The Nifty index it moved with."),
+                "link": st.column_config.NumberColumn(
+                    "Same-week link", format="%+.2f",
+                    help="Rank correlation over the window, −1 to +1."),
+                "Move for a 1% commodity move": st.column_config.NumberColumn(
+                    "Sector moves", format="%+.2f%%",
+                    help="Size, not just direction: how much the sector moved in "
+                         "the same week for each 1% the commodity moved. Example: "
+                         "+0.49 = copper up 10% went with Nifty Metal up about 5% "
+                         "against the market. Use it for position risk — if you "
+                         "hold metal stocks you are holding a copper position."),
+            })
+
     with st.expander("How this was tested"):
         st.markdown(
             "- **Timing.** MCX closes at 23:30, NSE at 15:30. Every past event is "
@@ -431,5 +548,17 @@ def render_commodity_index(selected_date: date) -> None:
             "went through zero.\n"
             "- **Data holes.** All of June 2018 is missing at the source, so the "
             "study starts 2 Jul 2018. 31 Dec 2024 is also missing for crude.\n"
+            "- **Liquidity.** A commodity-year whose median session trades below "
+            f"Rs {MATRIX_MIN_MEDIAN_CR:.0f} Cr is dropped from the map: MCX nickel's "
+            "median day is about Rs 1 Cr from 2022 and lead's Rs 18 Cr by 2026, so "
+            "their closes are quotes, not a market.\n"
+            "- **Overlap.** A 20-session return sampled daily is not one "
+            "observation per day. Counting it honestly turned the best 20-day "
+            "'edge' in the map from t 4.2 into 1.6.\n"
+            "- **The search itself is tested.** Every commodity is circular-shifted "
+            "500 times and the whole grid rebuilt, so the bar is the best result "
+            "the same search finds when nothing can possibly predict anything.\n"
             "- Scripts: `scripts/crude_vs_index_study.py`, "
-            "`crude_vs_index_regime.py`, `crude_vs_index_survivors.py`.")
+            "`crude_vs_index_regime.py`, `crude_vs_index_survivors.py`, "
+            "`commodity_sector_matrix.py`, `commodity_sector_survivors.py`, "
+            "`commodity_sector_reality_check.py`.")
