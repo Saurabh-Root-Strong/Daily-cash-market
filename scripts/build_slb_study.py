@@ -23,7 +23,8 @@ GUARDS
     - prev_close contradicted by its own open (439 rows, see CLAUDE.md) -> ratio_clean.
     - A split scales outstanding SLB quantity (NCL adjusts positions) while the 20d
       delivery base is still pre-split: symbol-days within 25 sessions after any
-      prev_close adjustment are dropped from the signal.
+      share-count corporate action (corp_actions feed) are dropped from the signal.
+      NOT detected from prev_close: daily_data.prev_close is never adjusted.
     - A bonus / merger / buyback FORECLOSES every SLB position: outstanding collapses
       to ~0 for a mechanical reason, not a short cover. Same 25-session exclusion.
 """
@@ -48,10 +49,22 @@ PANEL_SQL = """
 CREATE OR REPLACE TEMP TABLE sess AS
 SELECT DISTINCT trade_date FROM slb_open_positions;
 
+CREATE OR REPLACE TEMP TABLE cae AS
+SELECT symbol, ex_date, sum(ln(CASE WHEN share_factor > 0 THEN share_factor ELSE 1 END)) AS lnf
+FROM corp_actions
+WHERE kind IN ('SPLIT', 'BONUS', 'DEMERGER', 'RIGHTS', 'SCHEME', 'BUYBACK')
+  AND NOT (kind IN ('SPLIT', 'BONUS') AND share_factor = 1)
+GROUP BY 1, 2;
+
 CREATE OR REPLACE TEMP TABLE px AS
 SELECT trade_date, symbol, close_price, prev_close, open_price,
        coalesce(deliv_qty, 0) AS deliv_qty, turnover_lacs,
-       CASE WHEN close_price / prev_close BETWEEN 0.5 AND 2.0 THEN close_price / prev_close
+       -- daily_data.prev_close is NOT adjusted for splits / bonuses (BAJFINANCE
+       -- 2025-06-16: 9,331 vs a 938 close), so on a share-count ex-date the return is
+       -- close x factor / yesterday's close. Earlier versions detected corporate
+       -- actions from prev_close and never caught one.
+       CASE WHEN coalesce(e.lnf, 0) <> 0 THEN close_price * exp(e.lnf) / prev_close
+            WHEN close_price / prev_close BETWEEN 0.5 AND 2.0 THEN close_price / prev_close
             WHEN open_price / prev_close NOT BETWEEN 0.5 AND 2.0
                  AND close_price / open_price BETWEEN 0.5 AND 2.0
               THEN close_price / open_price
@@ -60,18 +73,17 @@ SELECT trade_date, symbol, close_price, prev_close, open_price,
        -- ex-date or every ex-div drop is booked as a loss.
        * (1 + CASE WHEN coalesce(v.dividend, 0) / close_price < 0.5
                    THEN coalesce(v.dividend, 0) / close_price ELSE 0 END) AS ratio_clean,
-       CASE WHEN v.dividend > 0 THEN 1 ELSE 0 END AS is_ex
+       CASE WHEN v.dividend > 0 THEN 1 ELSE 0 END AS is_ex,
+       CASE WHEN e.symbol IS NULL THEN 0 ELSE 1 END AS ca_day
 FROM daily_data
 LEFT JOIN divs v USING (symbol, trade_date)
+LEFT JOIN cae e ON e.symbol = daily_data.symbol AND e.ex_date = daily_data.trade_date
 WHERE series = 'EQ' AND close_price > 0 AND open_price > 0 AND prev_close > 0
   AND trade_date >= DATE '2017-06-01';
 
 CREATE OR REPLACE TEMP TABLE cum AS
 SELECT *,
   exp(sum(ln(ratio_clean)) OVER w) AS cf,
-  -- prev_close that disagrees with yesterday's close = NSE adjusted it for a
-  -- corporate action (split / bonus / demerger / rights) on this ex-date.
-  CASE WHEN abs(prev_close / nullif(lag(close_price) OVER w, 0) - 1) > 0.02 THEN 1 ELSE 0 END AS ca_day,
   avg(turnover_lacs) OVER (PARTITION BY symbol ORDER BY trade_date
                            ROWS BETWEEN 60 PRECEDING AND 1 PRECEDING) AS adv60,
   avg(deliv_qty) OVER (PARTITION BY symbol ORDER BY trade_date

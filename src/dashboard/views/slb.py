@@ -1,4 +1,16 @@
-"""\nSLB — Securities Lending & Borrowing view.\n\nAnswers three questions for the chosen session:\n  1. Who is being borrowed (= shorted overnight) and how hard?   -> borrow board\n  2. What would I earn lending shares I already hold?             -> lend board\n  3. Does heavy borrowing tell me anything about the next weeks?  -> measured evidence\n\nThe measured answer to (3) is a real but narrow one and the page says exactly how\nnarrow: the top decile of borrowing is followed by underperformance, deciles 1-8\nsay nothing, and the gap is too small to pay for an actual short after the borrow\nfee and STT. So the flag is an AVOID / TRIM hint for longs, never a short call.\n"""
+"""
+SLB — Securities Lending & Borrowing view.
+
+Answers three questions for the chosen session:
+  1. Who is being borrowed (= shorted overnight) and how hard?   -> borrow board
+  2. What would I earn lending shares I already hold?             -> lend board
+  3. Does heavy borrowing tell me anything about the next weeks?  -> measured evidence
+
+The measured answer to (3) is a real but narrow one and the page says exactly how
+narrow: the top decile of borrowing is followed by underperformance, deciles 1-8
+say nothing, and the gap is too small to pay for an actual short after the borrow
+fee and STT. So the flag is an AVOID / TRIM hint for longs, never a short call.
+"""
 from __future__ import annotations
 
 from datetime import date, timedelta
@@ -6,11 +18,12 @@ from datetime import date, timedelta
 import pandas as pd
 import streamlit as st
 
+from src.analytics import slb_episodes as se
 from src.analytics import slb_signals as sl
 from src.dashboard.column_help import nc as _hnc, tc as _htc, dc as _hdc
 
-_SECTIONS = ["Borrow board", "Lend your shares", "Market trend", "Stock history",
-             "Does it predict?", "How SLB works"]
+_SECTIONS = ["Borrow board", "Build-up timeline", "Stock history", "Lend your shares",
+             "Market trend", "Does it predict?", "How SLB works"]
 
 
 @st.cache_data(ttl=600)
@@ -47,6 +60,48 @@ def _symbol(symbol: str, start: date, end: date) -> pd.DataFrame:
 @st.cache_data(ttl=600)
 def _evidence() -> dict:
     return sl.load_evidence()
+
+
+@st.cache_data(ttl=600)
+def _timeline_ev() -> dict:
+    return se.load_timeline()
+
+
+@st.cache_data(ttl=600, show_spinner="Tracing every build-up (roll-adjusted)…")
+def _episodes(d: date) -> pd.DataFrame:
+    return se.episode_table(d)
+
+
+@st.cache_data(ttl=600)
+def _streaks(d: date) -> pd.DataFrame:
+    return se.flag_streaks(d)
+
+
+@st.cache_data(ttl=600)
+def _ep_detail(symbol: str, d: date, days: int):
+    return se.episode_detail(symbol, d, lookback_days=days)
+
+
+def _with_timeline(board: pd.DataFrame, d: date) -> pd.DataFrame:
+    """Board rows + when the build-up began, its phase, and when the flag began."""
+    ep = _episodes(d)
+    fs = _streaks(d)
+    v = board.copy()
+    if not ep.empty:
+        v = v.merge(ep[["symbol", "start", "start_known", "age", "phase", "move_since_pct",
+                        "avg_borrow_px", "shorts_pnl_pct"]], on="symbol", how="left")
+    if not fs.empty:
+        v = v.merge(fs, on="symbol", how="left")
+        since = []
+        for fr, hv, fs_, hs_ in zip(v["flag_fresh"], v["flag_heavy"],
+                                    v.get("fresh_since"), v.get("heavy_since")):
+            ds = [x for x, on in ((fs_, fr), (hs_, hv)) if on and x is not None and pd.notna(x)]
+            since.append(min(ds) if ds else None)
+        v["flagged_since"] = since
+    for c in ("start", "flagged_since"):
+        if c in v:
+            v[c] = pd.to_datetime(v[c])
+    return v
 
 
 def _neg_years(L: dict) -> str:
@@ -105,6 +160,8 @@ def render(selected_date: date) -> None:
         _render_lend(d, ev)
     elif section == "Market trend":
         _render_trend(d)
+    elif section == "Build-up timeline":
+        _render_timeline(d)
     elif section == "Stock history":
         _render_symbol(d)
     elif section == "Does it predict?":
@@ -178,7 +235,7 @@ def _render_borrow(d: date, ev: dict) -> None:
                     key="slb_show", label_visibility="collapsed")
     q = c2.text_input("Search symbol", key="slb_q", placeholder="Search symbol…",
                       label_visibility="collapsed")
-    v = df.copy()
+    v = _with_timeline(df, d)
     v["Flag"] = v.apply(_flag_label, axis=1)
     if "Flagged only" in (only or []):
         v = v.loc[v["flag_fresh"] | v["flag_heavy"]]
@@ -187,20 +244,16 @@ def _render_borrow(d: date, ev: dict) -> None:
     if q:
         v = v.loc[v["symbol"].str.contains(q.strip().upper(), regex=False)]
 
-    # A 20-session % change on a near-zero base is noise (+9,843% on a few shares).
-    small_base = v["oi_20"] < 0.05 * v["oi"]
-    v["chg20"] = v["chg20_pct"].where(~small_base)
-    v["New?"] = small_base.map({True: "new", False: ""})
     out = pd.DataFrame({
         "Symbol": v["symbol"], "Sector": v["sector"], "Flag": v["Flag"],
+        "Flagged since": v.get("flagged_since"),
+        "Building since": v.get("start"),
+        "Phase": v.get("phase"),
         "Out on loan (₹ Cr)": v["oi_cr"],
         "Days to cover": v["dtc"],
         "5-session change": v["doi5"].round(2) + 0.0,
-        "20-session change %": v["chg20"],
-        "New?": v["New?"],
+        "Price since start %": v.get("move_since_pct"),
         "Borrow fee % / yr": v["fee_ann"] * 100,
-        "Price 21d %": v["r21"] * 100,
-        "Liquidity rank": v["liq_rank"],
     }).sort_values("Out on loan (₹ Cr)", ascending=False)
 
     # Today's actual cut-offs, so a flag can be checked against its own number.
@@ -237,12 +290,16 @@ def _render_borrow(d: date, ev: dict) -> None:
             "delivery buying to return every borrowed share. Under 1 = small pile.\n"
             "- *5-session change +3.68* — in 5 days they borrowed as many shares as ~3.7 days of "
             "normal delivery. Plus = piling in, minus = returning, ~0 = no change.\n"
-            "- *20-session change −61%* — the pile is 61% smaller than a month ago. **None** + "
-            "**new** = almost nothing was borrowed a month ago, so a % would be meaningless.\n"
+            "- *Flagged since* — the first day of the flag's current unbroken run.\n"
+            "- *Building since* — when this pile of borrowing began: the day after it was last "
+            "under a quarter of today's size (monthly loan rolls are not counted as new "
+            "borrowing). *Price since start* = how the share price moved since that day.\n"
+            "- *Phase* — **Building** (pile grew >5% in 5 sessions), **Holding**, or "
+            "**Covering** (pile ≥30% below its peak: shares being returned).\n"
             "- *Borrow fee 11.4%/yr* — borrowing ₹1 lakh of the stock costs ~₹11,400 a year. "
             "Normal is ~1–3%; a high fee means shares are scarce and demand to short is strong.\n"
-            "- *Price 21d* — shorts often chase falling stocks; the study removes that effect.\n"
-            "- *Liquidity rank* — 1 = most traded NSE stock; only ranks 1–300 can be flagged."
+            "- The *Build-up timeline* section shows every pile in detail; *Stock history* shows "
+            "one stock's build-up week by week."
         )
 
     st.dataframe(
@@ -259,14 +316,16 @@ def _render_borrow(d: date, ev: dict) -> None:
                 f"Borrowed shares ÷ normal daily delivery. Flagged 'heavy' above {cut_heavy:.2f} today.")),
             "5-session change": _hnc("5-session change", format="%+.2f", help=(
                 f"New borrowing in 5 days, in days of delivery. Flagged 'fresh' above {cut_fresh:+.2f} today.")),
-            "20-session change %": _hnc("20-session change %", format="%+.0f%%", help=(
-                "Change in borrowed shares over ~1 month. None = too small a month ago to compare.")),
-            "New?": _htc("New?", help="Short sellers only just started on this stock."),
+            "Flagged since": _hdc("Flagged since", format="DD MMM YYYY",
+                                  help="First day of the flag's current unbroken run."),
+            "Building since": _hdc("Building since", format="DD MMM YYYY",
+                                   help="Day this pile of borrowing began (rolls not counted)."),
+            "Phase": _htc("Phase", help="Building / Holding / Covering (≥30% off peak)."),
+            "Price since start %": _hnc("Price since start %", format="%+.1f%%",
+                                        help="Share price move since 'Building since'."),
             "Borrow fee % / yr": _hnc("Borrow fee % / yr", format="%.2f%%", help=(
                 "Yearly cost to borrow, % of price. High = scarce shares, strong short demand.")),
-            "Price 21d %": _hnc("Price 21d %", format="%+.1f%%", help="Share price move over ~1 month."),
-            "Liquidity rank": _hnc("Liquidity rank", format="%d", help=(
-                "1 = most traded. Only ranks 1–300 can be flagged.")),
+
         },
     )
 
@@ -399,33 +458,193 @@ def _render_trend(d: date) -> None:
         st.bar_chart(p, height=260)
 
 
+# ── Build-up timeline ───────────────────────────────────────────────────────
+
+_PHASE_ICON = {"Building": "🔺 Building", "Holding": "⏸ Holding", "Covering": "🔻 Covering"}
+
+
+def _timing_line(tl: dict, key: str) -> str:
+    t = tl.get("tests", {}).get(key, {})
+    if not t:
+        return ""
+    verdict = "clears" if t.get("passes") else "does NOT clear"
+    return (f"{t['a_bps'] / 100:+.2f}% vs {t['b_bps'] / 100:+.2f}% "
+            f"(gap {t['diff_bps'] / 100:+.2f}%, t {t['t']:+.1f}, {t['years_same_sign']} of "
+            f"{t['n_years']} years) — {verdict} the bar of |t| > {tl.get('bar', 2.64)}")
+
+
+def _render_timeline(d: date) -> None:
+    board = _board(d)
+    ep = _episodes(d)
+    if ep.empty or board.empty:
+        st.info("No build-ups to show for this session.")
+        return
+    v = _with_timeline(board, d)
+    v = v.loc[v["start"].notna()].copy()
+    ep_i = ep.set_index("symbol")
+    for c in ("start_qty", "now_qty", "peak_qty", "peak_date", "off_peak_pct",
+              "price_start", "price_now"):
+        v[c] = v["symbol"].map(ep_i[c])
+    v["Flag"] = v.apply(_flag_label, axis=1)
+
+    st.markdown(
+        "**When did the borrowing start, and how was it added?** A *build-up* starts on the "
+        "day after the borrowed pile was last **under a quarter of today's size**. Monthly "
+        "loan **rolls are not counted as new borrowing**: before each return date many "
+        "borrowers take next month's loan while the old one is still open, which briefly "
+        "double-counts the same short."
+    )
+    with st.container(horizontal=True):
+        for ph in ("Building", "Holding", "Covering"):
+            n = int((v["phase"] == ph).sum())
+            st.metric(_PHASE_ICON[ph], f"{n}", border=True,
+                      help={"Building": "Pile grew more than 5% in the last 5 sessions.",
+                            "Holding": "Pile roughly steady.",
+                            "Covering": "Pile at least 30% below its peak: shares being returned."}[ph])
+
+    tl = _timeline_ev()
+    if tl.get("tests"):
+        with st.expander("Does the timing change what a flag means? (tested)", icon=":material/science:"):
+            dsc = tl.get("describe", {})
+            st.markdown(
+                "Six pre-registered tests on 2018–" + tl.get("built_through", "")[:4] + " data, "
+                "sector-neutral, next month (21 sessions). **None is strong enough to act on** — "
+                "treat the columns below as a description of what is happening, not a forecast.\n\n"
+                f"- **New flag vs old flag** (fresh flag in its first 5 sessions vs 11+): "
+                f"{_timing_line(tl, 'T1_flag_age_21')}. Old, persistent flags leaned WORSE.\n"
+                f"- **Shorts losing vs winning** (price >5% above vs >5% below the average borrow "
+                f"price): {_timing_line(tl, 'T2_shorts_pnl_21')}. No short squeeze: stocks where "
+                "shorts were losing did not bounce more.\n"
+                f"- **Covering vs holding** (pile ≥30% off its peak vs near it, after a heavy "
+                f"build-up): {_timing_line(tl, 'T3_covering_21')}. Covering leaned BETTER — the "
+                "closest of the three, still not proven.\n\n"
+                f"A fresh flag first appears a median **{dsc.get('first_fresh_flag_episode_age_median', 0):.0f} "
+                f"sessions** into a build-up, and a fresh flag lasts a median "
+                f"**{dsc.get('fresh_streak_median', 0):.0f} sessions**."
+            )
+
+    c1, c2 = st.columns([2, 1])
+    phases = c1.pills("Phase", list(_PHASE_ICON.values()), selection_mode="multi",
+                      key="slb_tl_phase", label_visibility="collapsed")
+    flagged = c2.toggle("Flagged only", value=True, key="slb_tl_flag")
+    if phases:
+        keep = [k for k, lab in _PHASE_ICON.items() if lab in phases]
+        v = v.loc[v["phase"].isin(keep)]
+    if flagged:
+        v = v.loc[v["flag_fresh"] | v["flag_heavy"]]
+
+    out = pd.DataFrame({
+        "Symbol": v["symbol"], "Flag": v["Flag"], "Phase": v["phase"].map(_PHASE_ICON),
+        "Building since": v["start"], "Sessions": v["age"],
+        "Pile then (shares)": v["start_qty"], "Pile now (shares)": v["now_qty"],
+        "Grown ×": v["now_qty"] / v["start_qty"].where(v["start_qty"] > 0),
+        "Peak on": pd.to_datetime(v["peak_date"]), "Off peak %": v["off_peak_pct"],
+        "Price then": v["price_start"], "Price now": v["price_now"],
+        "Price since start %": v["move_since_pct"],
+        "Avg borrow price": v["avg_borrow_px"],
+        "Shorts' P&L %": v["shorts_pnl_pct"],
+    }).sort_values("Building since", ascending=False)
+    st.dataframe(out, hide_index=True, width="stretch", height=520, column_config={
+        "Symbol": _htc("Symbol", pinned=True),
+        "Building since": _hdc("Building since", format="DD MMM YYYY",
+                               help="Day after the pile was last under 25% of today's size."),
+        "Sessions": _hnc("Sessions", format="%d", help="Trading sessions since the build-up began."),
+        "Pile then (shares)": _hnc("Pile then (shares)", format="compact",
+                                   help="Borrowed shares on the first day of the build-up."),
+        "Pile now (shares)": _hnc("Pile now (shares)", format="compact",
+                                  help="Borrowed shares today, roll-adjusted."),
+        "Grown ×": _hnc("Grown ×", format="%.1f×"),
+        "Peak on": _hdc("Peak on", format="DD MMM YYYY", help="Day the pile was largest."),
+        "Off peak %": _hnc("Off peak %", format="%+.0f%%",
+                           help="How far the pile is below its peak. ≤ −30% = Covering."),
+        "Price then": _hnc("Price then", format="%.2f", help="Close on the first day (split-adjusted)."),
+        "Price now": _hnc("Price now", format="%.2f"),
+        "Price since start %": _hnc("Price since start %", format="%+.1f%%"),
+        "Avg borrow price": _hnc("Avg borrow price", format="%.2f", help=(
+            "Estimated average price of the borrowed shares still open: the closes on the days "
+            "the pile grew, oldest shares returned first. Not anyone's reported fill.")),
+        "Shorts' P&L %": _hnc("Shorts' P&L %", format="%+.1f%%", help=(
+            "+ = price is below the average borrow price (short sellers winning); "
+            "− = above it (short sellers losing). Ignores fees; arbitrage borrowers have no "
+            "directional P&L.")),
+    })
+    st.caption("Borrowing is not always a bet on a fall: part of it funds cash-futures "
+               "arbitrage (borrow and sell the share, buy the cheaper future), which has no "
+               "direction. The average borrow price is an estimate from daily closes.")
+
+
 # ── Stock history ────────────────────────────────────────────────────────────
 
 def _render_symbol(d: date) -> None:
     b = _board(d)
-    opts = b.sort_values("oi_cr", ascending=False)["symbol"].tolist() if not b.empty else []
+    opts = []
+    if not b.empty:
+        bb = b.assign(f=(b["flag_fresh"] | b["flag_heavy"]).astype(int))
+        opts = bb.sort_values(["f", "oi_cr"], ascending=False)["symbol"].tolist()
     c1, c2 = st.columns([2, 1])
     sym = c1.selectbox("Stock", opts, key="slb_sym") if opts else c1.text_input("Stock", key="slb_sym_t")
-    span = c2.segmented_control("Window", ["6M", "1Y", "3Y", "All"], default="1Y", key="slb_span")
+    span = c2.segmented_control("Window", ["6M", "1Y", "3Y"], default="1Y", key="slb_span")
     if not sym:
         return
-    days = {"6M": 183, "1Y": 365, "3Y": 1095}.get(span or "1Y", 3650)
-    h = _symbol(sym, d - timedelta(days=days), d)
-    if h.empty:
-        st.info("No history for this stock.")
+    days = {"6M": 183, "1Y": 400, "3Y": 1100}.get(span or "1Y", 400)
+    eff, epi = _ep_detail(sym, d, days)
+    if eff.empty:
+        st.info("No SLB history for this stock in this window.")
         return
-    h["trade_date"] = pd.to_datetime(h["trade_date"])
-    h["dq20"] = h["deliv_qty"].rolling(20, min_periods=5).mean()
-    h["days_to_cover"] = h["oi"] / h["dq20"]
-    x = h.set_index("trade_date")
-    st.subheader(f"{sym} — price", divider="gray")
-    st.line_chart(x[["close_price"]].rename(columns={"close_price": "Close ₹"}), height=220)
-    st.subheader("Shares out on loan", divider="gray")
-    st.line_chart(x[["oi"]].rename(columns={"oi": "Borrowed shares"}), height=220)
-    st.subheader("Days to cover (borrowed ÷ 20-session avg delivery)", divider="gray")
-    st.line_chart(x[["days_to_cover"]].rename(columns={"days_to_cover": "Days to cover"}), height=200)
-    fees = h.loc[h["fee_vwap"].notna(), ["trade_date", "fee_vwap", "lent_qty", "min_days", "close_price"]]
-    if not fees.empty:
+    eff = eff.sort_values("trade_date").copy()
+    eff["avg_borrow_px"] = se.fifo_cost(eff["eff"].values.astype(float),
+                                        eff["close_adj"].values.astype(float))
+
+    if epi:
+        with st.container(horizontal=True):
+            st.metric("Building since", f"{epi['start']:%d %b %Y}", border=True,
+                      help="Day after the pile was last under 25% of today's size"
+                           + ("" if epi["start_known"] else " — older than this window"))
+            st.metric("Sessions", f"{epi['age']}", border=True)
+            st.metric("Phase", _PHASE_ICON.get(epi["phase"], epi["phase"]), border=True)
+            st.metric("Pile then → now", f"{epi['start_qty'] / 1e5:,.1f} → {epi['now_qty'] / 1e5:,.1f} lakh",
+                      border=True, help="Borrowed shares, roll- and split-adjusted.")
+            st.metric("Price since start", f"{epi['move_since_pct']:+.1f}%", border=True)
+            st.metric("Avg borrow price", f"₹{epi['avg_borrow_px']:,.2f}",
+                      delta=f"shorts {'winning' if epi['shorts_pnl_pct'] > 0 else 'losing'} "
+                            f"{abs(epi['shorts_pnl_pct']):.1f}%",
+                      delta_color="off", border=True)
+    else:
+        st.info("Nothing meaningful is out on loan in this stock today.")
+
+    x = eff.set_index("trade_date")
+    st.subheader(f"{sym} — price vs the short sellers' average borrow price", divider="gray")
+    st.line_chart(x[["close_adj", "avg_borrow_px"]].rename(
+        columns={"close_adj": "Close ₹ (split-adjusted)", "avg_borrow_px": "Avg borrow price ₹"}),
+        height=240)
+    st.caption("When the close is BELOW the borrow-price line, short sellers are sitting on a profit.")
+    st.subheader("Shares out on loan — raw vs roll-adjusted", divider="gray")
+    st.line_chart(x[["raw", "eff"]].rename(columns={"raw": "Raw (file total)",
+                                                     "eff": "Roll-adjusted (used here)"}), height=240)
+    st.caption("The raw line jumps up in the week before each monthly return date because "
+               "rolled loans are counted twice; the roll-adjusted line removes that.")
+
+    if epi:
+        w = se.weekly_adds(eff, epi["start"])
+        if not w.empty:
+            st.subheader(f"How the pile was built, week by week (since {epi['start']:%d %b %Y})",
+                         divider="gray")
+            st.bar_chart(w.set_index("week")[["added"]].rename(columns={"added": "Shares added (−returned)"}),
+                         height=200)
+            st.dataframe(w.sort_values("week", ascending=False), hide_index=True, width="stretch",
+                         column_config={
+                             "week": _hdc("Week of", format="DD MMM YYYY"),
+                             "added": _hnc("Shares added", format="compact",
+                                           help="Net roll-adjusted change that week; − = returned."),
+                             "avg_close": _hnc("Avg close ₹", format="%.2f"),
+                             "pile_end": _hnc("Pile at week end", format="compact"),
+                             "sessions": _hnc("Sessions", format="%d"),
+                         })
+
+    fee = _symbol(sym, d - timedelta(days=days), d)
+    fees = fee.loc[fee["fee_vwap"].notna(), ["trade_date", "fee_vwap", "lent_qty", "min_days",
+                                             "close_price"]] if not fee.empty else fee
+    if len(fees):
         with st.expander(f"Fee prints ({len(fees)} sessions)"):
             st.dataframe(fees.sort_values("trade_date", ascending=False), hide_index=True,
                          width="stretch",
@@ -533,6 +752,28 @@ def _render_evidence(ev: dict) -> None:
                            "t": bc[k]["without"]["t"], "With basis bps": bc[k]["with"]["bps"],
                            "t ": bc[k]["with"]["t"]})
         st.dataframe(pd.DataFrame(br), hide_index=True, width="stretch")
+
+    tl = _timeline_ev()
+    if tl.get("tests"):
+        st.subheader("Does the timing of a build-up matter?", divider="gray")
+        st.caption("Pre-registered: 3 questions × 2 horizons = 6 tests, bar |t| > "
+                   f"{tl.get('bar', 2.64)}. Sector-neutral, entry at the next day's close.")
+        names = {"T1_flag_age": "New fresh flag (≤5 sessions) minus old (≥11)",
+                 "T2_shorts_pnl": "Shorts losing (price >5% above avg borrow) minus winning",
+                 "T3_covering": "Covering (pile ≥30% off peak) minus holding, after heavy flag"}
+        rows = []
+        for k, lab in names.items():
+            for h in (5, 21):
+                t = tl["tests"].get(f"{k}_{h}", {})
+                if t:
+                    rows.append({"Question": lab, "Horizon": f"{h} sessions",
+                                 "Group A bps": t["a_bps"], "Group B bps": t["b_bps"],
+                                 "A − B bps": t["diff_bps"], "t": t["t"],
+                                 "Years same sign": f"{t['years_same_sign']}/{t['n_years']}",
+                                 "Passes": "✅" if t["passes"] else "—"})
+        st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+        st.caption("None passes: when and how a pile was built does not reliably change what the "
+                   "flag means. The timeline columns are description, not forecast.")
 
     fee = dg.get("d10_fee_ann_median_pct", {})
     st.subheader("Why not short it?", divider="gray")

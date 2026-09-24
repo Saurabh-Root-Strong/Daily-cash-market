@@ -45,6 +45,21 @@ __all__ = [
 
 _STUDY = Path(__file__).resolve().parents[2] / "data" / "slb_study" / "summary.json"
 
+# Corporate actions that break a quantity or price series: they rescale share counts
+# (split / bonus / consolidation) or force-close every SLB loan (demerger, rights,
+# scheme, buyback). From the corp_actions feed, because daily_data.prev_close is not
+# adjusted for ANY action, so "prev_close != yesterday's close" never detects one.
+# A bonus of preference shares / debentures has share_factor 1 and is ignored.
+CA_EVENTS_CTE = """
+    cae AS (
+        SELECT symbol, ex_date,
+               sum(ln(CASE WHEN share_factor > 0 THEN share_factor ELSE 1 END)) AS lnf
+        FROM corp_actions
+        WHERE kind IN ('SPLIT', 'BONUS', 'DEMERGER', 'RIGHTS', 'SCHEME', 'BUYBACK')
+          AND NOT (kind IN ('SPLIT', 'BONUS') AND share_factor = 1)
+        GROUP BY 1, 2
+    )"""
+
 
 def latest_slb_date(on_or_before: date) -> date | None:
     df = query_dataframe(
@@ -70,26 +85,32 @@ def borrow_board(d: date) -> pd.DataFrame:
     d20 = sess[20] if len(sess) > 20 else None
     px = query_dataframe(
         """
-        WITH px AS (
-            SELECT trade_date, symbol, close_price, prev_close,
-                   coalesce(deliv_qty, 0) AS deliv_qty, turnover_lacs
-            FROM daily_data
-            WHERE series = 'EQ' AND close_price > 0 AND prev_close > 0
-              AND trade_date BETWEEN ? AND ?
+        WITH """ + CA_EVENTS_CTE + """, px AS (
+            SELECT d.trade_date, d.symbol, d.close_price,
+                   coalesce(d.deliv_qty, 0) AS deliv_qty, d.turnover_lacs,
+                   CASE WHEN c.symbol IS NULL THEN 0 ELSE 1 END AS ca_day,
+                   coalesce(c.lnf, 0) AS lnf
+            FROM daily_data d
+            LEFT JOIN cae c ON c.symbol = d.symbol AND c.ex_date = d.trade_date
+            WHERE d.series = 'EQ' AND d.close_price > 0
+              AND d.trade_date BETWEEN ? AND ?
         ), w AS (
             SELECT *,
               avg(deliv_qty) OVER (PARTITION BY symbol ORDER BY trade_date
                                    ROWS BETWEEN 19 PRECEDING AND CURRENT ROW) AS dq20,
               avg(turnover_lacs) OVER (PARTITION BY symbol ORDER BY trade_date
                                        ROWS BETWEEN 60 PRECEDING AND 1 PRECEDING) AS adv60,
-              close_price / lag(close_price, 21) OVER p - 1 AS r21,
-              CASE WHEN abs(prev_close / nullif(lag(close_price) OVER p, 0) - 1) > 0.02
-                   THEN 1 ELSE 0 END AS ca_day
-            FROM px WINDOW p AS (PARTITION BY symbol ORDER BY trade_date)
+              -- split-continuous close: a 1:10 split must not print as -90%
+              close_price * exp(sum(lnf) OVER (PARTITION BY symbol ORDER BY trade_date
+                                               ROWS UNBOUNDED PRECEDING)) AS adj
+            FROM px
+        ), w1 AS (
+            SELECT *, adj / lag(adj, 21) OVER (PARTITION BY symbol ORDER BY trade_date) - 1 AS r21
+            FROM w
         ), w2 AS (
             SELECT *, max(ca_day) OVER (PARTITION BY symbol ORDER BY trade_date
                                         ROWS BETWEEN 25 PRECEDING AND CURRENT ROW) AS ca_recent
-            FROM w
+            FROM w1
         )
         SELECT w2.symbol, close_price, dq20, adv60, r21, ca_recent, turnover_lacs,
                coalesce(m.sector, '') AS sector
