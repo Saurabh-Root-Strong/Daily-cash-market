@@ -5888,6 +5888,10 @@ def _render_market_next_month(selected_date: date) -> None:
 
     st.divider()
 
+    _render_trend_survival(selected_date)
+
+    st.divider()
+
     # ── the RANGE — the honest answer to "what can happen next" ─────────────
     st.markdown("##### What Nifty and Bank Nifty have actually done from here")
 
@@ -6318,6 +6322,92 @@ def _render_commodity_index(selected_date: date) -> None:
     # Lives in its own module: this file is already ~400 KB.
     from src.dashboard.views.commodity_index import render_commodity_index
     render_commodity_index(selected_date)
+
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# TREND SURVIVAL — how much longer does the current trend have?
+# ═══════════════════════════════════════════════════════════════════════════
+
+@st.cache_data(ttl=900, show_spinner=False)
+def _trend_survival_board(d: date) -> pd.DataFrame:
+    from src.analytics.trend_survival import get_trend_survival
+    return get_trend_survival(d)
+
+
+_GRADE_ICON = {"STRONG": "🟩 STRONG", "INTACT": "🟨 INTACT", "FADING": "🟥 FADING"}
+
+
+def _render_trend_survival(selected_date: date) -> None:
+    """Duration, never direction. Returns proved unpredictable across this
+    project's testing; trend LENGTH did not, so this is the one forecast shown."""
+    from src.dashboard.column_help import cfg as _hcfg
+
+    try:
+        bd = _trend_survival_board(selected_date)
+    except Exception as exc:                      # never take the page down
+        st.caption(f"Trend survival unavailable: {exc}")
+        return
+    bd = bd[bd["Error"] == ""] if "Error" in bd.columns else bd
+    if bd.empty:
+        st.caption("No trend data for this date.")
+        return
+
+    st.markdown("##### How much longer does this move have?")
+    st.caption(
+        "Nobody can tell you which way the market goes next — this page says so "
+        "at the top. But **how long a move keeps going** is something the data "
+        "does answer, so that is all this table does. "
+        "**Hover any column heading** to see what it means.")
+
+    def _pct(v):
+        return "–" if v is None or v != v else f"{v * 100:.0f}%"
+
+    disp = pd.DataFrame({
+        "Index": bd["Index"],
+        "Direction": bd["Trend"].map({"UP": "▲ Up", "DOWN": "▼ Down"}).fillna(bd["Trend"]),
+        "Days so far": bd["Age"].astype(int).astype(str) + "d",
+        "Strength": bd["Grade"].map(_GRADE_ICON).fillna(bd["Grade"]),
+        "Gap to average": bd["Into trend"].map(lambda v: f"{v * 100:.1f}%"),
+        "Still going in 5 days": bd["P(+5d)"].map(_pct),
+        "Still going in 10 days": bd["P(+10d)"].map(_pct),
+        "Usually lasts": bd["Median left"].map(
+            lambda v: "–" if v is None or v != v
+            else f"{v:.0f} more day" + ("" if abs(v - 1) < 1e-9 else "s")),
+        "Older than": bd["Longer than"].map(_pct),
+    })
+    st.dataframe(disp, hide_index=True, use_container_width=True,
+                 column_config=_hcfg(disp))
+
+    # one row spelled out in plain words, so the table teaches itself
+    lead = bd[bd["Index"] == "Nifty 50"]
+    lead = lead if len(lead) else bd.head(1)
+    if len(lead):
+        r = lead.iloc[0]
+        way = "below" if r["Trend"] == "DOWN" else "above"
+        p5 = r["P(+5d)"]
+        odds = ("a coin flip" if p5 == p5 and 0.45 <= p5 <= 0.55
+                else "likely" if p5 == p5 and p5 > 0.55 else "unlikely")
+        older = f"{r['Longer than'] * 100:.0f}%" if r["Longer than"] == r["Longer than"] else "?"
+        st.caption(
+            f"**Reading the {r['Index']} row:** it has closed {way} its 20-day "
+            f"average for **{int(r['Age'])} days straight** — longer than {older} "
+            f"of its past moves in this direction. The strength markers read "
+            f"**{r['Grade']}**, but it is only {abs(r['Into trend']) * 100:.1f}% away "
+            f"from that average line, so whether the move is still going a week "
+            f"from now is **{odds}** ({_pct(p5)}).")
+
+    st.caption(
+        "⚠️ **This is about TIME, not direction.** \"Still going in 5 days: 90%\" "
+        "is not a reason to bet that way — betting along with a down move lost "
+        "money at every age tested. What it is good for: picking an option expiry "
+        "that matches how long the move is likely to live, setting a stop far "
+        "enough away, sizing the position, and telling whether a reversal idea is "
+        "simply **early** rather than wrong.")
+    st.caption(
+        "Most of these odds come from the **Gap to average** column, which is "
+        "partly just arithmetic — a move sitting close to the line crosses back "
+        "sooner. The **Strength** grade adds roughly 10 points on top of that.")
 
 
 # ═══════════════════════════════════════════════════════════════════════════

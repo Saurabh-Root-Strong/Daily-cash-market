@@ -289,6 +289,126 @@ class MarketDataRepository:
             """)
         return len(df)
 
+    def upsert_deals(self, df: pd.DataFrame, *,
+                     clear_range: tuple | None = None) -> int:
+        """Replace bulk/block deal rows for every (deal_type, trade_date) present in df.
+
+        Delete-then-insert per date, not a PK upsert: the feed carries genuine
+        duplicate rows (two identical trades reported separately) that must survive.
+
+        clear_range=(start, end) additionally wipes that whole date span for the deal
+        types present before inserting. Without it, a deal NSE later RETRACTS would
+        live in the table forever: a date-keyed delete only touches dates the new pull
+        still returns, so a date that lost all its rows is never cleaned.
+        """
+        if df.empty:
+            return 0
+        cols = ["trade_date", "deal_type", "symbol", "security_name",
+                "client_name", "buy_sell", "quantity", "trade_price", "remarks"]
+        df = df[cols]
+        with self._cm.connect() as conn:
+            conn.execute("BEGIN")
+            for dtype, grp in df.groupby("deal_type"):
+                if clear_range is not None:
+                    conn.execute(
+                        "DELETE FROM bulk_block_deals "
+                        "WHERE deal_type = ? AND trade_date BETWEEN ? AND ?",
+                        [dtype, clear_range[0], clear_range[1]],
+                    )
+                dates = grp["trade_date"].unique().tolist()
+                ph = ", ".join("?" * len(dates))
+                conn.execute(
+                    f"DELETE FROM bulk_block_deals WHERE deal_type = ? AND trade_date IN ({ph})",
+                    [dtype, *dates],
+                )
+            conn.register("_deals_df", df)
+            conn.execute(f"""
+                INSERT INTO bulk_block_deals ({", ".join(cols)}, loaded_at)
+                SELECT {", ".join(cols)}, now() FROM _deals_df
+            """)
+            conn.execute("COMMIT")
+        return len(df)
+
+    def upsert_slb(self, bhav: pd.DataFrame, opos: pd.DataFrame) -> int:
+        """Replace SLB bhavcopy + open-position rows for every trade_date present.
+
+        Delete-by-date then insert, in one transaction, so a re-pull of a day NSE
+        later corrected leaves no orphan series behind.
+        """
+        bcols = ["trade_date", "symbol", "series", "series_kind", "expiry_date",
+                 "security_name", "prev_fee", "open_fee", "high_fee", "low_fee",
+                 "close_fee", "life_high_fee", "life_low_fee", "quantity", "value", "trades"]
+        ocols = ["trade_date", "symbol", "series", "series_kind", "open_qty"]
+        n = 0
+        with self._cm.connect() as conn:
+            conn.execute("BEGIN")
+            for table, df, cols in (("slb_bhavcopy", bhav, bcols),
+                                    ("slb_open_positions", opos, ocols)):
+                if df is None or df.empty:
+                    continue
+                df = df[cols]
+                dates = df["trade_date"].unique().tolist()
+                ph = ", ".join("?" * len(dates))
+                conn.execute(f"DELETE FROM {table} WHERE trade_date IN ({ph})", dates)
+                conn.register("_slb_df", df)
+                conn.execute(f"INSERT INTO {table} ({', '.join(cols)}) "
+                             f"SELECT {', '.join(cols)} FROM _slb_df")
+                conn.unregister("_slb_df")
+                n += len(df)
+            conn.execute("COMMIT")
+        return n
+
+    def upsert_slb_foreclosure(self, df: pd.DataFrame) -> int:
+        """Insert-or-replace foreclosure notices keyed on (symbol, record_date)."""
+        if df is None or df.empty:
+            return 0
+        cols = ["symbol", "record_date", "series_scope", "ex_date", "foreclosure_date",
+                "shut_start", "shut_end", "description", "seen_on"]
+        df = df.dropna(subset=["record_date"]).drop_duplicates(["symbol", "record_date"])[cols]
+        with self._cm.connect() as conn:
+            conn.register("_slbfc_df", df)
+            conn.execute(f"INSERT OR REPLACE INTO slb_foreclosure ({', '.join(cols)}) "
+                         f"SELECT {', '.join(cols)} FROM _slbfc_df")
+        return len(df)
+
+    def upsert_corp_actions(self, df: pd.DataFrame, start, end) -> int:
+        """Replace every corporate action with an ex_date in [start, end] by df.
+
+        Range-replace rather than key-upsert: NSE revises subjects and dates, and a
+        withdrawn action must disappear rather than linger.
+        """
+        cols = ["symbol", "series", "subject", "ex_date", "record_date", "kind",
+                "dividend", "share_factor"]
+        with self._cm.connect() as conn:
+            conn.execute("BEGIN")
+            conn.execute("DELETE FROM corp_actions WHERE ex_date BETWEEN ? AND ?", [start, end])
+            if df is not None and not df.empty:
+                df = df.loc[df["ex_date"].notna(), cols]
+                conn.register("_ca_df", df)
+                conn.execute(f"INSERT INTO corp_actions ({', '.join(cols)}) "
+                             f"SELECT {', '.join(cols)} FROM _ca_df")
+            conn.execute("COMMIT")
+        return 0 if df is None else len(df)
+
+    def upsert_short_selling(self, df: pd.DataFrame) -> int:
+        """Replace short-selling rows for every trade_date present in df."""
+        if df.empty:
+            return 0
+        cols = ["trade_date", "symbol", "security_name", "quantity"]
+        df = df[cols]
+        dates = df["trade_date"].unique().tolist()
+        ph = ", ".join("?" * len(dates))
+        with self._cm.connect() as conn:
+            conn.execute("BEGIN")
+            conn.execute(f"DELETE FROM short_selling WHERE trade_date IN ({ph})", dates)
+            conn.register("_ss_df", df)
+            conn.execute(f"""
+                INSERT INTO short_selling ({", ".join(cols)}, loaded_at)
+                SELECT {", ".join(cols)}, now() FROM _ss_df
+            """)
+            conn.execute("COMMIT")
+        return len(df)
+
     def replace_commodity_daily(self, df: pd.DataFrame) -> int:
         """Replace the whole history of every commodity present in `df`.
 
@@ -343,48 +463,6 @@ class MarketDataRepository:
                     pb_ratio    = excluded.pb_ratio,
                     div_yield   = excluded.div_yield
             """)
-        return len(df)
-
-    def upsert_slb(self, bhav: pd.DataFrame, opos: pd.DataFrame) -> int:
-        """Replace SLB bhavcopy + open-position rows for every trade_date present.
-
-        Delete-by-date then insert, in one transaction, so a re-pull of a day NSE
-        later corrected leaves no orphan series behind.
-        """
-        bcols = ["trade_date", "symbol", "series", "series_kind", "expiry_date",
-                 "security_name", "prev_fee", "open_fee", "high_fee", "low_fee",
-                 "close_fee", "life_high_fee", "life_low_fee", "quantity", "value", "trades"]
-        ocols = ["trade_date", "symbol", "series", "series_kind", "open_qty"]
-        n = 0
-        with self._cm.connect() as conn:
-            conn.execute("BEGIN")
-            for table, df, cols in (("slb_bhavcopy", bhav, bcols),
-                                    ("slb_open_positions", opos, ocols)):
-                if df is None or df.empty:
-                    continue
-                df = df[cols]
-                dates = df["trade_date"].unique().tolist()
-                ph = ", ".join("?" * len(dates))
-                conn.execute(f"DELETE FROM {table} WHERE trade_date IN ({ph})", dates)
-                conn.register("_slb_df", df)
-                conn.execute(f"INSERT INTO {table} ({', '.join(cols)}) "
-                             f"SELECT {', '.join(cols)} FROM _slb_df")
-                conn.unregister("_slb_df")
-                n += len(df)
-            conn.execute("COMMIT")
-        return n
-
-    def upsert_slb_foreclosure(self, df: pd.DataFrame) -> int:
-        """Insert-or-replace foreclosure notices keyed on (symbol, record_date)."""
-        if df is None or df.empty:
-            return 0
-        cols = ["symbol", "record_date", "series_scope", "ex_date", "foreclosure_date",
-                "shut_start", "shut_end", "description", "seen_on"]
-        df = df.dropna(subset=["record_date"]).drop_duplicates(["symbol", "record_date"])[cols]
-        with self._cm.connect() as conn:
-            conn.register("_slbfc_df", df)
-            conn.execute(f"INSERT OR REPLACE INTO slb_foreclosure ({', '.join(cols)}) "
-                         f"SELECT {', '.join(cols)} FROM _slbfc_df")
         return len(df)
 
     def log_run(
@@ -580,12 +658,24 @@ def upsert_index_data(df: pd.DataFrame) -> int:
     return get_repository().upsert_index_data(df)
 
 
+def upsert_deals(df: pd.DataFrame, *, clear_range: tuple | None = None) -> int:
+    return get_repository().upsert_deals(df, clear_range=clear_range)
+
+
+def upsert_short_selling(df: pd.DataFrame) -> int:
+    return get_repository().upsert_short_selling(df)
+
+
 def upsert_slb(bhav: pd.DataFrame, opos: pd.DataFrame) -> int:
     return get_repository().upsert_slb(bhav, opos)
 
 
 def upsert_slb_foreclosure(df: pd.DataFrame) -> int:
     return get_repository().upsert_slb_foreclosure(df)
+
+
+def upsert_corp_actions(df: pd.DataFrame, start, end) -> int:
+    return get_repository().upsert_corp_actions(df, start, end)
 
 
 def log_run(

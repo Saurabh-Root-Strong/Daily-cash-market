@@ -49,6 +49,21 @@ def run_daily_pipeline(write_marker: bool = True) -> int:
     if trade_dt is None:
         trade_dt = date.today()
 
+    # Rebuild the bulk/block analytics tables. The daily job fetches new DEALS but
+    # nothing recomputed the panels built on top of them, so deal_event_outcomes sat a
+    # month behind the raw feed and the page served stale base rates while looking live.
+    # Non-fatal: a failure here must not abort the rest of the daily routine.
+    try:
+        from scripts.build_deal_outcomes import main as _build_deal_outcomes
+        from scripts.build_client_events import main as _build_client_events
+        _build_deal_outcomes()
+        _build_client_events()
+    except Exception as _deal_exc:  # pragma: no cover - operational path
+        # cli.py has no module logger; grab one rather than NameError inside the
+        # handler, which would turn a non-fatal rebuild failure into a crash.
+        from src.core.logging import get_logger
+        get_logger(__name__).warning("Bulk/block analytics rebuild failed: %s", _deal_exc)
+
     # Compute & LOG index predictions deterministically (persist=True).
     # This makes prediction_log complete every trading day regardless of whether
     # anyone opens the dashboard — the dashboard now renders read-only

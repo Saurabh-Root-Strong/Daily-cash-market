@@ -26,3 +26,7 @@ data/fpi_imports/*.xlsx
 
 # SLB raw archive cache (re-downloadable: scripts/backfill_slb.py)
 data/slb_raw/
+
+# Re-downloadable / regenerable study caches (scripts/backfill_deals.py, scripts/crude_vs_index_study.py)
+data/deals_raw/
+data/crude_study/

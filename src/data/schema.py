@@ -224,6 +224,41 @@ def initialize_schema() -> None:
             last_updated TIMESTAMP DEFAULT now()
         )
         """,
+        # MCX commodity futures, copied from the Commodity_Forex_Market project by
+        # src/ingestion/commodity_sync.py. One row per commodity per MCX session:
+        # the roll-safe front month (held while >= 5 days to expiry) and `ret1`,
+        # ── Bulk / block deals + short selling ────────────────────────────────
+        # NO PRIMARY KEY, deliberately. NSE reports genuine duplicate rows: the
+        # same client, symbol, side, quantity and price on the same day is two
+        # separate trades, not a double-publish. A PK would silently delete real
+        # traded quantity. Idempotency is delete-by-date-range on write instead.
+        """
+        CREATE TABLE IF NOT EXISTS bulk_block_deals (
+            trade_date     DATE    NOT NULL,
+            deal_type      VARCHAR NOT NULL,   -- 'BULK' | 'BLOCK'
+            symbol         VARCHAR NOT NULL,
+            security_name  VARCHAR,
+            client_name    VARCHAR,
+            buy_sell       VARCHAR,            -- 'BUY' | 'SELL'
+            quantity       BIGINT,
+            trade_price    DOUBLE,
+            remarks        VARCHAR,
+            loaded_at      TIMESTAMP DEFAULT now()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_deals_date   ON bulk_block_deals (trade_date)",
+        "CREATE INDEX IF NOT EXISTS idx_deals_symbol ON bulk_block_deals (symbol)",
+        """
+        CREATE TABLE IF NOT EXISTS short_selling (
+            trade_date     DATE    NOT NULL,
+            symbol         VARCHAR NOT NULL,
+            security_name  VARCHAR,
+            quantity       BIGINT,
+            loaded_at      TIMESTAMP DEFAULT now()
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_shortsell_date ON short_selling (trade_date)",
+
         # ── Securities Lending & Borrowing (SLBS) ─────────────────────────────
         # Fees are RUPEES PER SHARE FOR THE WHOLE REMAINING TENURE, not a price:
         # annualise against the cash close and days-to-expiry before comparing.
@@ -260,6 +295,22 @@ def initialize_schema() -> None:
         )
         """,
         "CREATE INDEX IF NOT EXISTS idx_slb_open_symbol ON slb_open_positions (symbol)",
+        # NSE corporate actions. daily_data.prev_close is NOT adjusted for dividends,
+        # splits or bonuses, so this is the only record of when a quantity or price
+        # series jumps for a mechanical reason. share_factor = new shares per old share.
+        """
+        CREATE TABLE IF NOT EXISTS corp_actions (
+            symbol        VARCHAR NOT NULL,
+            series        VARCHAR,
+            subject       VARCHAR NOT NULL,
+            ex_date       DATE,
+            record_date   DATE,
+            kind          VARCHAR,           -- SPLIT | BONUS | DEMERGER | RIGHTS | SCHEME | BUYBACK | DIVIDEND | OTHER
+            dividend      DOUBLE,
+            share_factor  DOUBLE
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_ca_symbol_ex ON corp_actions (symbol, ex_date)",
         # A foreclosure closes every SLB position in the name on a corporate action
         # (bonus, merger, buyback, demerger...): outstanding collapses mechanically.
         """
@@ -276,9 +327,7 @@ def initialize_schema() -> None:
             PRIMARY KEY (symbol, record_date)
         )
         """,
-        # MCX commodity futures, copied from the Commodity_Forex_Market project by
-        # src/ingestion/commodity_sync.py. One row per commodity per MCX session:
-        # the roll-safe front month (held while >= 5 days to expiry) and `ret1`,
+
         # the return of the contract held from the previous session -- so a roll
         # never shows up as a price move. A COPY, not a live read: CFM's own
         # scheduled writer needs its DuckDB file free four times a day.

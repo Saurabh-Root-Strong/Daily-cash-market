@@ -132,6 +132,15 @@ GLOSSARY: dict[str, str] = {
     "Improving edge %": "Average forward return of Improving-phase sectors vs peers.",
     "Lagging hit %": "Of Lagging-phase calls, the % that underperformed peers (correct for an exit signal).",
     "Lagging edge %": "Average forward return of Lagging-phase sectors vs peers (negative = correctly weak).",
+    # ── Trend survival (Market Next Month) ────────────────────────────────────
+    "Direction": "Up = the index is ABOVE its 20-day average price. Down = below it. That is all 'trend' means on this table.",
+    "Days so far": "How many trading days it has stayed on that side of the 20-day average. This is the trend's age. A brand-new trend ends the next day about 19% of the time; one that has run 8-12 days, only 6%.",
+    "Strength": "GREEN = the move is clean and still pushing. YELLOW = mixed. RED = losing steam. Read from four things: how straight the move is, whether that straightness is improving, its speed, and how many of the last 5 days went the other way.",
+    "Gap to average": "How far price sits from the 20-day average right now. A trend ends when price crosses back over that line, so a bigger gap usually means more time before that happens. This does most of the work in the odds beside it.",
+    "Still going in 5 days": "Out of past days that looked like this one, how often the trend was STILL ALIVE 5 trading days later. Tested on later years it had never seen: when it says 70%, it happened about 70% of the time (average error 1.7 percentage points).",
+    "Still going in 10 days": "Same idea, 10 trading days ahead. Why: it tells you if a move has room left, which is what picking an option expiry actually depends on.",
+    "Usually lasts": "In those same past cases, the middle answer for how many MORE trading days the trend ran. Half ran longer, half ended sooner.",
+    "Older than": "This trend is already longer than this share of past trends in the same direction for this index. A high number means it is old by its own standards - not that it must end.",
 }
 
 

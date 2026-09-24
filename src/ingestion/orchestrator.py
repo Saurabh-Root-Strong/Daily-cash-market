@@ -239,6 +239,23 @@ def _fill_supplementary_gaps(
         log.info("Supplementary gap-fill complete: %d tables updated", gaps_filled)
 
 
+def _fetch_deals_window(days: int = 10) -> None:
+    """Refresh bulk deals, block deals and short selling for the last `days`."""
+    from src.data.repository import upsert_deals, upsert_short_selling
+    from src.ingestion.deals_fetcher import DealsFetcher, DEAL_TYPES
+
+    end = date.today()
+    start = end - timedelta(days=days)
+    fetcher = DealsFetcher()
+    for option in DEAL_TYPES:
+        df = fetcher.fetch_deals(option, start, end)
+        # clear_range so a deal NSE has since retracted disappears from our copy too
+        n = upsert_deals(df, clear_range=(start, end))
+        log.info("%s %s..%s: %d rows", option, start, end, n)
+    ss = fetcher.fetch_short_selling(start, end)
+    log.info("short_selling %s..%s: %d rows", start, end, upsert_short_selling(ss))
+
+
 def _fetch_slb_window(days: int = 7) -> None:
     """Refresh SLB bhavcopy + open positions for the last `days` calendar days.
 
@@ -258,6 +275,19 @@ def _fetch_slb_window(days: int = 7) -> None:
                 log.info("SLB %s: %d rows", d, upsert_slb(bhav, opos))
         d += timedelta(days=1)
 
+    # Corporate actions, last 30 days (NSE revises late). The endpoint serves ex-dates
+    # only up to ~the next session, so a split is known at most a day ahead. Replace
+    # only the span actually returned, so nothing beyond it is ever deleted.
+    try:
+        from src.data.repository import upsert_corp_actions
+        from src.ingestion.corp_actions_fetcher import fetch_corporate_actions
+        ca = fetch_corporate_actions(end - timedelta(days=30), end + timedelta(days=7))
+        if not ca.empty:
+            lo, hi = end - timedelta(days=30), ca["ex_date"].max()
+            log.info("corp actions %s..%s: %d rows", lo, hi, upsert_corp_actions(ca, lo, hi))
+    except Exception as ca_exc:
+        log.warning("corp actions fetch failed: %s", ca_exc)
+
     from src.data.repository import upsert_slb_foreclosure
     from src.ingestion.slb_fetcher import parse_foreclosure
     d = end
@@ -269,6 +299,50 @@ def _fetch_slb_window(days: int = 7) -> None:
             log.info("SLB foreclosure %s: %d notices", d, upsert_slb_foreclosure(fc))
             break
         d -= timedelta(days=1)
+
+
+def _repair_missing_sessions(
+    client: NSEHttpClient,
+    repo: MarketDataRepository,
+    lookback_days: int = 15,
+    max_repairs: int = 5,
+) -> None:
+    """Re-fetch trading sessions that were lost to a transient failure.
+
+    run_daily_job walks back only until it finds ONE session it can process, then
+    stops. That makes a failed day permanently orphaned: on 2026-09-17 the fetch
+    died on a DuckDB lock held by the running dashboard, and the next morning's job
+    fetched 18 Sep and never looked back. The session stayed missing from
+    daily_data, index_data, fno_bhavcopy and fii_derivatives_stats until a human
+    noticed that a date picker would not offer it, four days later.
+
+    A session is deemed to have existed if ANY other NSE feed recorded it -- the
+    deals feed kept its 216 rows for 17 Sep while every price table lost the day.
+    """
+    cutoff = date.today() - timedelta(days=lookback_days)
+    rows = repo.query(
+        """
+        SELECT DISTINCT trade_date FROM (
+            SELECT trade_date FROM index_data       WHERE trade_date >= ?
+            UNION SELECT trade_date FROM fno_bhavcopy     WHERE trade_date >= ?
+            UNION SELECT trade_date FROM bulk_block_deals WHERE trade_date >= ?
+        ) ORDER BY trade_date
+        """,
+        [cutoff, cutoff, cutoff],
+    )
+    seen = [d.date() if hasattr(d, "date") else d for d in rows["trade_date"].tolist()]
+    if not seen:
+        return
+    present = set(repo.get_dates_present(seen))
+    holes = [d for d in seen if d not in present]
+    if not holes:
+        return
+
+    log.warning("Session repair: %d session(s) missing from daily_data: %s",
+                len(holes), [str(d) for d in holes])
+    for d in holes[-max_repairs:]:
+        status, n = fetch_one_date(d, client, repo)
+        log.warning("Session repair %s: %s (%d rows)", d, status, n)
 
 
 def run_daily_job(
@@ -299,6 +373,12 @@ def run_daily_job(
     else:
         log.warning("Daily job: no data found in last %d days", _MAX_LOOKBACK_DAYS)
 
+    # Repair orphaned sessions before anything else reads the data.
+    try:
+        _repair_missing_sessions(client, repo)
+    except Exception as exc:
+        log.warning("Session repair failed: %s", exc)
+
     # NOTE: Memory engine outcome update (update_outcomes) is intentionally NOT
     # called here. Orchestrator is ingestion layer and must not import analytics.
     # update_outcomes() is called from cmd_daily in src/cli.py after this returns.
@@ -314,6 +394,14 @@ def run_daily_job(
                      result["rows_inserted"], len(result["dates"]))
     except Exception as fpi_exc:
         log.warning("FPI fetch failed: %s", fpi_exc)
+
+    # Bulk / block deals + short selling. Pulled as a 10-day range, not a single
+    # day: NSE sometimes files a deal late, and the endpoint charges the same for
+    # a range as for a day. Upserts delete-by-date, so a re-pull is not a duplicate.
+    try:
+        _fetch_deals_window(days=10)
+    except Exception as deal_exc:
+        log.warning("Bulk/block deal fetch failed: %s", deal_exc)
 
     # Securities Lending & Borrowing: fee bhavcopy + outstanding borrow per series.
     try:
