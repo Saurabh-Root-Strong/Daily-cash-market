@@ -239,6 +239,38 @@ def _fill_supplementary_gaps(
         log.info("Supplementary gap-fill complete: %d tables updated", gaps_filled)
 
 
+def _fetch_slb_window(days: int = 7) -> None:
+    """Refresh SLB bhavcopy + open positions for the last `days` calendar days.
+
+    Re-pulling a few days (not just today) self-heals a session missed to a
+    transient failure; upsert_slb deletes by date, so a re-pull is not a duplicate.
+    """
+    from src.data.repository import upsert_slb
+    from src.ingestion.slb_fetcher import SLBFetcher
+
+    fetcher = SLBFetcher()
+    end = date.today()
+    d = end - timedelta(days=days)
+    while d <= end:
+        if d.weekday() < 5:
+            bhav, opos = fetcher.fetch_day(d)
+            if not opos.empty:
+                log.info("SLB %s: %d rows", d, upsert_slb(bhav, opos))
+        d += timedelta(days=1)
+
+    from src.data.repository import upsert_slb_foreclosure
+    from src.ingestion.slb_fetcher import parse_foreclosure
+    d = end
+    for _ in range(7):                       # latest published foreclosure file
+        text = fetcher.fetch_foreclosure_text(d)
+        if text:
+            fc = parse_foreclosure(text)
+            fc["seen_on"] = d
+            log.info("SLB foreclosure %s: %d notices", d, upsert_slb_foreclosure(fc))
+            break
+        d -= timedelta(days=1)
+
+
 def run_daily_job(
     client: Optional[NSEHttpClient] = None,
     repo: Optional[MarketDataRepository] = None,
@@ -282,6 +314,12 @@ def run_daily_job(
                      result["rows_inserted"], len(result["dates"]))
     except Exception as fpi_exc:
         log.warning("FPI fetch failed: %s", fpi_exc)
+
+    # Securities Lending & Borrowing: fee bhavcopy + outstanding borrow per series.
+    try:
+        _fetch_slb_window(days=7)
+    except Exception as slb_exc:
+        log.warning("SLB fetch failed: %s", slb_exc)
 
     # Always run gap-fill: catches FAO/FII/Index lags regardless of bhavcopy status
     try:

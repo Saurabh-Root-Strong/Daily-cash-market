@@ -345,6 +345,48 @@ class MarketDataRepository:
             """)
         return len(df)
 
+    def upsert_slb(self, bhav: pd.DataFrame, opos: pd.DataFrame) -> int:
+        """Replace SLB bhavcopy + open-position rows for every trade_date present.
+
+        Delete-by-date then insert, in one transaction, so a re-pull of a day NSE
+        later corrected leaves no orphan series behind.
+        """
+        bcols = ["trade_date", "symbol", "series", "series_kind", "expiry_date",
+                 "security_name", "prev_fee", "open_fee", "high_fee", "low_fee",
+                 "close_fee", "life_high_fee", "life_low_fee", "quantity", "value", "trades"]
+        ocols = ["trade_date", "symbol", "series", "series_kind", "open_qty"]
+        n = 0
+        with self._cm.connect() as conn:
+            conn.execute("BEGIN")
+            for table, df, cols in (("slb_bhavcopy", bhav, bcols),
+                                    ("slb_open_positions", opos, ocols)):
+                if df is None or df.empty:
+                    continue
+                df = df[cols]
+                dates = df["trade_date"].unique().tolist()
+                ph = ", ".join("?" * len(dates))
+                conn.execute(f"DELETE FROM {table} WHERE trade_date IN ({ph})", dates)
+                conn.register("_slb_df", df)
+                conn.execute(f"INSERT INTO {table} ({', '.join(cols)}) "
+                             f"SELECT {', '.join(cols)} FROM _slb_df")
+                conn.unregister("_slb_df")
+                n += len(df)
+            conn.execute("COMMIT")
+        return n
+
+    def upsert_slb_foreclosure(self, df: pd.DataFrame) -> int:
+        """Insert-or-replace foreclosure notices keyed on (symbol, record_date)."""
+        if df is None or df.empty:
+            return 0
+        cols = ["symbol", "record_date", "series_scope", "ex_date", "foreclosure_date",
+                "shut_start", "shut_end", "description", "seen_on"]
+        df = df.dropna(subset=["record_date"]).drop_duplicates(["symbol", "record_date"])[cols]
+        with self._cm.connect() as conn:
+            conn.register("_slbfc_df", df)
+            conn.execute(f"INSERT OR REPLACE INTO slb_foreclosure ({', '.join(cols)}) "
+                         f"SELECT {', '.join(cols)} FROM _slbfc_df")
+        return len(df)
+
     def log_run(
         self,
         run_type: str,
@@ -536,6 +578,14 @@ def upsert_fpi_flows(df: pd.DataFrame) -> int:
 
 def upsert_index_data(df: pd.DataFrame) -> int:
     return get_repository().upsert_index_data(df)
+
+
+def upsert_slb(bhav: pd.DataFrame, opos: pd.DataFrame) -> int:
+    return get_repository().upsert_slb(bhav, opos)
+
+
+def upsert_slb_foreclosure(df: pd.DataFrame) -> int:
+    return get_repository().upsert_slb_foreclosure(df)
 
 
 def log_run(

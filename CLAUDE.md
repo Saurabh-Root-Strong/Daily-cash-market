@@ -69,6 +69,29 @@ run_log (
 )
 ```
 
+## SLB (Securities Lending & Borrowing)
+
+`slb_bhavcopy` + `slb_open_positions` (2017-present, `scripts/backfill_slb.py`, raw
+cache `data/slb_raw/`), `slb_foreclosure` (current notices). Daily refresh:
+`orchestrator._fetch_slb_window`. Files are listed by `/api/merged-daily-reports?key=SLBS`,
+not by the capital-market list. Traps:
+1. `SLBM_BC_*.DAT` has NO header; the 17 columns were mapped by reconciliation.
+2. Fees are rupees per share for the WHOLE remaining tenure. Annualise by days left.
+   ROLLOVER series (OD/ON/O1/O2...) price an extension. Never annualise them by days
+   to the near expiry.
+3. Return date moved Thursday -> TUESDAY in 2026 (the NCL FAQ still says Thursday).
+   Read expiry from the file.
+4. NSE `prev_close` is NOT dividend-adjusted. `scripts/build_slb_study.py` adds
+   dividends back using `data/slb_study/corp_actions.parquet`
+   (`src/ingestion/corp_actions_fetcher.py`).
+5. The market grew ~5x in 2025-26, so use same-day ranks, never fixed levels.
+
+Measured (`data/slb_study/summary.json`): the top decile of fresh borrowing trails
+the middle deciles by ~60 bps over 21 sessions (sector-neutral, 8/9 years). It
+survives controls for momentum, volatility, liquidity, dividends and futures basis.
+Deciles 1-8 are flat. Borrow fee plus STT eat the gap, so it is an AVOID flag, not
+a short.
+
 ## Common Tasks
 
 ### Add a new signal

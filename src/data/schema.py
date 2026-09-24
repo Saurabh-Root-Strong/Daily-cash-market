@@ -224,6 +224,58 @@ def initialize_schema() -> None:
             last_updated TIMESTAMP DEFAULT now()
         )
         """,
+        # ── Securities Lending & Borrowing (SLBS) ─────────────────────────────
+        # Fees are RUPEES PER SHARE FOR THE WHOLE REMAINING TENURE, not a price:
+        # annualise against the cash close and days-to-expiry before comparing.
+        # series is VARCHAR on purpose — "01" and "X1" are different contracts.
+        """
+        CREATE TABLE IF NOT EXISTS slb_bhavcopy (
+            trade_date     DATE    NOT NULL,
+            symbol         VARCHAR NOT NULL,
+            series         VARCHAR NOT NULL,
+            series_kind    VARCHAR,            -- REGULAR | NO_AGM | ROLLOVER
+            expiry_date    DATE,
+            security_name  VARCHAR,
+            prev_fee       DOUBLE,
+            open_fee       DOUBLE,
+            high_fee       DOUBLE,
+            low_fee        DOUBLE,
+            close_fee      DOUBLE,
+            life_high_fee  DOUBLE,
+            life_low_fee   DOUBLE,
+            quantity       BIGINT,
+            value          DOUBLE,             -- rupees of fee paid, NOT notional
+            trades         BIGINT,
+            PRIMARY KEY (trade_date, symbol, series)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS slb_open_positions (
+            trade_date   DATE    NOT NULL,
+            symbol       VARCHAR NOT NULL,
+            series       VARCHAR NOT NULL,
+            series_kind  VARCHAR,
+            open_qty     BIGINT,
+            PRIMARY KEY (trade_date, symbol, series)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_slb_open_symbol ON slb_open_positions (symbol)",
+        # A foreclosure closes every SLB position in the name on a corporate action
+        # (bonus, merger, buyback, demerger...): outstanding collapses mechanically.
+        """
+        CREATE TABLE IF NOT EXISTS slb_foreclosure (
+            symbol            VARCHAR NOT NULL,
+            record_date       DATE    NOT NULL,
+            series_scope      VARCHAR,
+            ex_date           DATE,
+            foreclosure_date  DATE,
+            shut_start        DATE,
+            shut_end          DATE,
+            description       VARCHAR,
+            seen_on           DATE,
+            PRIMARY KEY (symbol, record_date)
+        )
+        """,
         # MCX commodity futures, copied from the Commodity_Forex_Market project by
         # src/ingestion/commodity_sync.py. One row per commodity per MCX session:
         # the roll-safe front month (held while >= 5 days to expiry) and `ret1`,

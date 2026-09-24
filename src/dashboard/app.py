@@ -297,6 +297,7 @@ def main() -> None:
                 "🔮 Index Prediction",
                 "🌍 FPI Capital Flow",
                 "💰 FII-DII Cash Data",
+                "🏦 SLB (Lending & Borrowing)",
                 "🧠 Index Prediction Memory",
             ],
             index=0,
@@ -373,6 +374,9 @@ def main() -> None:
     elif page == "💰 FII-DII Cash Data":
         from src.dashboard.views import fii_dii_cash
         fii_dii_cash.render(selected_date)
+    elif page == "🏦 SLB (Lending & Borrowing)":
+        from src.dashboard.views import slb
+        slb.render(selected_date)
     elif page == "🧠 Index Prediction Memory":
         from src.dashboard.views import prediction_memory
         prediction_memory.render(selected_date)

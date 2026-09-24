@@ -23,3 +23,6 @@ data/fpi_imports/*.xlsx
 # Generated analysis artifacts (backtest logs + result parquets)
 *.log
 *.parquet
+
+# SLB raw archive cache (re-downloadable: scripts/backfill_slb.py)
+data/slb_raw/
