@@ -656,14 +656,29 @@ def _apply_overrides(repo: MarketDataRepository) -> None:
     from src.core.config import PROJECT_ROOT
     from datetime import datetime
 
-    override_path = PROJECT_ROOT / "config" / "sector_overrides.csv"
-    if not override_path.exists():
+    # Auto rows (scripts/auto_assign_sectors.py) are applied FIRST and manual rows
+    # last, so a manual override always wins the upsert for the same symbol.
+    manual_path = PROJECT_ROOT / "config" / "sector_overrides.csv"
+    auto_path   = PROJECT_ROOT / "config" / "sector_auto.csv"
+    frames = []
+    manual_syms: set = set()
+    if manual_path.exists():
+        manual = pd.read_csv(manual_path, comment="#")
+        manual_syms = set(manual["symbol"])
+    if auto_path.exists():
+        auto = pd.read_csv(auto_path, comment="#")
+        frames.append(auto[~auto["symbol"].isin(manual_syms)])
+    if manual_path.exists():
+        frames.append(manual)
+    if not frames:
         return
     try:
-        overrides = pd.read_csv(override_path, comment="#")
+        overrides = pd.concat(frames, ignore_index=True)
         overrides.columns = [c.strip() for c in overrides.columns]
         if overrides.empty or "symbol" not in overrides.columns:
             return
+        # NaN is truthy, so `ov.get("category", "") or ""` below would keep a NaN
+        overrides = overrides.drop_duplicates("symbol", keep="last").fillna("")
 
         # Fetch existing rows so we don't wipe company_name / market_cap_category
         existing = repo.query(

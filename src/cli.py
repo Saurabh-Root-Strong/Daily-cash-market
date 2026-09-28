@@ -165,6 +165,35 @@ def cmd_reload_overrides(_args) -> int:
     return 0
 
 
+def cmd_classify_stocks(args) -> int:
+    """Incremental stock classification: fetch official labels for new symbols,
+    auto-assign liquid ones to rotation sectors, apply, and reload the 4-level table.
+    Network failure is non-fatal — yesterday's classification stays in place."""
+    import subprocess
+    import sys
+    from src.core.config import PROJECT_ROOT
+    py = sys.executable
+    steps = [
+        [py, "scripts/fetch_stock_classification.py", "--universe", "all",
+         "--max-fetch", str(args.max_fetch), "--refresh-days", "180", "--delay", "3"],
+        [py, "scripts/auto_assign_sectors.py"],
+    ]
+    from datetime import datetime
+    for cmd in steps:
+        print(f"[classify-stocks] {datetime.now():%H:%M:%S} start {cmd[1]}", flush=True)
+        r = subprocess.run(cmd, cwd=PROJECT_ROOT)
+        if r.returncode != 0:
+            print(f"[classify-stocks] step failed ({' '.join(cmd[1:2])}); keeping previous classification")
+            return 1
+    from src.ingestion.orchestrator import seed_sectors
+    print(f"[classify-stocks] {datetime.now():%H:%M:%S} apply overrides (waits if DB locked)", flush=True)
+    seed_sectors(reload_only_overrides=True)
+    print(f"[classify-stocks] {datetime.now():%H:%M:%S} load stock_classification", flush=True)
+    r = subprocess.run([py, "scripts/load_stock_classification.py"], cwd=PROJECT_ROOT)
+    print(f"[classify-stocks] {datetime.now():%H:%M:%S} done", flush=True)
+    return r.returncode
+
+
 def cmd_backfill_indices(args) -> int:
     from src.ingestion.orchestrator import run_index_backfill
     days = int(args.days) if args.days else 120
@@ -375,6 +404,9 @@ def main() -> int:
     sub.add_parser("daily", help="Fetch today's data")
     sub.add_parser("seed-sectors", help="Fetch and seed sector master")
     sub.add_parser("reload-overrides", help="Apply sector_overrides.csv")
+    p_cls = sub.add_parser("classify-stocks",
+                           help="Fetch official labels for new symbols + auto-assign liquid ones to rotation sectors")
+    p_cls.add_argument("--max-fetch", type=int, default=60, help="new pages to fetch this run")
     sub.add_parser("import-fpi",
                    help="Import NSDL FPI Excel files from data/fpi_imports/ into DB")
     sub.add_parser("import-fii-stats",
@@ -409,6 +441,7 @@ def main() -> int:
         "sync-commodity":      cmd_sync_commodity,
         "seed-sectors":        cmd_seed_sectors,
         "reload-overrides":    cmd_reload_overrides,
+        "classify-stocks":     cmd_classify_stocks,
         "import-fpi":          cmd_import_fpi,
         "import-fii-stats":    cmd_import_fii_stats,
         "import-fno-bhav":     cmd_import_fno_bhav,

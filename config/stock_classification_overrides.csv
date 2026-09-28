@@ -1,0 +1,9 @@
+# Hand-verified 4-level classification rows. These WIN over config/stock_classification.csv.
+# Use for: tickers the source has not classified, and official labels that lag a corporate event.
+symbol,company_name,macro_sector,sector,industry,basic_industry,source,notes,fetched_at
+HEGAM,HEG Advanced Materials Ltd,Industrials,Capital Goods,Electrical Equipment,Other Electrical Equipment,manual (web-verified 2026-09-25),"NSE label still 'Electrodes & Refractories' from before the Sep-2026 demerger; graphite electrodes moved to HEG Graphite (lists Oct-2026). Remaining: battery anode materials, BESS, power",2026-09-25
+HEG,HEG Ltd (pre-demerger ticker),Industrials,Capital Goods,Industrial Products,Electrodes & Refractories,manual,"Retired ticker; renamed HEGAM Sep-2026. Label = its pre-demerger business",2026-09-25
+GUJGASLTD,Gujarat Gas Ltd (renamed),Energy,"Oil, Gas & Consumable Fuels",Gas,LPG/CNG/PNG/LNG Supplier,manual,"Retired ticker; renamed GUJENERGY 2026-07-01 (merged GSPL)",2026-09-25
+AMIRCHAND,Amir Chand Jagdish Kumar (Exports) Ltd (renamed),Fast Moving Consumer Goods,Fast Moving Consumer Goods,Agricultural Food & other Products,Other Agricultural Products,manual,"Retired ticker; now AEROPLANE. Basmati rice exporter",2026-09-25
+MIRCELECTR,MIRC Electronics Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Consumer Electronics,manual,"Onida brand TVs/appliances; ticker no longer in EQ series",2026-09-25
+INDIAGLYCO,India Glycols Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Commodity Chemicals,manual (web-verified 2026-09-28),"NSE label still 'Breweries & Distilleries': spirits moved to IGL Spirits and bio-pharma to Ennature Bio Pharma on 2026-09-01. Remaining: glycols, bio-glycols, specialty chemicals, industrial gases",2026-09-28

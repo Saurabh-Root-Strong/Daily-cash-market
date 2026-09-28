@@ -26,6 +26,11 @@ echo [%date% %time%] Applying sector overrides... >> logs\scheduler.log
 python -m src.cli reload-overrides >> logs\scheduler.log 2>&1
 echo [%date% %time%] Sector overrides applied. >> logs\scheduler.log
 
+REM ── Classify new listings (official NSE labels) + auto-assign liquid ones ──
+echo [%date% %time%] Classifying new stocks... >> logs\scheduler.log
+python -m src.cli classify-stocks >> logs\scheduler.log 2>&1
+echo [%date% %time%] Stock classification done. >> logs\scheduler.log
+
 REM ── Write timestamp from DB latest trade date (not wall clock) ───────────
 :write_timestamp
 echo [%date% %time%] Writing last_updated marker... >> logs\scheduler.log

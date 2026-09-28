@@ -1,3 +1,5 @@
+# Sector overrides — manually assign stocks to sectors / industries / categories
+# Format: symbol,sector,industry,category,notes
 symbol,sector,industry,category,notes
 SJS,Automobile,Auto Components,Decorative Parts (Logos / Dials),Excel classification
 TENNIND,Automobile,Auto Components,Emissions / Exhaust,Excel classification
@@ -5,7 +7,6 @@ SEDEMAC,Automobile,Auto Components,Engine Control Systems,Excel classification
 BALUFORGE,Automobile,Auto Components,Forgings,Excel classification
 CIEINDIA,Automobile,Auto Components,Forgings & Gears,Excel classification
 KROSS,Automobile,Auto Components,Forgings (CV),Excel classification
-FOSECOIND,Automobile,Auto Components,Foundry Consumables,Excel classification
 HAPPYFORGE,Automobile,Auto Components,Heavy Forgings,Excel classification
 RANEHOLDIN,Automobile,Auto Components,Holding Company,Excel classification
 BELRISE,Automobile,Auto Components,Metal Body Parts,Excel classification
@@ -30,7 +31,6 @@ ARSSBL,Banking & Financial Services,Brokerage,Full-Service Broker,Excel classifi
 GROWW,Banking & Financial Services,Brokerage,Online / Discount Broker,Excel classification
 RELIGARE,Banking & Financial Services,Diversified Financial,Diversified,Excel classification
 AIIL,Banking & Financial Services,Diversified Financial,Holding & Investment,Excel classification
-TI,Banking & Financial Services,Diversified Financial,Holding & Investment,Excel classification
 IBULLSLTD,Banking & Financial Services,Diversified Financial,Holding Co.,Excel classification
 PNBGILTS,Banking & Financial Services,Diversified Financial,Primary Dealer - G-Sec,Excel classification
 IEX,Banking & Financial Services,Exchange,Power Trading Platform,Excel classification
@@ -81,7 +81,6 @@ INTERARCH,Capital Goods,Industrial Machinery,Pre-Engineered Buildings,Excel clas
 EPACKPEB,Capital Goods,Industrial Machinery,Pre-Engineered Buildings,Excel classification
 DYNAMATECH,Capital Goods,Industrial Machinery,Precision Engineering,Excel classification
 DEEDEV,Capital Goods,Industrial Machinery,Process Piping,Excel classification
-TRIVENI,Capital Goods,Industrial Machinery,Steam Turbines,Excel classification
 TECHNOE,Capital Goods,Power EPC,Power Infrastructure EPC,Excel classification
 TRANSRAILL,Capital Goods,Power EPC,Transmission EPC,Excel classification
 BAJEL,Capital Goods,Power EPC,Transmission EPC,Excel classification
@@ -103,14 +102,11 @@ SHILCTECH,Capital Goods,Power T&D Equipment,Transformers,Excel classification
 INDOTECH,Capital Goods,Power T&D Equipment,Transformers,Excel classification
 BBL,Capital Goods,Power T&D Equipment,Transformers / Motors,Excel classification
 JSWCEMENT,Cement & Building Materials,Cement,Cement,Excel classification
-STAR,Cement & Building Materials,Cement,Cement (Northeast),Excel classification
 SGMART,Cement & Building Materials,Distribution,Building Materials B2B,Excel classification
 ARIS,Cement & Building Materials,Distribution,Building Materials B2B,Excel classification
-HARDWYN,Cement & Building Materials,Hardware,Architectural Hardware,Excel classification
 AGI,Cement & Building Materials,Packaging Materials,Container Glass,Excel classification
 JSWDULUX,Cement & Building Materials,Paints,Decorative Paints,Excel classification
 SIRCA,Cement & Building Materials,Paints,Wood Coatings,Excel classification
-INDIANHUME,Cement & Building Materials,Pipes,Concrete Pipes,Excel classification
 JISLJALEQS,Cement & Building Materials,Pipes,Micro-Irrigation / Pipes,Excel classification
 APOLLOPIPE,Cement & Building Materials,Pipes,PVC / CPVC Pipes,Excel classification
 NITCO,Cement & Building Materials,Tiles,Ceramic Tiles,Excel classification
@@ -123,7 +119,6 @@ MBAPL,Chemicals,Fertilisers,Specialty,Excel classification
 ELLEN,Chemicals,Industrial Gases,Industrial Gases,Excel classification
 TIMETECHNO,Chemicals,Industrial Packaging,Plastic Packaging,Excel classification
 MOLDTKPAC,Chemicals,Industrial Packaging,Rigid Plastic Packaging,Excel classification
-SEIL,Chemicals,Packaging,Aluminium Foil,Excel classification
 COSMOFIRST,Chemicals,Packaging Films,BOPP Films,Excel classification
 GRWRHITECH,Chemicals,Packaging Films,Polyester Films,Excel classification
 WSTCSTPAPR,Chemicals,Paper,Paper Manufacturing,Excel classification
@@ -143,18 +138,13 @@ ACI,Chemicals,Specialty Chemicals,Marine Bromine,Excel classification
 DCW,Chemicals,Specialty Chemicals,PVC / Caustic Soda,Excel classification
 GULPOLY,Chemicals,Specialty Chemicals,Polyols / Sugar,Excel classification
 STALLION,Chemicals,Specialty Chemicals,Refrigerant Gases,Excel classification
-AQYLON,Chemicals,Specialty Chemicals,Specialty Chemicals,Excel classification
 FCL,Chemicals,Specialty Chemicals,Textile Chemicals,Excel classification
-GANECOS,Chemicals,Synthetic Materials,PET Recycling / Polyester,Excel classification
 MAYURUNIQ,Chemicals,Synthetic Materials,Synthetic Leather,Excel classification
-BOMDYEING,Chemicals,Textiles,Polyester Chips / Textiles,Excel classification
-RPEL,Chemicals,Textiles,Synthetic Yarns,Excel classification
+RPEL,Industrial Products,Refractories,Ramming Mass / Refractories,2026-09-28 fix: Raghav Productivity Enhancers (Excel guessed synthetic yarns); RHIM peer
 ABLBL,Consumer Goods,Apparel & Fashion,Branded Fashion,Excel classification
 SBC,Consumer Goods,Apparel & Fashion,Manufacturing & Staffing,Excel classification
 PGIL,Consumer Goods,Apparel & Fashion,Manufacturing / Exports,Excel classification
 CPPLUS,Consumer Goods,Electronics & Appliances,CCTV / Surveillance,Excel classification
-AVL,Consumer Goods,Electronics & Appliances,Consumer Electronics Retail,Excel classification
-LGEINDIA,Consumer Goods,Electronics & Appliances,Home Appliances / AC / TV,Excel classification
 MICEL,Consumer Goods,Electronics & Appliances,LED Display Systems,Excel classification
 MIRCELECTR,Consumer Goods,Electronics & Appliances,TVs / Appliances (Onida),Excel classification
 SFL,Consumer Goods,Home Furnishings,Mattresses (Sleepwell),Excel classification
@@ -178,7 +168,6 @@ ROSSTECH,Defence & Aerospace,Aerospace Components,Wire Harness,Excel classificat
 KRISHNADEF,Defence & Aerospace,Defence Components,Components,Excel classification
 APOLLO,Defence & Aerospace,Defence Electronics,Defence Electronics,Excel classification
 SIGMAADV,Defence & Aerospace,Defence Electronics,Defence Electronics,Excel classification
-KERNEX,Defence & Aerospace,Defence Electronics,Railway Safety Systems,Excel classification
 AVANTEL,Defence & Aerospace,Defence Electronics,Satcom,Excel classification
 CENTUM,Defence & Aerospace,EMS,Defence Electronics,Excel classification
 AVALON,Defence & Aerospace,EMS,Electronics Manufacturing,Excel classification
@@ -206,10 +195,7 @@ FIRSTCRY,E-Commerce,Online Retail,Baby & Kids Products,Excel classification
 WAKEFIT,E-Commerce,Online Retail,D2C Furniture / Mattresses,Excel classification
 LENSKART,E-Commerce,Online Retail,Eyewear (Omnichannel),Excel classification
 SWIGGY,E-Commerce,Online Retail,Food Delivery / Quick Commerce,Excel classification
-BLUESTONE,E-Commerce,Online Retail,Jewellery (Omnichannel),Excel classification
 MEESHO,E-Commerce,Online Retail,Online Marketplace,Excel classification
-URBANCO,E-Commerce,Online Services,Home Services Platform,Excel classification
-IXIGO,E-Commerce,Online Services,Online Travel Aggregator,Excel classification
 GLOBUSSPR,FMCG,Beverages,Alcoholic - Distillery,Excel classification
 VINCOFE,FMCG,Beverages,Coffee,Excel classification
 GAEL,FMCG,Foods,Agri Processing / Edible Oils,Excel classification
@@ -243,7 +229,6 @@ ONESOURCE,Healthcare,Pharmaceuticals & Drugs,Specialty Drug Development,Excel cl
 IKS,Healthcare,Pharma Services,Clinical Documentation BPO,Excel classification
 SAGILITY,Healthcare,Pharma Services,Healthcare BPO,Excel classification
 INDGN,Healthcare,Pharma Services,Life Sciences Tech / Services,Excel classification
-WELENT,Healthcare,Pharmacy Retail,Pharmacy Chain,Excel classification
 JSLL,Healthcare,Wellness & Ayurveda,Ayurveda Hospitals,Excel classification
 DELTACORP,Hospitality,Gaming,Casinos,Excel classification
 THELEELA,Hospitality,Hotels,Luxury,Excel classification
@@ -293,7 +278,6 @@ WABAG,Infrastructure & Construction,Water EPC,Water Treatment,Excel classificati
 IONEXCHANG,Infrastructure & Construction,Water EPC,Water Treatment Products & Services,Excel classification
 ARFIN,Metals & Mining,Aluminium,Aluminium Products,Excel classification
 BHARATCOAL,Metals & Mining,Coal,Coal Mining,Excel classification
-NAVA,Metals & Mining,Ferro Alloys,Ferro Alloys / Power,Excel classification
 IMFA,Metals & Mining,Ferro Alloys,Ferro Chrome,Excel classification
 HEG,Metals & Mining,Graphite,Graphite Electrodes,Excel classification
 GRAPHITE,Metals & Mining,Graphite,Graphite Electrodes,Excel classification
@@ -351,7 +335,6 @@ HUBTOWN,Real Estate,Developers,Residential / Commercial,Excel classification
 PVP,Real Estate,Diversified,Diversified,Excel classification
 HEMIPROP,Real Estate,Land Bank,PSU Land,Excel classification
 SCILAL,Real Estate,Land Bank,PSU Land (Demerged),Excel classification
-SBCL,Retail,Apparel Retail,Sarees,Excel classification
 KALAMANDIR,Retail,Apparel Retail,Sarees / Ethnic,Excel classification
 STYLEBAAZA,Retail,Apparel Retail,Value Fashion,Excel classification
 V2RETAIL,Retail,Apparel Retail,Value Fashion,Excel classification
@@ -425,9 +408,7 @@ HDFCSILVER,ETF,ETF / Index Fund,,Silver ETF — excluded from sector analysis
 HDFCGOLD,ETF,ETF / Index Fund,,Gold ETF — excluded from sector analysis
 SUVEN,Healthcare,Pharmaceuticals,Pharma — CDMO / Specialty,Large turnover unmapped
 DHANUKA,Chemicals,Agrochemicals,Crop Protection Chemicals,Large turnover unmapped
-SEAMECLTD,Capital Goods,Shipbuilding & Repair,Ship Repair & Maintenance,Large turnover unmapped
 PURVA,Real Estate,Residential Real Estate,Residential Developer,Large turnover unmapped
-ARIHANTSUP,Capital Goods,Construction Materials,AAC Blocks,Large turnover unmapped
 SOMANYCERA,Capital Goods,Building Materials,Ceramic Tiles,Large turnover unmapped
 ASTEC,Chemicals,Agrochemicals,Herbicides & Fungicides,Large turnover unmapped
 PCJEWELLER,Consumer Goods,Jewellery & Accessories,Retail Jewellery,Large turnover unmapped
@@ -440,7 +421,6 @@ EUREKAFORB,Consumer Goods,Home Appliances,Water Purifiers & Vacuums,Large turnov
 SANSTAR,FMCG,Starch & Derivatives,Modified Starch,Large turnover unmapped
 RESPONIND,Capital Goods,Electrical Equipment,Cables & Wires,Large turnover unmapped
 SAKSOFT,IT Industry,IT Services,Niche IT Services,Large turnover unmapped
-KPL,Capital Goods,Industrial Products,Plywood & Boards,Large turnover unmapped
 MUKANDLTD,Metals & Mining,Steel,Specialty Steel & Engineering,Large turnover unmapped
 GTLINFRA,Tele-Communication,Telecom Infrastructure,Tower Infrastructure,Large turnover unmapped
 ASIANENE,Energy,Renewable Energy,Solar Power,Large turnover unmapped
@@ -455,7 +435,6 @@ MONTECARLO,Consumer Goods,Apparel & Accessories,Ready-made Garments,Large turnov
 ASIANTILES,Capital Goods,Building Materials,Ceramic Tiles & Sanitaryware,Large turnover unmapped
 PRINCEPIPE,Capital Goods,Building Materials,Plastic Pipes & Fittings,Large turnover unmapped
 63MOONS,IT Industry,Financial Technology,Trading & Market Infra Tech,Large turnover unmapped
-MOREALTY,Real Estate,Residential Real Estate,Residential Developer,Large turnover unmapped
 AXISTECETF,ETF,ETF / Index Fund,,Technology ETF — excluded from sector analysis
 ITIETF,ETF,ETF / Index Fund,,Technology ETF — excluded from sector analysis
 TBZ,Consumer Goods,Jewellery,Jewellery Retail,Listed jewellery missing from master (added)
@@ -463,3 +442,172 @@ VAIBHAVGBL,Consumer Goods,Jewellery,Fashion Jewellery / E-Retail,Listed jeweller
 MOTISONS,Consumer Goods,Jewellery,Jewellery Retail,Listed jewellery missing from master (added)
 RAJESHEXPO,Consumer Goods,Jewellery,Gold Refining / Jewellery,Listed jewellery missing from master (inactive since 2025-12)
 JYOTISTRUC,Capital Goods,Power T&D Equipment,Transmission Towers / Structures,Listed T&D missing from master (added)
+SSRETAIL,Retailing,Retailing,Mobile Phone Retail,Web-verified 2026-09-25: largest mobile retail chain in West India; IPO listed 2026-09-23
+GLASSWALL,Capital Goods,Building Materials,Facade & Fenestration,Web-verified 2026-09-25: facade/curtain-wall systems; IPO listed 2026-09-16
+HEROMOTORS,Automobile,Auto Components,Powertrain & Gears,Web-verified 2026-09-25: gears/transmissions + e-bike powertrain + sheet-metal assemblies; IPO 2026-09-23
+KANOHAR,Capital Goods,Power T&D Equipment,Transformers,Web-verified 2026-09-25: power/traction transformers + substation EPC; IPO 2026-09-16
+RENTOMOJO,Retailing,Retailing - Rental,Furniture & Appliance Rental,Web-verified 2026-09-25: consumer furniture/appliance rental; IPO 2026-09-17
+ESDS,Information Technology,Cloud,Data Centre & Cloud,Web-verified 2026-09-25: cloud/data-centre services (E2E peer)
+MVELECTRO,Capital Goods,Railway Electrical Equipment,Rail Propulsion & Switchgear,Web-verified 2026-09-25: IGBT propulsion + switchgear for Indian Railways rolling stock; IPO 2026-08-06
+MOLBIO,Healthcare,Medical Equipment/Supplies/Accessories,Diagnostics (Truenat),Molecular diagnostics; IPO 2026-08
+KARAMTARA,Power & Utilities,Solar Mounting Structures,Solar Structures + T&D Towers,Web-verified 2026-09-25: ~80% of FY26 revenue solar structures; rest towers/fasteners; IPO 2026-09-17
+MILKYMIST,FMCG,Dairy Products,Dairy,Packaged dairy (paneer/curd/cheese); IPO 2026-08
+DHOOTTRANS,Automobile,Auto Components,Wiring Harness,Web-verified 2026-09-25: 2W/3W wiring harness leader; IPO 2026-08-17
+LUMINO,Capital Goods,Cables & Wires,Conductors + T&D EPC,Web-verified 2026-09-25: aluminium conductors/power cables + T&D EPC; IPO 2026-09-03
+SYMBIOTEC,Healthcare,Pharmaceuticals & Drugs,Steroid & Hormone APIs,Steroid/hormone API maker; IPO 2026-09
+TEMPSENS,Capital Goods,Industrial Products,Temperature Sensors & Heaters,Web-verified 2026-09-25: thermocouples/pyrometers + industrial heaters + special cables; IPO 2026-08-28
+LALITHAA,Consumer Goods,Jewellery,Jewellery Retail,Lalithaa Jewellery Mart — South India jewellery retailer; IPO 2026-08
+VAML,Raw Material,Metal - Non Ferrous,Aluminium,Vedanta demerger entity (aluminium); listed 2026-06-30
+INDOMIM,Capital Goods,Precision Engineering,Metal Injection Moulding,Web-verified 2026-09-25: MIM precision components for auto/defence/medical/aero; IPO 2026-07-30
+STEAMHOUSE,Energy,Power Generation - Industrial Steam Utility,Steam & Nitrogen Supply,Web-verified 2026-09-25: centralised steam/nitrogen pipeline utility for Gujarat industrial clusters; IPO 2026-09-17
+AUGMONT,Consumer Goods,Jewellery & Bullion,Bullion Refining / Digital Gold,Gold & silver refining + digital gold; IPO 2026-08-31
+SKYWAYS,Logistics & Freight,Logistics,Air & Ocean Freight Forwarding,Web-verified 2026-09-25: freight forwarding + customs + warehousing; IPO 2026-09-01
+JINDWORLD,Textile Industry,Textile,Denim Fabric,Jindal Worldwide — denim/fabric
+SHAREINDIA,Financial,Finance - Stock Broking,Broking,NSE index industry = Financial Services
+DEEPA,Consumer Goods,Jewellery,Jewellery,Deepa Jewellers; IPO 2026-09-08
+ARCIL,Financial,Finance - Asset Reconstruction,ARC,Asset Reconstruction Company (India); IPO 2026-09-17
+PRANAV,Real Estate,Developers,Mumbai Redevelopment,Web-verified 2026-09-25: Mumbai society redevelopment; IPO 2026-09-15
+EMUDHRA,IT Industry,IT - Software,Digital Signatures / PKI,eMudhra — digital trust services
+SUNSHINE,Media & Entertainment,Film Production Distribution & Entertainment,Film & OTT Production,Web-verified 2026-09-25: film/OTT production house; IPO 2026-08-25
+LCCPROJECT,Infrastructure & Construction,Water EPC,Irrigation EPC,Web-verified 2026-09-25: irrigation & water-supply EPC (Gujarat); IPO 2026-09-17
+SHIPROCKET,E-Commerce,Logistics Tech,E-commerce Shipping Aggregator,Shiprocket — D2C shipping/logistics platform; IPO 2026-08-19
+MPIMANIPAL,Banking & Financial Services,Payments,Payment Cards & ID Solutions,Web-verified 2026-09-25: largest India card manufacturer (36% credit / 31% debit issuance) + ID docs; grouped with PROTEAN/CMSINFO; IPO 2026-09-17
+VOGL,Energy,Oil Exploration,Oil & Gas E&P,Vedanta demerger entity (Cairn oil & gas); listed 2026-06-30
+FMGOETZE,Automobile,Auto Components,Pistons & Rings,Federal-Mogul Goetze — pistons/rings
+AHCL,Healthcare,Pharmaceuticals & Drugs,Pharma Intermediates & APIs,Web-verified 2026-09-25: Anlon Healthcare — intermediates/APIs
+WEL,IT Industry,IT - Hardware,Fan ODM/OEM (EMS),Web-verified 2026-09-25: fan ODM/OEM for 10+ brands; grouped with EMS peers (EPACK/AMBER)
+MANIPALHOS,Healthcare,Hospital & Healthcare Services,Hospitals,Manipal Hospitals; IPO 2026-08-05
+XTRANET,Information Technology,IT Services,IT Services / Govt Digital,Web-verified 2026-09-25: enterprise/govt IT services; IPO 2026-07-30
+SSWL,Automobile & Ancillaries,Auto Ancillary,Steel & Alloy Wheels,Steel Strips Wheels
+MANALIPETC,Chemicals,Petrochemicals,Propylene Glycol / Polyols,Manali Petrochemicals
+BODALCHEM,Raw Material,Chemicals,Dyes & Intermediates,Bodal Chemicals
+KIRIINDUS,Raw Material,Chemicals,Dyes & Intermediates,Kiri Industries
+OPTIEMUS,IT Industry,IT - Hardware,Mobile/Telecom EMS,Optiemus Infracom — phone/wearable EMS; NSE index says Telecommunication; grouped with DIXON
+HIKAL,Healthcare,Pharmaceuticals & Drugs,Pharma & Crop CDMO,Hikal — pharma + crop-protection CDMO
+OMAXE,Industries,Construction - Real Estate,Residential/Commercial Developer,Omaxe
+RBZJEWEL,Consumer Goods,Jewellery,Jewellery,RBZ Jewellers
+VISL,Raw Material,Metal - Ferrous,Steel,Vedanta demerger entity (iron & steel); listed 2026-06-30
+SHANKESH,Consumer Goods,Jewellery,Jewellery,Shankesh Jewellers; IPO 2026-08-25
+GMMPFAUDLR,Capital Goods,Industrial Machinery,Glass-lined Process Equipment,NSE index industry = Capital Goods
+RIR,Capital Goods,Electrical Equipment,Power Semiconductors,Web-verified 2026-09-25: thyristors/diodes/IGBT modules + rectifiers
+TECHNOCRAF,Infrastructure & Construction,EPC,Water / Roads / T&D EPC,Web-verified 2026-09-25: public-infra EPC; IPO 2026-08-14
+PRASOLCHEM,Chemicals,Specialty Chemicals,Acetone & Phosphorus Derivatives,Web-verified 2026-09-25: acetone/phosphorus specialty chemicals; IPO 2026-09-16
+VENUSPIPES,Derived Materials,Steel & Iron Products,Stainless Steel Pipes,Venus Pipes & Tubes (RATNAMANI peer)
+QUADFUTURE,Capital Goods,Railway Signalling & Specialty Cables,Kavach + Specialty Cables,Quadrant Future Tek
+SBIFUNDS,Financial,Finance - Asset Management,AMC,SBI Funds Management; IPO 2026-07-21
+LEAPIND,Logistics & Freight,Logistics,Pallet Pooling,Web-verified 2026-09-25: pallet/container pooling (~90% share); IPO 2026-08-14
+FILATEX,Textile Industry,Textile,Polyester Yarn,Filatex India
+ITDC,Hospitality & Travel,Hotel Resort & Restaurants,Hotels (PSU),India Tourism Development Corp
+JASH,Industries,Engineering,Water Control Gates & Pumps,Jash Engineering
+EMIL,Retailing,Retailing,Consumer Electronics Retail,NSE index industry = Consumer Services
+NOVARTIND,Healthcare,Pharmaceuticals & Drugs,Pharma MNC,Novartis India
+BLEL,Metals & Mining,Steel,Alloy Steel / Rolls / Castings,Web-verified 2026-09-25: alloy steel 46% + metal rolls + castings; IPO 2026-08-19
+PERNIASPOP,E-Commerce,Online Retail,Designer Fashion E-commerce,Purple Style Labs (Pernia's Pop-Up Shop); IPO 2026-09-07
+FEDDERSHOL,Banking & Financial Services,Diversified Financial,Corporate & Distressed-debt Advisory,Web-verified 2026-09-25: real-estate/distressed-debt advisory (ex-Brescon)
+GNA,Automobile,Auto Components,Axles & Shafts,GNA Axles
+UNIMECH,Defence & Aerospace,Aerospace Components,Aero Tooling & Precision Parts,Unimech Aerospace (ROSSTECH peer)
+RADHIKAJWE,Consumer Goods,Jewellery,Jewellery,Radhika Jeweltech
+TIMEX,Consumer Durables,Consumer Durables - Watches,Watches,Timex Group India
+RAMBHAJO,Consumer Goods,Jewellery,Jewellery,Advit Jewels
+INDOCO,Healthcare,Pharmaceuticals & Drugs,Formulations,Indoco Remedies
+GAJA,Financial,Finance - Asset Management,Alternative Asset Manager (AIF),Web-verified 2026-09-25: AIF manager; IPO 2026-08-26
+GUJENERGY,Energy,Gas Transmission/Marketing,City Gas + Transmission,Web-verified 2026-09-25: RENAMED from GUJGASLTD 2026-07-01 (merged GSPL)
+SETL,Capital Goods,Industrial Machinery,Pharma/Chemical Process Equipment,Web-verified 2026-09-25: Standard Engineering Technology (ex-Standard Glass Lining)
+TNPETRO,Chemicals,Petrochemicals,LAB / Caustic Soda,Tamilnadu PetroProducts
+VEDPOWER,Energy,Power Generation/Distribution,Thermal Power,Vedanta demerger entity (power); listed 2026-06-30
+NPST,Financial,Payment Gateway & Fintech,UPI Switch / Payments Tech,Network People Services Technologies
+JGCHEM,Raw Material,Chemicals,Zinc Oxide,J.G. Chemicals
+INDNIPPON,Automobile,Auto Components,Ignition & Auto Electricals,India Nippon Electricals
+CENTENKA,Textile Industry,Textile,Nylon Filament Yarn,Century Enka
+TCC,Real Estate,Co-working,Flex Office Aggregator,Web-verified 2026-09-25: flex-office aggregator (Brantford); AWFIS peer
+VARROC,Automobile & Ancillaries,Auto Ancillary,Lighting & Electronics,NSE index industry = Automobile and Auto Components
+NELCO,Tele-Communication,Telecommunication - Service Provider,Satellite Communications,Nelco (Tata) — VSAT/satcom
+DIFFNKG,Capital Goods,Industrial Products,Welding Consumables & Wear Solutions,Diffusion Engineers
+SKFINDUS,Automobile & Ancillaries,Bearings,Industrial Bearings,SKF India (Industrial) demerger; NSE index industry = Capital Goods
+ALOKINDS,Textile Industry,Textile,Polyester & Cotton Textiles,NSE index industry = Textiles
+SUDEEPPHRM,Chemicals,Specialty Chemicals,Pharma/Food Excipients,NSE index industry = Chemicals
+MAHSEAMLES,Derived Materials,Steel & Iron Products,Seamless Pipes,Maharashtra Seamless (RATNAMANI/JINDALSAW peer); NSE index says Capital Goods
+IGARASHI,Automobile,Auto Components,Micro Motors,Igarashi Motors India
+EXICOM,Tele-Communication,Telecommunication - Equipment,Telecom Critical Power + EV Chargers,Web-verified 2026-09-25: FY26 critical power 56% / EV chargers 44%
+GUJTHEM,Healthcare,Pharmaceuticals & Drugs,Fermentation APIs,Gujarat Themis Biosyn
+INDSWFTLAB,Healthcare,Pharmaceuticals & Drugs,APIs,Ind-Swift Laboratories
+CHEMPLASTS,Raw Material,Chemicals,PVC & Specialty Chemicals,Chemplast Sanmar
+JNPR,Power & Utilities,Renewable IPP,Wind/Solar IPP,Juniper Green Energy; IPO 2026-08-06
+SUBEXLTD,IT Industry,IT - Software,Telecom Analytics Software,Subex
+RAMRAT,Capital Goods,Cables & Wires,Winding Wires & Copper Tubes,Ram Ratna Wires
+PRIORITY,Consumer Goods,Jewellery,Jewellery,Priority Jewels; IPO 2026-09-21
+SYNCOMF,Healthcare,Pharmaceuticals & Drugs,Formulations,Syncom Formulations
+WESTLIFE,Hospitality & Travel,Hotel Resort & Restaurants,QSR (McDonald's West/South),NSE index industry = Consumer Services
+HEGAM,Capital Goods,Electrical Equipment,Battery Materials / BESS / Power,Web-verified 2026-09-25: HEG RENAMED after demerger (graphite electrodes -> HEG Graphite; listing Oct-2026); NSE index = Capital Goods
+ANDHRAPAP,Chemicals,Paper,Paper,Andhra Paper (JKPAPER peer)
+REDTAPE,Apparel & Accessories,Footwear,Footwear,NSE index industry = Consumer Durables
+INDORAMA,Textile Industry,Textile,Polyester,Indo Rama Synthetics
+ARVSMART,Real Estate,Developers,Residential Developer,Arvind SmartSpaces
+LCL,Capital Goods,Industrial Machinery,Raffia / Technical-textile Machinery,Web-verified 2026-09-25: woven-raffia machinery (15% global share); IPO 2026-07-30
+UTKARSHBNK,Banking,Bank - Private,Small Finance Bank,Utkarsh SFB
+JAYKAY,Industries,Defence,Defence & Aerospace Precision Mfg,Web-verified 2026-09-25: defence/aerospace precision components (warheads/composites)
+SMCGLOBAL,Financial,Finance - Stock Broking,Broking,SMC Global Securities
+BIRLACABLE,Tele-Communication,Telecommunication - Equipment,Optical Fibre Cables,Birla Cable (STLTECH peer)
+HORIZONIND,Real Estate,Industrial Real Estate,Warehousing & Industrial Parks,Web-verified 2026-09-25: Blackstone warehouse/industrial-park landlord; IPO 2026-08-24
+MSTCLTD,Services,E-Commerce Services,Govt E-auction Platform,MSTC (PSU); NSE index industry = Services
+GOCLCORP,Raw Material,Chemicals,Explosives & Lubricants,GOCL Corporation (Hinduja)
+VSSL,Metals & Mining,Steel,Special Steel,Vardhman Special Steels
+AMAGI,IT Industry,IT - Software,Media Cloud SaaS,Amagi Media Labs
+GSPCROP,Agricultural,Pesticides & Agrochemicals,Agrochemicals,GSP Crop Science
+CORDELIA,Hospitality & Travel,Travel Services,Cruises,Waterways Leisure Tourism (Cordelia Cruises)
+PRABHA,Oil & Gas,Exploration & Production,CBM E&P,Web-verified 2026-09-25: CBM blocks (N. Karanpura / Jharia)
+ARDEE,Metals & Mining,Recycling,Lead Recycling,Web-verified 2026-09-25: used-battery lead recycling (GRAVITA-type); IPO 2026-08-12
+KABRAEXTRU,Capital Goods,Industrial Machinery,Plastic Extrusion Machinery,Kabra Extrusion Technik
+PITTIENG,Industries,Engineering,Electrical Laminations & Machining,Pitti Engineering
+GOLDAXIS,ETF,ETF / Index Fund,,Axis Gold ETF (renamed from AXISGOLD)
+SILVERAXIS,ETF,ETF / Index Fund,,Axis Silver ETF (renamed from AXISILVER)
+MONQ50,ETF,ETF / Index Fund,,Motilal Nasdaq Q50 ETF
+AEROPLANE,Consumer Goods,Consumer Food,Basmati Rice,RENAMED from AMIRCHAND (Amir Chand Jagdish Kumar Exports) — rice exporter
+STAR,Healthcare,Pharmaceuticals & Drugs,Pharmaceuticals,2026-09-25 fix: Strides Pharma Science (was mislabelled Star Cement)
+TI,FMCG,Breweries & Distilleries,Alcoholic Beverages,2026-09-25 fix: Tilaknagar Industries (was mislabelled Tube Investments)
+WELENT,Infrastructure & Construction,EPC,Civil Construction,2026-09-25 fix: Welspun Enterprises (was mislabelled pharmacy chain)
+KPL,Healthcare,Pharmaceuticals & Drugs,Pharmaceuticals,2026-09-25 fix: Kwality Pharmaceuticals (was mislabelled plywood)
+ACUTAAS,Healthcare,Pharmaceuticals & Drugs,Pharma Intermediates / CDMO,2026-09-25 fix: Acutaas Chemicals (ex-Ami Organics); NSE = Pharmaceuticals (was IT)
+SBCL,Capital Goods,Electrical Equipment,Thermostatic Bimetal & Shunts,2026-09-25 fix: Shivalik Bimetal Controls (was mislabelled saree retail)
+SEIL,Retailing,Education Services,Schools,2026-09-25 fix: Shanti Educational Initiatives (was mislabelled aluminium foil)
+HARDWYN,Consumer Goods,Home Furnishings,Architectural Hardware,2026-09-25 fix: NSE = Furniture/Home Furnishing ('Hardware' hit the IT rule)
+AVL,Retailing,Retailing,Consumer Electronics Retail,2026-09-25 fix: Aditya Vision = electronics retailer (was Capital Goods)
+FOSECOIND,Chemicals,Specialty Chemicals,Foundry Chemicals,2026-09-25 fix: NSE = Specialty Chemicals (was Automobile)
+ARIHANTSUP,Real Estate,Developers,Residential Developer,2026-09-25 fix: Arihant Superstructures = developer (was Cement & Building Materials)
+LGEINDIA,Consumer Durables,Consumer Durables - Domestic Appliances,Home Appliances & TVs,2026-09-25 fix: LG Electronics India; NSE = Household Appliances (was Capital Goods)
+PRAJIND,Capital Goods,Industrial Machinery,Bio-energy Process Plants,2026-09-25 fix: Praj = ethanol-plant engineering (was Chemicals)
+KERNEX,Capital Goods,Railway Signalling - Electrical Equipment,Kavach / Rail Safety,"2026-09-25 fix: rail anti-collision systems, not defence (NSE = Transport Related Services)"
+SEAMECLTD,Logistics & Freight,Marine Services,Offshore Vessels,"2026-09-25 fix: offshore diving-support vessels, not shipbuilding/defence"
+LINDEINDIA,Chemicals,Industrial Gases,Industrial Gases,2026-09-25 fix: NSE = Industrial Gases (was Oil & Gas)
+AQYLON,Media & Entertainment,TV Broadcasting,Content Production,2026-09-25 fix: NSE = TV Broadcasting & Software Production (was Chemicals)
+KALPATARU,Real Estate,Developers,Residential/Commercial Developer,2026-09-25 fix: ticker is Kalpataru Ltd (developer); EPC arm is KPIL
+TRIVENI,FMCG,Sugar,Sugar + Distillery + Engineering,2026-09-25 fix: NSE = Sugar (was Capital Goods)
+RAYMOND,Capital Goods,Engineering,Aerospace/Auto Engineering,"2026-09-25 fix: post-demerger Raymond Ltd = engineering (NSE Industrial Products), not textiles"
+RKFORGE,Automobile,Auto Components,Forgings (CV),2026-09-25 fix: NSE = Auto Components (was Capital Goods)
+INDIANHUME,Infrastructure & Construction,Water EPC,Water Pipeline EPC,2026-09-25 fix: NSE = Civil Construction (was Capital Goods)
+WELCORP,Derived Materials,Steel & Iron Products,Line Pipes,2026-09-25 fix: NSE = Iron & Steel Products; RATNAMANI/JINDALSAW peer (was Infrastructure)
+BOMDYEING,Textile Industry,Textile,Polyester + Home Textiles,2026-09-25 fix: NSE = Other Textile Products (was Cement & Building Materials)
+GANECOS,Textile Industry,Textile,Recycled Polyester Fibre,2026-09-25 fix: NSE = Other Textile Products (was Chemicals)
+NAVA,Energy,Power Generation/Distribution,Power (Zambia) + Ferro Alloys,2026-09-25 fix: NSE = Power Generation (was Metals & Mining)
+IXIGO,E-Commerce,Travel & Booking Platforms,Online Travel,2026-09-25 fix: EASEMYTRIP peer; NSE = Tour & Travel Services (was IT)
+URBANCO,E-Commerce,Online Home Services,Home Services Marketplace,2026-09-25 fix: NSE = E-Retail/E-Commerce (was IT)
+ALEMBICLTD,Real Estate,Developers,Real Estate + Pharma Stake,2026-09-25 fix: NSE = Residential/Commercial Projects (was Diversified)
+BLUESTONE,Consumer Goods,Jewellery,Jewellery Brand,"2026-09-25 fix: NSE = Gems, Jewellery & Watches (was Consumer Services)"
+ORIANA,Power & Utilities,Solar EPC,Solar EPC,2026-09-25 fix: was Others
+VMARCIND,Capital Goods,Cables & Wires,Wires & Cables,2026-09-25 fix: was Others
+SIMCA,Media & Entertainment,Advertising & Media Agencies,Advertising,2026-09-25 fix: was Others
+GOKULAGRO,FMCG,Edible Oil,Edible Oil,2026-09-25 fix: NSE = Edible Oil (was Chemicals via 'Solvent Extraction')
+MOREALTY,ETF,ETF / Index Fund,,"2026-09-25 fix: Motilal Oswal Nifty Realty ETF — a fund, was counted as a Realty stock"
+ADVAIT,Capital Goods,Power T&D Equipment,OPGW / Transmission Hardware,2026-09-28 review: Advait Energy Transitions — transmission-line equipment (value chain)
+RELTD,Power & Utilities,Solar EPC,Solar Pumps & EPC,2026-09-28 review: Ravindra Energy — solar
+SAATVIKGL,Power & Utilities,Solar Manufacturing,Solar Modules,2026-09-28 review: Saatvik Green Energy — solar modules
+IKIO,IT Industry,IT - Hardware,Lighting ODM (EMS),2026-09-28 review: LED lighting ODM; EMS precedent (EPACK/WEL)
+NIITLTD,E-Commerce,EdTech,Digital Learning,2026-09-28 review: edtech precedent (JARO/PWL)
+NESCO,Real Estate,Developers,Exhibition Centre / IT Park Leasing,2026-09-28 review: Bombay Exhibition Centre + IT park rentals
+SMARTWORKS,Real Estate,Co-working,Flex Office,2026-09-28 review: AWFIS precedent
+WEWORK,Real Estate,Co-working,Flex Office,2026-09-28 review: WeWork India; AWFIS precedent
+SANGHVIMOV,Infrastructure & Construction,Infrastructure,Crane Rental,2026-09-28 review: crane hire for infra/wind projects
+PIXTRANS,Capital Goods,Industrial Products,Transmission Belts,2026-09-28 review: industrial power-transmission belts
+ASHIKA,Banking & Financial Services,NBFC,NBFC,2026-09-28: Ashika Credit Capital — no Screener page; liquid (~7.5 Cr/day)
+SOLARWORLD,Power & Utilities,Solar EPC,Solar EPC,2026-09-28 review: solar EPC; SWSOLAR precedent (NSE = Civil Construction)
+GODAVARIB,Chemicals,Specialty Chemicals,Bio-ethanol & Bio-chemicals,2026-09-28 review: biorefinery chemicals/ethanol (NSE = Diversified FMCG)

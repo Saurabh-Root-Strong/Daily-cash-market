@@ -24,6 +24,7 @@ is missing/unknown. Run `audit()` to print the full industry→canonical mapping
 """
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 __all__ = ["canonical_sector", "CANONICAL_SECTORS", "audit", "populate_canonical_sectors"]
@@ -59,8 +60,9 @@ _SYMBOL_OVERRIDES: dict[str, str] = {
     "NLCINDIA":   "Power & Utilities",   # NLC India — lignite mining + power generation
 
     # ── Power/T&D EPC contractors — projects, not utilities → Infrastructure ──
+    # (KALPATARU removed 2026-09-25: that ticker is now Kalpataru Ltd, a real-estate
+    #  developer; the EPC company Kalpataru Projects trades as KPIL.)
     "KEC":        "Infrastructure",      # KEC International — T&D EPC
-    "KALPATARU":  "Infrastructure",      # Kalpataru Projects — diversified EPC
     "POWERMECH":  "Infrastructure",      # Power Mech Projects — power plant erection/O&M
 
     # ── Refrigerant gases / coal-logistics conglomerate, not a power generator ─
@@ -106,6 +108,10 @@ _RULES: list[tuple[str, str]] = [
     ("water epc",                "Infrastructure"),
     ("petroleum specialties",    "Chemicals"),
     ("petrochem",                "Chemicals"),
+    # Vendor industry "TV Broadcasting & Software Production" contains "software",
+    # which the IT rule below would swallow (SUNTV/ZEEL/NETWORK18 were in IT).
+    ("tv broadcasting",          "Media & Entertainment"),
+    ("software production",      "Media & Entertainment"),
 
     # ── Information Technology ─────────────────────────────────────────────────
     ("it - ", "IT"), ("it services", "IT"), ("it hardware", "IT"),
@@ -128,6 +134,8 @@ _RULES: list[tuple[str, str]] = [
     ("ratings", "Financial Services"), ("diversified financial", "Financial Services"),
 
     # ── Automobile ─────────────────────────────────────────────────────────────
+    # "automation" must pre-empt the "auto" stem (industrial automation = capital goods).
+    ("automation", "Capital Goods"),
     ("auto", "Automobile"), ("tyres", "Automobile"), ("oem", "Automobile"),
 
     # ── Pharma & Healthcare ────────────────────────────────────────────────────
@@ -221,6 +229,7 @@ _RULES: list[tuple[str, str]] = [
 
     # ── Logistics ──────────────────────────────────────────────────────────────
     ("logistics", "Logistics"), ("shipping", "Logistics"), ("courier", "Logistics"),
+    ("transport", "Logistics"),
     ("marine services", "Logistics"), ("storage terminals", "Logistics"),
 
     # ── Consumer Services / Retail / Travel ───────────────────────────────────
@@ -264,6 +273,16 @@ _RAW_SECTOR_FALLBACK: dict[str, str] = {
 }
 
 
+# Each needle must start at a WORD BOUNDARY. Plain `needle in industry` let short
+# needles fire mid-word: "tiles" matched "Textiles" (→ Cement), "ems" matches
+# "Systems" (→ IT), "port" matches "Transport"/"Support"/"Sports". Anchoring the
+# start keeps intended stems ("pharma" → Pharmaceuticals, "auto" → Automobiles).
+_RULE_PATTERNS: list[tuple[re.Pattern, str]] = [
+    (re.compile(r"(?<![a-z0-9])" + re.escape(needle.strip())), canon)
+    for needle, canon in _RULES
+]
+
+
 def canonical_sector(
     industry: Optional[str], raw_sector: Optional[str] = None,
     symbol: Optional[str] = None,
@@ -276,8 +295,8 @@ def canonical_sector(
         return _SYMBOL_OVERRIDES[symbol.strip().upper()]
     ind = (industry or "").strip().lower()
     if ind:
-        for needle, canon in _RULES:
-            if needle in ind:
+        for pattern, canon in _RULE_PATTERNS:
+            if pattern.search(ind):
                 return canon
     # Industry missing or unmatched → fall back to the raw sector map.
     if raw_sector:
@@ -285,6 +304,21 @@ def canonical_sector(
         if rs in _RAW_SECTOR_FALLBACK:
             return _RAW_SECTOR_FALLBACK[rs]
     return "Diversified"
+
+
+def _auto_canonical_map() -> dict[str, str]:
+    """symbol → canonical_sector from config/sector_auto.csv, minus manual overrides."""
+    import pandas as pd
+    from src.core.config import PROJECT_ROOT
+    auto_path   = PROJECT_ROOT / "config" / "sector_auto.csv"
+    manual_path = PROJECT_ROOT / "config" / "sector_overrides.csv"
+    if not auto_path.exists():
+        return {}
+    auto = pd.read_csv(auto_path, comment="#", dtype=str)
+    manual = (set(pd.read_csv(manual_path, comment="#", dtype=str)["symbol"])
+              if manual_path.exists() else set())
+    auto = auto[~auto["symbol"].isin(manual) & auto["canonical_sector"].notna()]
+    return dict(zip(auto["symbol"], auto["canonical_sector"]))
 
 
 def populate_canonical_sectors() -> int:
@@ -303,6 +337,13 @@ def populate_canonical_sectors() -> int:
     rows["canonical_sector"] = rows.apply(
         lambda r: canonical_sector(r["industry"], r["sector"], r["symbol"]), axis=1
     )
+    # Auto-assigned stocks (scripts/auto_assign_sectors.py) carry an explicit rotation
+    # sector from the reviewed NSE-industry crosswalk; it beats the substring rules but
+    # never a manual override or a _SYMBOL_OVERRIDES entry.
+    auto_map = _auto_canonical_map()
+    if auto_map:
+        is_auto = rows["symbol"].isin(auto_map) & ~rows["symbol"].isin(_SYMBOL_OVERRIDES)
+        rows.loc[is_auto, "canonical_sector"] = rows.loc[is_auto, "symbol"].map(auto_map)
     repo = get_repository()
     with repo._cm.connect() as conn:
         conn.execute("ALTER TABLE sector_master ADD COLUMN IF NOT EXISTS canonical_sector VARCHAR")
