@@ -212,6 +212,15 @@ def upload_snapshot(quiet: bool = False, days: int | None = None) -> bool:
         if r.status_code not in (200, 201):
             print(f"[snapshot] Failed to create release: {r.status_code} {r.text[:200]}")
             return False
+    elif r.status_code != 200:
+        # e.g. 401 "Bad credentials" when GITHUB_TOKEN has expired. Without this
+        # guard the error surfaced nightly as an opaque KeyError: 'id'.
+        hint = (" — GITHUB_TOKEN is expired/revoked; create a new token with write "
+                "access to this repo and update the user environment variable"
+                if r.status_code == 401 else "")
+        print(f"[snapshot] GitHub release lookup failed: {r.status_code} "
+              f"{r.text[:200]}{hint}")
+        return False
 
     release    = r.json()
     release_id = release["id"]
