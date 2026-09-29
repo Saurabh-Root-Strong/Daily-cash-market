@@ -182,7 +182,7 @@ def get_fno_stock_oi_signals(
         FROM near_futures nf
         LEFT JOIN prev_futures pf ON nf.symbol = pf.symbol
         LEFT JOIN stock_options so ON nf.symbol = so.symbol
-        LEFT JOIN sector_master sm ON nf.symbol = sm.symbol
+        LEFT JOIN v_sector_master sm ON nf.symbol = sm.symbol
         WHERE nf.fut_oi >= ?
         ORDER BY nf.fut_oi DESC
     """, [
@@ -517,7 +517,7 @@ def get_sector_fno_aggregate(as_of_date: date) -> pd.DataFrame:
 
     # Attach sector via the analytics-layer aggregator's master (keeps SQL in data layer)
     sec = query_dataframe(
-        "SELECT symbol, sector FROM sector_master WHERE sector IS NOT NULL", []
+        "SELECT symbol, sector FROM v_sector_master WHERE sector IS NOT NULL", []
     )
     pos = pos.merge(sec, on="symbol", how="left")
     pos = pos[~pos["sector"].isin(["ETF", "Others"]) & pos["sector"].notna()]

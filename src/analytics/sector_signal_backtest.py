@@ -53,7 +53,7 @@ def _load_sector_daily(
                 0.0
             ) AS daily_price_chg_pct
         FROM daily_data d
-        JOIN sector_master sm ON d.symbol = sm.symbol
+        JOIN v_sector_master sm ON d.symbol = sm.symbol
         WHERE d.trade_date >= ?
           AND d.trade_date <= ?
           AND d.series IN ('EQ', 'SM', 'ST')

@@ -173,6 +173,10 @@ def segment_health(df: pd.DataFrame) -> list[str]:
 def main() -> None:
     df = build()
     load(df)
+    # v_sector_master takes its sub-sector from stock_classification; rebuild it so a
+    # fresh database switches from the raw vendor text to the official label.
+    from src.analytics.sector_taxonomy import ensure_canonical_view
+    ensure_canonical_view()
     for m in segment_health(df):
         print(f"[segments] {m}")
     print(df["status"].value_counts().to_string())

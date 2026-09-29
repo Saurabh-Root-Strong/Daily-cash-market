@@ -238,7 +238,7 @@ def get_stock_expiry_matrix(
         opts["expiry_date"] = pd.to_datetime(opts["expiry_date"]).dt.date
 
     # ── Sector master ─────────────────────────────────────────────────────────
-    sec = query_dataframe("SELECT symbol, company_name, sector, industry FROM sector_master", [])
+    sec = query_dataframe("SELECT symbol, company_name, sector, industry FROM v_sector_master", [])
     sec_map = sec.set_index("symbol").to_dict("index")
 
     # ── Build per-stock rows ──────────────────────────────────────────────────

@@ -354,20 +354,41 @@ def populate_canonical_sectors() -> int:
             FROM _canon_df
             WHERE sector_master.symbol = _canon_df.symbol
         """)
-        conn.execute(CANONICAL_VIEW_DDL)
+        _create_view(conn)
     return len(rows)
 
 
 # The canonical view exposes canonical_sector AS sector so rotation / memory
 # queries select it transparently while raw_sector preserves provenance.
-CANONICAL_VIEW_DDL = """
+#
+# `industry` (the sub-sector the dashboards group by) is NSE's official basic
+# industry from stock_classification when available. The raw vendor column mixed
+# three vocabularies -- "Pharmaceuticals & Drugs" vs "Pharmaceuticals", "Auto
+# Ancillary" vs "Auto Components" vs "Auto Components & Equipments" (290 strings)
+# -- so one sub-sector showed up as several. The raw text stays as raw_industry.
+_VIEW_BASE = """
 CREATE OR REPLACE VIEW v_sector_master AS
-SELECT symbol, company_name,
-       COALESCE(canonical_sector, sector) AS sector,
-       sector AS raw_sector,
-       industry, market_cap_category, category
-FROM sector_master
+SELECT s.symbol, s.company_name,
+       COALESCE(s.canonical_sector, s.sector) AS sector,
+       s.sector AS raw_sector,
+       {industry} AS industry,
+       s.industry AS raw_industry,
+       s.market_cap_category, s.category
+FROM sector_master s
+{join}
 """
+CANONICAL_VIEW_DDL = _VIEW_BASE.format(industry="s.industry", join="")
+CANONICAL_VIEW_DDL_OFFICIAL = _VIEW_BASE.format(
+    industry="COALESCE(NULLIF(c.basic_industry, ''), s.industry)",
+    join="LEFT JOIN stock_classification c ON c.symbol = s.symbol",
+)
+
+
+def _create_view(conn) -> None:
+    has_cls = conn.execute(
+        "SELECT COUNT(*) FROM information_schema.tables WHERE table_name = 'stock_classification'"
+    ).fetchone()[0] > 0
+    conn.execute(CANONICAL_VIEW_DDL_OFFICIAL if has_cls else CANONICAL_VIEW_DDL)
 
 
 def ensure_canonical_view() -> None:
@@ -376,7 +397,7 @@ def ensure_canonical_view() -> None:
     repo = get_repository()
     with repo._cm.connect() as conn:
         conn.execute("ALTER TABLE sector_master ADD COLUMN IF NOT EXISTS canonical_sector VARCHAR")
-        conn.execute(CANONICAL_VIEW_DDL)
+        _create_view(conn)
 
 
 def audit() -> None:

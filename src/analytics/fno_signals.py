@@ -273,7 +273,7 @@ def get_fno_composite_signals(
 
     # ── 4. Sector master ───────────────────────────────────────────────────────
     sec_df = query_dataframe(
-        "SELECT symbol, company_name, sector, industry FROM sector_master", [],
+        "SELECT symbol, company_name, sector, industry FROM v_sector_master", [],
     )
 
     # ── 5. Per-stock PCR and Max Pain ──────────────────────────────────────────

@@ -47,7 +47,7 @@ def get_stock_metrics(trade_date: date, min_turnover_lacs: Optional[float] = Non
                     ROWS BETWEEN {vol_window} PRECEDING AND 1 PRECEDING
                 ) AS vol_20d_avg
             FROM daily_data b
-            INNER JOIN sector_master s ON b.symbol = s.symbol
+            INNER JOIN v_sector_master s ON b.symbol = s.symbol
             WHERE b.turnover_lacs >= ?
         )
         SELECT
