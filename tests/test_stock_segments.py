@@ -87,3 +87,13 @@ def test_segment_health_flags_drift_and_gaps():
 
 def test_scope_recorded_for_every_row():
     assert (_seg()["scope_basic_industry"] != "").all()
+
+
+def test_dashboard_verdicts_follow_the_validation_record():
+    import sys
+    sys.path.insert(0, str(ROOT))
+    from src.analytics.segment_trends import get_segment_verdicts, SEGMENT_GROUPS
+    v = get_segment_verdicts()
+    assert set(v) == set(SEGMENT_GROUPS.values())
+    assert v["Pharma & Healthcare"] == "structural"      # survives size+momentum control
+    assert v["Auto Components"] == "unconfirmed"         # controlled test p=0.14 wins over raw

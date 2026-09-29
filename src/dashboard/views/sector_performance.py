@@ -408,6 +408,72 @@ def _compute_outlook(df: pd.DataFrame, n_1w_days: int = 5) -> pd.DataFrame:
     return out.drop(columns=drop_cols).sort_values("Score", ascending=False).reset_index(drop=True)
 
 
+# ── Business segments (5th classification level) ──────────────────────────────
+@st.cache_data(ttl=3600, max_entries=20, show_spinner=False)
+def _segment_trends(selected_date: date) -> pd.DataFrame:
+    from src.analytics.segment_trends import get_segment_trends
+    return get_segment_trends(selected_date)
+
+
+_VERDICT_BADGE = {
+    "structural": (":green-badge[Groups returns]",
+                   "Stocks in the same segment move together beyond chance, even after "
+                   "controlling for size and momentum (p≈0.005)."),
+    "unconfirmed": (":orange-badge[Unconfirmed]",
+                    "Passed the raw test but not the size + momentum control — treat the "
+                    "grouping as a description."),
+    "descriptive": (":gray-badge[Description only]",
+                    "Accurate business labels, but same-segment stocks do not move together "
+                    "beyond chance — stock-specific factors dominate."),
+}
+
+
+def _segment_section(selected_date: date) -> None:
+    from src.analytics.segment_trends import get_segment_verdicts
+
+    st.markdown("### Business segments")
+    st.caption(
+        "A finer split inside four broad NSE sub-sectors (e.g. Pharmaceuticals → API, "
+        "CDMO, branded India, US generics). Liquid stocks only (≥ ₹2 Cr/day); stocks with "
+        "a split, bonus, demerger or rights issue in the last year are left out. "
+        "**A map, not a forecast:** a segment's past outperformance has not predicted "
+        "the next 1–3 months (tested up to 12-month lookbacks)."
+    )
+    trends = _segment_trends(selected_date)
+    if trends.empty:
+        st.info("No segment data for this date.")
+        return
+    verdicts = get_segment_verdicts()
+    # Strongest evidence first, so the default view is the one that groups returns.
+    rank = {"structural": 0, "unconfirmed": 1, "descriptive": 2}
+    groups = sorted(dict.fromkeys(trends["group"]), key=lambda g: rank.get(verdicts.get(g, ""), 3))
+    group = st.segmented_control(
+        "Sub-sector", groups, default=groups[0], key="segment_group",
+    ) or groups[0]
+    badge, why = _VERDICT_BADGE.get(verdicts.get(group, ""), ("", ""))
+    if badge:
+        st.markdown(f"{badge} {why}")
+    view = trends[trends["group"] == group].drop(columns=["group"])
+    st.dataframe(
+        view,
+        hide_index=True,
+        column_config={
+            "segment": st.column_config.TextColumn("Segment", width="large"),
+            "stocks": st.column_config.NumberColumn(
+                "Stocks", help="Liquid members; medians from 2–3 stocks move a lot on one name"),
+            "r1m": st.column_config.NumberColumn("1M", format="%.1f%%"),
+            "r3m": st.column_config.NumberColumn("3M", format="%.1f%%"),
+            "r6m": st.column_config.NumberColumn("6M", format="%.1f%%"),
+            "above_50": st.column_config.ProgressColumn(
+                "Above 50-day avg", format="%.0f%%", min_value=0, max_value=100),
+            "above_200": st.column_config.ProgressColumn(
+                "Above 200-day avg", format="%.0f%%", min_value=0, max_value=100),
+            "off_high": st.column_config.NumberColumn(
+                "From 52-week high", format="%.1f%%", help="Median distance below the 52-week high"),
+        },
+    )
+
+
 # ── Main render ───────────────────────────────────────────────────────────────
 def render(selected_date: date, min_turnover: float) -> None:
     st.subheader("Sector Performance — Multi-Period Summary")
@@ -766,6 +832,8 @@ def render(selected_date: date, min_turnover: float) -> None:
         Banking doing ₹7,000 Cr is normal. Defence doing ₹800 Cr when it averages ₹300 Cr AND 70% of Defence stocks are above their own norm — that is the real signal.
         """)
 
+    st.markdown("---")
+    _segment_section(selected_date)
     st.markdown("---")
 
     # ── Signal Accuracy & Backtest History ───────────────────────────────────
