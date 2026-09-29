@@ -37,7 +37,16 @@ OVERRIDES = PROJECT_ROOT / "config" / "stock_classification_overrides.csv"
 CROSSWALK = PROJECT_ROOT / "config" / "industry_crosswalk.csv"
 SEGMENTS  = PROJECT_ROOT / "config" / "stock_segments.csv"   # 5th level (hand-assigned)
 SEG_COLS  = ["symbol", "segment", "secondary_segment", "market_focus",
-             "mnc_subsidiary", "confidence", "evidence", "source", "as_of"]
+             "mnc_subsidiary", "confidence", "evidence", "scope_basic_industry", "source", "as_of"]
+# market_focus is a different dimension per segmented sub-sector; focus_type names it
+# so a cross-sector query never mixes geography with end market or ownership.
+FOCUS_TYPE = {
+    "Pharmaceuticals": "geography", "Biotechnology": "geography",
+    "Healthcare Research, Analytics & Technology": "geography",
+    "Auto Components & Equipments": "end market",
+    "Civil Construction": "ownership / business model",
+    "Specialty Chemicals": "sales channel",
+}
 COLS = ["symbol", "company_name", "macro_sector", "sector", "industry",
         "basic_industry", "crosswalk_sector", "source", "status", "notes", "fetched_at"]
 
@@ -110,11 +119,13 @@ def load(df: pd.DataFrame) -> None:
         # 5th level: business segment inside a basic industry (Pharma so far).
         seg = (pd.read_csv(SEGMENTS, comment="#", dtype=str).fillna("")
                .reindex(columns=SEG_COLS, fill_value="")) if SEGMENTS.exists()             else pd.DataFrame(columns=SEG_COLS)
+        seg["focus_type"] = seg["scope_basic_industry"].map(FOCUS_TYPE).fillna("")
         conn.execute("""
             CREATE OR REPLACE TABLE stock_segments (
                 symbol VARCHAR PRIMARY KEY, segment VARCHAR, secondary_segment VARCHAR,
                 market_focus VARCHAR, mnc_subsidiary VARCHAR, confidence VARCHAR,
-                evidence VARCHAR, source VARCHAR, as_of VARCHAR)
+                evidence VARCHAR, scope_basic_industry VARCHAR, source VARCHAR,
+                as_of VARCHAR, focus_type VARCHAR)
         """)
         conn.register("_seg_df", seg)
         conn.execute("INSERT INTO stock_segments SELECT * FROM _seg_df")
@@ -126,7 +137,7 @@ def load(df: pd.DataFrame) -> None:
                    m.sector AS canonical_sector,
                    COALESCE(m.sector, NULLIF(c.crosswalk_sector, '')) AS suggested_sector,
                    (m.symbol IS NOT NULL AND m.sector NOT IN ('ETF', 'Others')) AS in_rotation,
-                   g.segment, g.secondary_segment, g.market_focus,
+                   g.segment, g.secondary_segment, g.market_focus, g.focus_type,
                    (g.mnc_subsidiary = 'True') AS mnc_subsidiary,
                    g.confidence AS segment_confidence,
                    c.source, c.status, c.notes, c.fetched_at
@@ -136,9 +147,34 @@ def load(df: pd.DataFrame) -> None:
         """)
 
 
+def segment_health(df: pd.DataFrame) -> list[str]:
+    """Warnings for the hand-assigned 5th level, which nothing else refreshes:
+    drift  — NSE moved a segmented stock to a different basic industry
+    gaps   — a stock in a segmented basic industry has no segment (new listing)"""
+    if not SEGMENTS.exists():
+        return []
+    seg = pd.read_csv(SEGMENTS, comment="#", dtype=str).fillna("")
+    now = df.set_index("symbol")["basic_industry"]
+    msgs = []
+    drift = seg[seg["symbol"].isin(now.index)]
+    drift = drift[drift["scope_basic_industry"] != drift["symbol"].map(now)]
+    for r in drift.itertuples():
+        msgs.append(f"DRIFT {r.symbol}: segmented under '{r.scope_basic_industry}', "
+                    f"now '{now[r.symbol]}' — review its segment")
+    scoped = set(seg["scope_basic_industry"])
+    gaps = df[df["basic_industry"].isin(scoped) & ~df["symbol"].isin(seg["symbol"])
+              & (df["status"] != "etf")]
+    for bi, g in gaps.groupby("basic_industry"):
+        msgs.append(f"GAP {bi}: {len(g)} stock(s) without a segment: "
+                    f"{', '.join(sorted(g['symbol'])[:12])}")
+    return msgs
+
+
 def main() -> None:
     df = build()
     load(df)
+    for m in segment_health(df):
+        print(f"[segments] {m}")
     print(df["status"].value_counts().to_string())
     print(f"Loaded {len(df)} rows into stock_classification "
           f"({df['macro_sector'].nunique()} macro sectors, {df['sector'].nunique()} sectors, "

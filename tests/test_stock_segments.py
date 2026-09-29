@@ -64,5 +64,26 @@ def test_confidence_and_mnc_values():
 
 def test_every_segmented_industry_has_a_validation_record():
     val = pd.read_csv(ROOT / "config" / "segment_validation.csv", comment="#", dtype=str)
-    assert set(val["verdict"]) <= {"structural", "weak", "descriptive"}
+    assert set(val["verdict"]) <= {"structural", "weak", "unconfirmed", "descriptive"}
     assert len(val) >= 4
+
+
+def test_segment_health_flags_drift_and_gaps():
+    import sys
+    sys.path.insert(0, str(ROOT / "scripts"))
+    import load_stock_classification as L
+    df = pd.read_csv(ROOT / "config" / "stock_classification.csv", dtype=str).fillna("")
+    assert L.segment_health(df) == []                      # clean today
+    seg = _seg()
+    sym, bi = seg.iloc[0]["symbol"], seg.iloc[0]["scope_basic_industry"]
+    other = "Biotechnology" if bi != "Biotechnology" else "Pharmaceuticals"
+    df.loc[df["symbol"] == sym, "basic_industry"] = other   # NSE reclassifies it
+    df = pd.concat([df, pd.DataFrame([{"symbol": "NEWLISTING", "basic_industry": bi,
+                                       "status": "ok"}])], ignore_index=True)
+    msgs = L.segment_health(df)
+    assert any(m.startswith(f"DRIFT {sym}") for m in msgs)
+    assert any(m.startswith("GAP") and "NEWLISTING" in m for m in msgs)
+
+
+def test_scope_recorded_for_every_row():
+    assert (_seg()["scope_basic_industry"] != "").all()
