@@ -229,8 +229,33 @@ def cmd_backfill_fno(args) -> int:
     print(f"Backfilling F&O Bhavcopy (FNO) data for last {days} trading days...")
     print("Source: NSE Archives — UDiFF F&O Bhavcopy (served from 2024-01-01, no expiry). "
           "Press Ctrl+C to stop.")
+    import pandas as pd
+    from src.data.repository import query_dataframe
+
+    def _fno_dates() -> set:
+        d = query_dataframe("SELECT DISTINCT trade_date FROM fno_bhavcopy", [])
+        return set(pd.to_datetime(d["trade_date"]).dt.date) if not d.empty else set()
+
+    before = _fno_dates()
     run_fno_backfill(days=days)
     print("FNO backfill complete.")
+
+    # A day whose F&O file arrived late (rejected by the sanity gate, then filled here)
+    # had its index predictions and sector-memory snapshot built WITHOUT F&O inputs
+    # (PCR, OI). Rebuild those for recently filled days only -- a deep historical
+    # backfill must not rewrite a year of logged predictions.
+    if args.rederive_recent:
+        filled = sorted(_fno_dates() - before)
+        recent = sorted(_fno_dates())[-args.rederive_recent:]
+        for d in [x for x in filled if x in recent]:
+            try:
+                from src.analytics.index_prediction import get_index_predictions
+                n = len(get_index_predictions(d, persist=True))
+                from src.analytics.sector_memory import record_daily_snapshot
+                r = record_daily_snapshot(d, replace=True)
+                print(f"Re-derived {d}: {n} index prediction(s), {r} sector-memory rows")
+            except Exception as exc:
+                print(f"Re-derive failed for {d}: {exc}")
     return 0
 
 
@@ -397,6 +422,9 @@ def main() -> int:
 
     fnop = sub.add_parser("backfill-fno", help="Backfill F&O Bhavcopy (futures+options; UDiFF, up to ~1yr)")
     fnop.add_argument("days", nargs="?", default=None, help="Number of trading days (default 50; up to ~250 = 1yr)")
+    fnop.add_argument("--rederive-recent", type=int, default=0, metavar="N",
+                      help="after filling, rebuild index predictions + sector-memory snapshot "
+                           "for newly filled days among the last N F&O sessions")
 
     gp = sub.add_parser("fill-gaps", help="Fill FAO+FII gaps for recent N days (targeted, fast)")
     gp.add_argument("days", nargs="?", default=None, help="Number of trading days to scan (default 7)")
