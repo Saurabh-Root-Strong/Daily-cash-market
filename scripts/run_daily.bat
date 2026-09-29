@@ -21,6 +21,12 @@ echo [%date% %time%] Starting daily fetch... >> logs\scheduler.log
 python -m src.cli daily >> logs\scheduler.log 2>&1
 echo [%date% %time%] Fetch complete. >> logs\scheduler.log
 
+REM ── Retry F&O days the sanity gate rejected (NSE sometimes serves a partial file
+REM    at first; 2026-09-28 had futures OI at 0.25x and was never re-fetched).
+REM    Fetches only missing days in the last 5 sessions, so it is a no-op normally.
+echo [%date% %time%] Retrying missing F&O days... >> logs\scheduler.log
+python -m src.cli backfill-fno 5 >> logs\scheduler.log 2>&1
+
 REM ── Apply sector overrides so new symbols get classified immediately ───────
 echo [%date% %time%] Applying sector overrides... >> logs\scheduler.log
 python -m src.cli reload-overrides >> logs\scheduler.log 2>&1

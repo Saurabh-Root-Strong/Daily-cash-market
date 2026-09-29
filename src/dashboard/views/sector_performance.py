@@ -418,6 +418,13 @@ def render(selected_date: date, min_turnover: float) -> None:
 
     sector_df    = cached_sector_master_performance(selected_date, min_turnover)
     subsector_df = cached_subsector_master_performance(selected_date, min_turnover)
+    # ETFs are funds, not a sector, and "Others" is unclassified; the rotation engine
+    # excludes both. Filtered here (display only) so the shared core stays unchanged.
+    _not_sector = ["ETF", "Others"]
+    if not sector_df.empty:
+        sector_df = sector_df[~sector_df["sector"].isin(_not_sector)]
+    if not subsector_df.empty:
+        subsector_df = subsector_df[~subsector_df["sector"].isin(_not_sector)]
 
     if sector_df.empty:
         st.warning("No data available. Run a backfill first.")

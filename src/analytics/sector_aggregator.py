@@ -56,7 +56,10 @@ def aggregate_by_sector(
     if df.empty:
         return pd.DataFrame()
 
+    # ETFs are funds, not a sector (liquid ETFs' turnover would top every chart);
+    # "Others" is an unclassified bucket. Same exclusion as the rotation engine.
     df = df.dropna(subset=["sector"])
+    df = df[~df["sector"].isin(["ETF", "Others"])]
     acc_threshold, dist_threshold = get_thresholds()
 
     records = []
