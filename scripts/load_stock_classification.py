@@ -35,6 +35,9 @@ sys.path.insert(0, str(PROJECT_ROOT))
 FETCHED   = PROJECT_ROOT / "config" / "stock_classification.csv"
 OVERRIDES = PROJECT_ROOT / "config" / "stock_classification_overrides.csv"
 CROSSWALK = PROJECT_ROOT / "config" / "industry_crosswalk.csv"
+SEGMENTS  = PROJECT_ROOT / "config" / "stock_segments.csv"   # 5th level (hand-assigned)
+SEG_COLS  = ["symbol", "segment", "secondary_segment", "market_focus",
+             "mnc_subsidiary", "confidence", "evidence", "source", "as_of"]
 COLS = ["symbol", "company_name", "macro_sector", "sector", "industry",
         "basic_industry", "crosswalk_sector", "source", "status", "notes", "fetched_at"]
 
@@ -104,6 +107,17 @@ def load(df: pd.DataFrame) -> None:
         """)
         conn.register("_sc_df", df[COLS])
         conn.execute("INSERT INTO stock_classification SELECT * FROM _sc_df")
+        # 5th level: business segment inside a basic industry (Pharma so far).
+        seg = (pd.read_csv(SEGMENTS, comment="#", dtype=str).fillna("")
+               .reindex(columns=SEG_COLS, fill_value="")) if SEGMENTS.exists()             else pd.DataFrame(columns=SEG_COLS)
+        conn.execute("""
+            CREATE OR REPLACE TABLE stock_segments (
+                symbol VARCHAR PRIMARY KEY, segment VARCHAR, secondary_segment VARCHAR,
+                market_focus VARCHAR, mnc_subsidiary VARCHAR, confidence VARCHAR,
+                evidence VARCHAR, source VARCHAR, as_of VARCHAR)
+        """)
+        conn.register("_seg_df", seg)
+        conn.execute("INSERT INTO stock_segments SELECT * FROM _seg_df")
         conn.execute("""
             CREATE OR REPLACE VIEW v_stock_classification AS
             SELECT c.symbol,
@@ -112,9 +126,13 @@ def load(df: pd.DataFrame) -> None:
                    m.sector AS canonical_sector,
                    COALESCE(m.sector, NULLIF(c.crosswalk_sector, '')) AS suggested_sector,
                    (m.symbol IS NOT NULL AND m.sector NOT IN ('ETF', 'Others')) AS in_rotation,
+                   g.segment, g.secondary_segment, g.market_focus,
+                   (g.mnc_subsidiary = 'True') AS mnc_subsidiary,
+                   g.confidence AS segment_confidence,
                    c.source, c.status, c.notes, c.fetched_at
             FROM stock_classification c
             LEFT JOIN v_sector_master m USING (symbol)
+            LEFT JOIN stock_segments g USING (symbol)
         """)
 
 

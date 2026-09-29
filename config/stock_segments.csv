@@ -1,0 +1,139 @@
+# 5th classification level: business SEGMENT inside an NSE basic industry (Pharma/Biotech/Healthcare Research so far).
+# One primary segment per company by revenue mix; secondary where material. Hand-assigned from company profiles.
+# Re-review annually and after demergers/acquisitions (business mix drifts).
+symbol,segment,secondary_segment,market_focus,mnc_subsidiary,confidence,evidence,source,as_of
+AAREYDRUGS,API / Bulk Drugs & Intermediates,,Global B2B,False,medium,APIs + chemical trading,Screener company profile (About/Key Points),2026-09-29
+AARTIDRUGS,API / Bulk Drugs & Intermediates,,Global B2B,False,high,"50+ APIs, global leader fluoroquinolones",Screener company profile (About/Key Points),2026-09-29
+AARTIPHARM,API / Bulk Drugs & Intermediates,CDMO / CRDMO,Global B2B,False,high,"generic APIs and intermediates, xanthines, CDMO",Screener company profile (About/Key Points),2026-09-29
+ACUTAAS,API / Bulk Drugs & Intermediates,CDMO / CRDMO,Global B2B,False,high,advanced intermediates for NCE/generic APIs,Screener company profile (About/Key Points),2026-09-29
+AHCL,API / Bulk Drugs & Intermediates,CDMO / CRDMO,Global B2B,False,high,pharma intermediates + APIs,Screener company profile (About/Key Points),2026-09-29
+ALIVUS,API / Bulk Drugs & Intermediates,CDMO / CRDMO,Global B2B,False,high,"ex-Glenmark Life Sciences, Nirma-owned",Screener company profile (About/Key Points),2026-09-29
+ANUHPHR,API / Bulk Drugs & Intermediates,,Global B2B,False,high,bulk drugs,Screener company profile (About/Key Points),2026-09-29
+BAJAJHCARE,API / Bulk Drugs & Intermediates,,Global B2B,False,medium,"amino acids, nutritional and APIs",Screener company profile (About/Key Points),2026-09-29
+BLUEJET,API / Bulk Drugs & Intermediates,"Pharma Inputs (Excipients, Capsules, Enzymes, Packaging)",Global B2B,False,high,contrast-media intermediates 68% + saccharin,Screener company profile (About/Key Points),2026-09-29
+CONCORDBIO,API / Bulk Drugs & Intermediates,,Global B2B,False,high,"fermentation APIs (immunosuppressants, oncology)",Screener company profile (About/Key Points),2026-09-29
+DIVISLAB,API / Bulk Drugs & Intermediates,CDMO / CRDMO,Global B2B,False,high,generic APIs + custom synthesis for big pharma + nutraceuticals,Screener company profile (About/Key Points),2026-09-29
+FERMENTA,API / Bulk Drugs & Intermediates,"Pharma Inputs (Excipients, Capsules, Enzymes, Packaging)",Global B2B,False,high,vitamin D3 + APIs + enzymes,Screener company profile (About/Key Points),2026-09-29
+GUJTHEM,API / Bulk Drugs & Intermediates,,Global B2B,False,high,fermentation APIs (rifampicin),Screener company profile (About/Key Points),2026-09-29
+HALEOSLABS,API / Bulk Drugs & Intermediates,,Global B2B,False,high,APIs and intermediates (SMS demerger),Screener company profile (About/Key Points),2026-09-29
+HIKAL,API / Bulk Drugs & Intermediates,CDMO / CRDMO,Global B2B,False,high,pharma APIs/intermediates + crop-protection CDMO,Screener company profile (About/Key Points),2026-09-29
+IOLCP,API / Bulk Drugs & Intermediates,,Global B2B,False,high,ibuprofen 35% world share + chemicals,Screener company profile (About/Key Points),2026-09-29
+KOPRAN,API / Bulk Drugs & Intermediates,Formulations Export – Emerging Markets,Global B2B,False,medium,API arm KRLL + formulation exports,Screener company profile (About/Key Points),2026-09-29
+KREBSBIO,API / Bulk Drugs & Intermediates,,Global B2B,False,high,APIs,Screener company profile (About/Key Points),2026-09-29
+LAURUSLABS,API / Bulk Drugs & Intermediates,CDMO / CRDMO,Global B2B,False,high,ARV/oncology APIs + integrated CDMO,Screener company profile (About/Key Points),2026-09-29
+MANGALAM,API / Bulk Drugs & Intermediates,,Global B2B,False,high,anti-malarial APIs,Screener company profile (About/Key Points),2026-09-29
+MOREPENLAB,API / Bulk Drugs & Intermediates,Consumer Health / OTC & Nutraceuticals,Global B2B,False,high,market-leading APIs + home health devices,Screener company profile (About/Key Points),2026-09-29
+NECLIFE,API / Bulk Drugs & Intermediates,,Global B2B,False,high,cephalosporin APIs + CMO,Screener company profile (About/Key Points),2026-09-29
+NEULANDLAB,API / Bulk Drugs & Intermediates,CDMO / CRDMO,Global B2B,False,high,"prime + specialty APIs, custom manufacturing",Screener company profile (About/Key Points),2026-09-29
+ORCHPHARMA,API / Bulk Drugs & Intermediates,,Global B2B,False,high,cephalosporin APIs,Screener company profile (About/Key Points),2026-09-29
+PAR,API / Bulk Drugs & Intermediates,,Global B2B,False,high,antacid APIs,Screener company profile (About/Key Points),2026-09-29
+SGRL,API / Bulk Drugs & Intermediates,CDMO / CRDMO,Global B2B,False,medium,pharma intermediates + custom synthesis,Screener company profile (About/Key Points),2026-09-29
+SHILPAMED,API / Bulk Drugs & Intermediates,Injectables & Critical Care,Global B2B,False,high,"APIs 50% (oncology), formulations/CDMO",Screener company profile (About/Key Points),2026-09-29
+SMSPHARMA,API / Bulk Drugs & Intermediates,,Global B2B,False,high,55+ APIs,Screener company profile (About/Key Points),2026-09-29
+SOLARA,API / Bulk Drugs & Intermediates,,Global B2B,False,high,pure-play API,Screener company profile (About/Key Points),2026-09-29
+SUPRIYA,API / Bulk Drugs & Intermediates,,Global B2B,False,high,40+ niche APIs,Screener company profile (About/Key Points),2026-09-29
+SYMBIOTEC,API / Bulk Drugs & Intermediates,,Global B2B,False,medium,steroid and hormone APIs (web-verified at IPO),Screener profile + FY26 results (web-verified),2026-09-29
+VALIANTLAB,API / Bulk Drugs & Intermediates,,Global B2B,False,high,paracetamol API,Screener company profile (About/Key Points),2026-09-29
+VINEETLAB,API / Bulk Drugs & Intermediates,,Global B2B,False,medium,API intermediates and bulk drugs,Screener company profile (About/Key Points),2026-09-29
+WANBURY,API / Bulk Drugs & Intermediates,Branded Generics – India & EM,Global B2B,False,high,API exports + India formulations,Screener company profile (About/Key Points),2026-09-29
+HESTERBIO,Animal Health,,Global,False,high,poultry and animal vaccines,Screener company profile (About/Key Points),2026-09-29
+LASA,Animal Health,API / Bulk Drugs & Intermediates,Global,False,high,veterinary APIs,Screener company profile (About/Key Points),2026-09-29
+NGLFINE,Animal Health,API / Bulk Drugs & Intermediates,Global,False,high,veterinary APIs,Screener company profile (About/Key Points),2026-09-29
+VIYASH,Animal Health,API / Bulk Drugs & Intermediates,Global,False,high,ex-Sequent animal health formulations + APIs,Screener company profile (About/Key Points),2026-09-29
+BIOCON,"Biologics, Biosimilars & Vaccines",CDMO / CRDMO,Global,False,high,"biosimilars 60%, research services 22%",Screener company profile (About/Key Points),2026-09-29
+PANACEABIO,"Biologics, Biosimilars & Vaccines",,Global,False,high,"vaccines (polio, pentavalent)",Screener company profile (About/Key Points),2026-09-29
+ABBOTINDIA,Branded Generics – India & EM,,India,True,high,"Abbott Labs subsidiary, domestic brands",Screener company profile (About/Key Points),2026-09-29
+AJANTPHARM,Branded Generics – India & EM,Generics & Specialty – US/Regulated,India & Emerging,False,high,"India 30%, US 29%, Asia/Africa branded 38%",Screener company profile (About/Key Points),2026-09-29
+ALBERTDAVD,Branded Generics – India & EM,,India,False,medium,"formulations, infusions, herbal",Screener company profile (About/Key Points),2026-09-29
+ALKEM,Branded Generics – India & EM,Generics & Specialty – US/Regulated,India,False,high,"#5 India, #1 anti-infectives; US generics",Screener company profile (About/Key Points),2026-09-29
+AMBALALSA,Branded Generics – India & EM,,India,False,low,small pharma + electronics,Screener company profile (About/Key Points),2026-09-29
+ASTRAZEN,Branded Generics – India & EM,,India,True,high,AstraZeneca subsidiary,Screener company profile (About/Key Points),2026-09-29
+BALPHARMA,Branded Generics – India & EM,API / Bulk Drugs & Intermediates,India,False,low,bulk + prescription + generics,Screener company profile (About/Key Points),2026-09-29
+BETA,Branded Generics – India & EM,,India,False,medium,"oncology formulations, domestic + export",Screener company profile (About/Key Points),2026-09-29
+CORONA,Branded Generics – India & EM,,India,False,high,#14 in IPM,Screener company profile (About/Key Points),2026-09-29
+ERIS,Branded Generics – India & EM,,India,False,high,domestic branded formulations,Screener company profile (About/Key Points),2026-09-29
+FDC,Branded Generics – India & EM,Consumer Health / OTC & Nutraceuticals,India,False,high,"formulations 92%, ORS leader",Screener company profile (About/Key Points),2026-09-29
+GLAXO,Branded Generics – India & EM,"Biologics, Biosimilars & Vaccines",India,True,high,GSK India: medicines + vaccines,Screener company profile (About/Key Points),2026-09-29
+INDOCO,Branded Generics – India & EM,Generics & Specialty – US/Regulated,India,False,high,domestic formulations 48% + exports,Screener company profile (About/Key Points),2026-09-29
+INDSWFTLAB,Branded Generics – India & EM,Formulation Contract Manufacturing – India,India,False,medium,sold API/CRAMS 2024; now FDF domestic + export,Screener company profile (About/Key Points),2026-09-29
+IPCALAB,Branded Generics – India & EM,API / Bulk Drugs & Intermediates,India,False,high,Indian branded core + API exports + Unichem,Screener company profile (About/Key Points),2026-09-29
+JAGSNPHARM,Branded Generics – India & EM,,India,False,high,women-health focused domestic brands,Screener company profile (About/Key Points),2026-09-29
+JBCHEPHARM,Branded Generics – India & EM,,India,False,high,domestic branded; Torrent-controlled from 2026,Screener company profile (About/Key Points),2026-09-29
+JENBURPH,Branded Generics – India & EM,,India,False,high,85 domestic brands,Screener company profile (About/Key Points),2026-09-29
+MAKERSL,Branded Generics – India & EM,Formulation Contract Manufacturing – India,India,False,medium,domestic generics + job work for Ipca,Screener company profile (About/Key Points),2026-09-29
+MANKIND,Branded Generics – India & EM,Consumer Health / OTC & Nutraceuticals,India,False,high,#1 prescriptions India + consumer brands,Screener company profile (About/Key Points),2026-09-29
+MEDICAPQ,Branded Generics – India & EM,,India,False,low,pharma subsidiary + real estate parent,Screener company profile (About/Key Points),2026-09-29
+NOVARTIND,Branded Generics – India & EM,,India,True,high,"Novartis subsidiary, imports and markets",Screener company profile (About/Key Points),2026-09-29
+ORTINGLOBE,Branded Generics – India & EM,,India,False,low,small formulations + real estate,Screener company profile (About/Key Points),2026-09-29
+PFIZER,Branded Generics – India & EM,,India,True,high,Pfizer Inc subsidiary,Screener company profile (About/Key Points),2026-09-29
+RPGLIFE,Branded Generics – India & EM,API / Bulk Drugs & Intermediates,India,False,high,domestic branded + global generics + API,Screener company profile (About/Key Points),2026-09-29
+SANOFI,Branded Generics – India & EM,,India,True,high,"Sanofi subsidiary, prescription business",Screener company profile (About/Key Points),2026-09-29
+THEMISMED,Branded Generics – India & EM,API / Bulk Drugs & Intermediates,India,False,low,formulations + APIs,Screener company profile (About/Key Points),2026-09-29
+TORNTPHARM,Branded Generics – India & EM,Generics & Specialty – US/Regulated,India,False,high,"branded generics 74% (India, Brazil)",Screener company profile (About/Key Points),2026-09-29
+ANTHEM,CDMO / CRDMO,,Global B2B,False,high,CRDMO: NCE + NBE,Screener company profile (About/Key Points),2026-09-29
+COHANCE,CDMO / CRDMO,API / Bulk Drugs & Intermediates,Global B2B,False,high,ex-Suven Pharma; top-20 global CDMO,Screener company profile (About/Key Points),2026-09-29
+DCAL,CDMO / CRDMO,,Global B2B,False,high,CRAMS via Carbogen Amcis,Screener company profile (About/Key Points),2026-09-29
+ONESOURCE,CDMO / CRDMO,"Biologics, Biosimilars & Vaccines",Global B2B,False,high,biologics and injectables CDMO (Strides group),Screener company profile (About/Key Points),2026-09-29
+PPLPHARMA,CDMO / CRDMO,Injectables & Critical Care,Global B2B,False,high,CDMO + complex hospital generics + OTC,Screener company profile (About/Key Points),2026-09-29
+SAILIFE,CDMO / CRDMO,,Global B2B,False,high,integrated CRDMO,Screener company profile (About/Key Points),2026-09-29
+SYNGENE,CDMO / CRDMO,"CRO, Testing & Life-sciences Services",Global B2B,False,high,CRO + integrated CRAMS (Biocon subsidiary),Screener company profile (About/Key Points),2026-09-29
+INDGN,"CRO, Testing & Life-sciences Services",,Global B2B,False,high,life-science commercial/medical/regulatory services,Screener company profile (About/Key Points),2026-09-29
+TAKE,"CRO, Testing & Life-sciences Services",,Global B2B,False,medium,clinical/BA-BE services,Screener company profile (About/Key Points),2026-09-29
+VIMTALABS,"CRO, Testing & Life-sciences Services",,Global B2B,False,high,contract research and testing,Screener company profile (About/Key Points),2026-09-29
+VIVOBIOT,"CRO, Testing & Life-sciences Services",,Global B2B,False,high,preclinical CRO,Screener company profile (About/Key Points),2026-09-29
+AMRUTANJAN,Consumer Health / OTC & Nutraceuticals,,India,False,high,"OTC pain balm, hygiene, beverages",Screener company profile (About/Key Points),2026-09-29
+PGHL,Consumer Health / OTC & Nutraceuticals,,India,True,high,"VMS brands Evion, Neurobion",Screener company profile (About/Key Points),2026-09-29
+SANOFICONR,Consumer Health / OTC & Nutraceuticals,,India,True,high,Sanofi consumer healthcare demerger,Screener company profile (About/Key Points),2026-09-29
+SPARC,Drug Discovery (R&D stage),,Global,False,high,"innovative R&D, Sun demerger",Screener company profile (About/Key Points),2026-09-29
+SUVEN,Drug Discovery (R&D stage),,Global,False,high,clinical-stage CNS NCEs,Screener company profile (About/Key Points),2026-09-29
+AKUMS,Formulation Contract Manufacturing – India,,India B2B,False,high,largest India formulation CDMO,Screener company profile (About/Key Points),2026-09-29
+ALPA,Formulation Contract Manufacturing – India,Branded Generics – India & EM,India B2B,False,low,own brand + third-party formulations,Screener company profile (About/Key Points),2026-09-29
+BIOFILCHEM,Formulation Contract Manufacturing – India,,India B2B,False,low,job work + trading,Screener company profile (About/Key Points),2026-09-29
+BROOKS,Formulation Contract Manufacturing – India,Injectables & Critical Care,India B2B,False,medium,contract critical-care formulations,Screener company profile (About/Key Points),2026-09-29
+INNOVACAP,Formulation Contract Manufacturing – India,Branded Generics – India & EM,India B2B,False,medium,CDMO-led integrated formulations,Screener company profile (About/Key Points),2026-09-29
+SHUKRAPHAR,Formulation Contract Manufacturing – India,,India B2B,False,medium,WHO-GMP formulations for pharma companies,Screener company profile (About/Key Points),2026-09-29
+WINDLAS,Formulation Contract Manufacturing – India,,India B2B,False,high,top-5 India formulation CDMO,Screener company profile (About/Key Points),2026-09-29
+BALAXI,Formulations Export – Emerging Markets,,Emerging (ROW),False,medium,"branded/generic medicines, Africa/LatAm",Screener company profile (About/Key Points),2026-09-29
+BLISSGVS,Formulations Export – Emerging Markets,,Emerging (ROW),False,high,suppositories/formulations export (Africa),Screener company profile (About/Key Points),2026-09-29
+CAPLIPOINT,Formulations Export – Emerging Markets,Injectables & Critical Care,Emerging (ROW),False,high,LatAm/Africa + US injectables,Screener company profile (About/Key Points),2026-09-29
+FREDUN,Formulations Export – Emerging Markets,,Emerging (ROW),False,medium,"export formulations, nutraceuticals, vet",Screener company profile (About/Key Points),2026-09-29
+KPL,Formulations Export – Emerging Markets,,Emerging (ROW),False,medium,"3,000+ formulations, ANVISA/EU GMP",Screener company profile (About/Key Points),2026-09-29
+LINCOLN,Formulations Export – Emerging Markets,Branded Generics – India & EM,Emerging (ROW),False,medium,"1,700 registered products",Screener company profile (About/Key Points),2026-09-29
+MEDICAMEQ,Formulations Export – Emerging Markets,,Emerging (ROW),False,low,"oncology and generic formulations, institutional",Screener company profile (About/Key Points),2026-09-29
+MEDICO,Formulations Export – Emerging Markets,,Emerging (ROW),False,low,"formulations, export-oriented",Screener company profile (About/Key Points),2026-09-29
+PARNAXLAB,Formulations Export – Emerging Markets,,Emerging (ROW),False,low,formulation manufacture and export,Screener company profile (About/Key Points),2026-09-29
+SAIPARENT,Formulations Export – Emerging Markets,Injectables & Critical Care,Emerging (ROW),False,medium,"diversified formulations, domestic + intl",Screener company profile (About/Key Points),2026-09-29
+SAKAR,Formulations Export – Emerging Markets,Formulation Contract Manufacturing – India,Emerging (ROW),False,medium,50+ countries + contract manufacturing,Screener company profile (About/Key Points),2026-09-29
+SYNCOMF,Formulations Export – Emerging Markets,,Emerging (ROW),False,medium,generics in 15+ countries,Screener company profile (About/Key Points),2026-09-29
+ZIMLAB,Formulations Export – Emerging Markets,"Pharma Inputs (Excipients, Capsules, Enzymes, Packaging)",Emerging (ROW),False,medium,oral solids + pre-formulation intermediates,Screener company profile (About/Key Points),2026-09-29
+AUROPHARMA,Generics & Specialty – US/Regulated,API / Bulk Drugs & Intermediates,Regulated (US/EU),False,high,largest US generics co from India,Screener company profile (About/Key Points),2026-09-29
+GRANULES,Generics & Specialty – US/Regulated,API / Bulk Drugs & Intermediates,Regulated (US/EU),False,high,"finished dosages 74% (US), API, PFI",Screener company profile (About/Key Points),2026-09-29
+JUBLPHARMA,Generics & Specialty – US/Regulated,CDMO / CRDMO,Regulated (US/EU),False,high,"FY26: radiopharma 45%, CDMO sterile inj 20%, CRDMO 15%",Screener profile + FY26 results (web-verified),2026-09-29
+MARKSANS,Generics & Specialty – US/Regulated,Consumer Health / OTC & Nutraceuticals,Regulated (US/EU),False,high,"FY26: US 52%, UK/EU 34%; OTC 74% of sales",Screener profile + FY26 results (web-verified),2026-09-29
+NATCOPHARM,Generics & Specialty – US/Regulated,Branded Generics – India & EM,Regulated (US/EU),False,high,export formulations/Para IV + India oncology,Screener company profile (About/Key Points),2026-09-29
+RUBICON,Generics & Specialty – US/Regulated,,Regulated (US/EU),False,high,"99.5% US revenue, differentiated formulations",Screener company profile (About/Key Points),2026-09-29
+SENORES,Generics & Specialty – US/Regulated,Injectables & Critical Care,Regulated (US/EU),False,high,complex generics US/Canada/UK,Screener company profile (About/Key Points),2026-09-29
+STAR,Generics & Specialty – US/Regulated,Formulations Export – Emerging Markets,Regulated (US/EU),False,high,regulated-market generics + branded EM,Screener company profile (About/Key Points),2026-09-29
+UNICHEMLAB,Generics & Specialty – US/Regulated,API / Bulk Drugs & Intermediates,Regulated (US/EU),False,medium,generics + APIs + CMO; Ipca-controlled,Screener company profile (About/Key Points),2026-09-29
+BPLPHARMA,Injectables & Critical Care,,Global,False,medium,powder injections and SVPs,Screener company profile (About/Key Points),2026-09-29
+GLAND,Injectables & Critical Care,CDMO / CRDMO,Global,False,high,"B2B complex injectables, Fosun-promoted",Screener company profile (About/Key Points),2026-09-29
+GUFICBIO,Injectables & Critical Care,Branded Generics – India & EM,Global,False,high,"lyophilized injections, critical care",Screener company profile (About/Key Points),2026-09-29
+VENUSREM,Injectables & Critical Care,,Global,False,high,"complex injectables, 100+ countries",Screener company profile (About/Key Points),2026-09-29
+APLLTD,Integrated Global Pharma,Generics & Specialty – US/Regulated,Global,False,high,"FY26: India branded 31%, US 30%, ex-US 20%, API 19%",Screener profile + FY26 results (web-verified),2026-09-29
+CIPLA,Integrated Global Pharma,,Global,False,high,"India 45%, N America 24%, Africa 15%",Screener company profile (About/Key Points),2026-09-29
+DRREDDY,Integrated Global Pharma,"Biologics, Biosimilars & Vaccines",Global,False,high,"API, custom pharma services, generics, biosimilars",Screener company profile (About/Key Points),2026-09-29
+EMCURE,Integrated Global Pharma,Branded Generics – India & EM,Global,False,high,"FY26: international 56% (Europe/Canada), India 44%",Screener profile + FY26 results (web-verified),2026-09-29
+GLENMARK,Integrated Global Pharma,Consumer Health / OTC & Nutraceuticals,Global,False,high,"generics, specialty, OTC in 80 countries",Screener company profile (About/Key Points),2026-09-29
+LUPIN,Integrated Global Pharma,,Global,False,high,branded + generics in 100 markets,Screener company profile (About/Key Points),2026-09-29
+SUNPHARMA,Integrated Global Pharma,,Global,False,high,branded India + US specialty/generics + API,Screener company profile (About/Key Points),2026-09-29
+WOCKPHARMA,Integrated Global Pharma,Drug Discovery (R&D stage),Global,False,medium,formulations (India/UK/EM) + novel antibiotics,Screener company profile (About/Key Points),2026-09-29
+ZYDUSLIFE,Integrated Global Pharma,,Global,False,high,US 40% + India branded + consumer,Screener company profile (About/Key Points),2026-09-29
+ADVENZYMES,"Pharma Inputs (Excipients, Capsules, Enzymes, Packaging)",,Global B2B,False,high,enzymes,Screener company profile (About/Key Points),2026-09-29
+BI,"Pharma Inputs (Excipients, Capsules, Enzymes, Packaging)","CRO, Testing & Life-sciences Services",Global B2B,False,medium,pharma packaging + clinical services,Screener company profile (About/Key Points),2026-09-29
+FABTECH,"Pharma Inputs (Excipients, Capsules, Enzymes, Packaging)",,Global B2B,False,medium,pharma plant engineering (not a drug maker),Screener company profile (About/Key Points),2026-09-29
+NATCAPSUQ,"Pharma Inputs (Excipients, Capsules, Enzymes, Packaging)",API / Bulk Drugs & Intermediates,Global B2B,False,high,hard capsule shells + steroid APIs,Screener company profile (About/Key Points),2026-09-29
+SIGACHI,"Pharma Inputs (Excipients, Capsules, Enzymes, Packaging)",,Global B2B,False,high,MCC excipients,Screener company profile (About/Key Points),2026-09-29
+SUDEEPPHRM,"Pharma Inputs (Excipients, Capsules, Enzymes, Packaging)",,Global B2B,False,high,excipients and mineral nutrition ingredients,Screener company profile (About/Key Points),2026-09-29
+SUNLOC,"Pharma Inputs (Excipients, Capsules, Enzymes, Packaging)",,Global B2B,False,high,empty capsule shells,Screener company profile (About/Key Points),2026-09-29
+VAISHALI,Pharma Retail & Distribution,,India,False,medium,pharma marketing/trading,Screener company profile (About/Key Points),2026-09-29
+ZOTA,Pharma Retail & Distribution,Formulations Export – Emerging Markets,India,False,high,"Davaindia pharmacy chain 77% of FY26 revenue, 2,579 stores",Screener profile + FY26 results (web-verified),2026-09-29
