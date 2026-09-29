@@ -11,6 +11,20 @@ import pytest
 from src.analytics import index_largecap as ilc
 
 
+def test_nifty_buckets_are_nses_own_top10_top20():
+    """Top 10 / Next 10 come from NSE's Nifty Top 10 / Top 20 Equal Weight
+    membership (6-month average free-float cap), not a hand ranking. Pinned so a
+    re-shuffle by spot weight cannot creep back in."""
+    from datetime import date as _d
+    b = ilc.index_meta("NIFTY", _d(2026, 9, 29))["buckets"]
+    assert set(b["Top 10"]) == {"AXISBANK", "BHARTIARTL", "HDFCBANK", "ICICIBANK",
+                                "INFY", "ITC", "KOTAKBANK", "LT", "RELIANCE", "TCS"}
+    assert set(b["Next 10"]) == {"BAJFINANCE", "ETERNAL", "HCLTECH", "HINDUNILVR",
+                                 "M&M", "MARUTI", "NTPC", "SBIN", "SUNPHARMA", "TITAN"}
+    b2 = ilc.index_meta("NIFTY", _d(2026, 9, 30))["buckets"]
+    assert "SBIN" in b2["Top 10"] and "TCS" in b2["Next 10"]
+
+
 def test_bucket_membership_is_the_full_50_with_no_overlap():
     b = ilc.INDEX_BUCKETS["NIFTY"]["buckets"]
     allsyms = [s for v in b.values() for s in v]
@@ -67,8 +81,8 @@ def test_no_index_row_means_no_carry_spread_not_a_zero():
 
 
 def test_unknown_index_degrades_cleanly():
-    out = ilc.get_index_largecap(__import__("datetime").date(2026, 9, 4), "BANKNIFTY")
-    assert not out.data_ok and "BANKNIFTY" in out.note
+    out = ilc.get_index_largecap(__import__("datetime").date(2026, 9, 4), "SENSEX")
+    assert not out.data_ok and "SENSEX" in out.note
 
 
 # ── regressions for the three defects the self-audit found ───────────────────
@@ -199,6 +213,9 @@ def test_base_rate_docstring_records_why_no_arrow_is_derived():
     assert "0.65" in doc            # the F&O family reality check
     assert "t=+0.35" in doc         # breadth collapsing under the CLR control
     assert "NO SINGLE LEG" in doc   # the conjunction's failure mode
+    # the re-measurement on NSE's own buckets must travel with it too
+    assert "RE-MEASURED" in doc and "+0.2bps" in doc and "p=0.39" in doc
+    assert "ONE LEAD, NOT AN EDGE" in doc
 
 
 # ── the flow summary (delivery + futures + options) ──────────────────────────
@@ -257,6 +274,7 @@ def test_net_score_docstring_carries_the_measured_hit_rate():
     doc = ilc.IndexLargeCap.net_score.__doc__ or ""
     assert "48.2%" in doc and "52.2%" in doc, "next-day hit rate vs base missing"
     assert "44.6%" in doc and "BELOW a coin flip" in doc
+    assert "49.3%" in doc and "52.1%" in doc and "44.1%" in doc,         "the re-measurement on NSE's buckets is missing"
 
 
 def test_expiry_session_suppresses_options_too():
@@ -398,14 +416,17 @@ def test_activity_is_turnover_vs_norm_not_delivery_value():
     wearing a delivery label. The SHARE carries the independent information
     (0.39-0.56 with value), so the panel shows the other FACTOR, not the product."""
     from datetime import date as _d
+    # values re-pinned 29 Sep 2026 when Nifty's buckets moved to NSE's own
+    # Top 10 / Top 20 Equal Weight membership
     out = ilc.get_index_largecap(_d(2026, 9, 9), "NIFTY")
     by = {r.label: r for r in out.rows}
-    assert by["Top 10"].turnover_vs_norm == pytest.approx(34.5, abs=1.0)
-    assert by["Rest 30"].turnover_vs_norm == pytest.approx(3.5, abs=1.0)
-    # the case that motivated it: Rest 30's share reads mildly firm while its
-    # rupee delivery is actually BELOW normal, because activity is flat
-    assert by["Rest 30"].deliv_z > 0
-    assert by["Rest 30"].turnover_vs_norm < 10
+    assert by["Top 10"].turnover_vs_norm == pytest.approx(32.1, abs=1.0)
+    assert by["Rest 30"].turnover_vs_norm == pytest.approx(30.4, abs=1.0)
+    # the case that motivated it: Rest 30's share reads firm while its rupee
+    # delivery is actually BELOW normal, because the day was quieter
+    r30 = {r.label: r for r in ilc.get_index_largecap(_d(2026, 9, 10), "NIFTY").rows}["Rest 30"]
+    assert r30.deliv_z > 0 and r30.turnover_vs_norm < 0
+    assert r30.deliv_value_cr < r30.deliv_value_norm_cr
 
 
 def test_activity_degrades_to_none_without_enough_history():
@@ -427,33 +448,192 @@ def test_pair_tooltip_carries_the_rule_and_a_live_example():
                  "Quiet, nothing happening"):
         assert case in t, f"rule line missing: {case!r}"
     assert "**On 10 Sep 2026:**" in t, "the example must be for the SELECTED date"
-    assert "Rs 4,289 Cr against a normal Rs 5,145 Cr" in t
+    assert "Rs 4,264 Cr against a normal Rs 4,679 Cr" in t
 
 
 def test_pair_tooltip_flags_the_trap_only_when_the_rupees_really_fell():
-    """10 Sep Rest 30: z +0.21 but rupees -17% -> trap. 09 Sep Rest 30: z +0.11,
-    rupees -1% -> NOT a trap, that is noise."""
+    """10 Sep Rest 30: z +0.16 but rupees -9% -> trap. 09 Sep: no bucket with a
+    positive z delivered fewer rupees -> no trap."""
     from datetime import date as _d
     assert "**Rest 30 is the trap today.**" in _pair(_d(2026, 9, 10))
     assert "is the trap today" not in _pair(_d(2026, 9, 9))
 
 
 def test_pair_tooltip_never_contradicts_the_delivery_column():
-    """Without a dead band, 09 Sep Rest 30 (z +0.11, Activity +4%) was labelled
+    """Without a dead band, a bucket at z +0.11 / Activity +4% was labelled
     'Real - more of it delivered' while its rupee delivery FELL 1%, and while the
-    Delivery column beside it said 'normal'."""
+    Delivery column beside it said 'normal'. 09 Sep Next 10 sits right at the edge
+    (z +0.28, inside the +-0.3 band, Activity -1%, rupees +1%)."""
     from datetime import date as _d
     t = _pair(_d(2026, 9, 9))
-    rest = next(l for l in t.splitlines() if l.startswith("- Rest 30"))
-    assert "delivery normal" in rest
-    assert "Real" not in rest
-    assert "about the usual rupees delivered" in rest
+    nxt = next(l for l in t.splitlines() if l.startswith("- Next 10"))
+    assert "delivery normal" in nxt
+    assert "Real" not in nxt
+    assert "about the usual rupees delivered" in nxt
 
 
 def test_rupee_delivery_equals_share_times_turnover():
     """deliv_value is derived as delivery share x traded value. It must match the
-    independent deliv_qty x avg_price figure to the crore."""
+    independent deliv_qty x avg_price figure to the crore (recomputed straight
+    from daily_data on 29 Sep 2026: 5,310.9 and 4,679.3 Cr)."""
     from datetime import date as _d
     by = {r.label: r for r in ilc.get_index_largecap(_d(2026, 9, 10), "NIFTY").rows}
-    assert by["Top 10"].deliv_value_cr == pytest.approx(5141, abs=2)
-    assert by["Rest 30"].deliv_value_norm_cr == pytest.approx(5145, abs=2)
+    assert by["Top 10"].deliv_value_cr == pytest.approx(5310.9, abs=2)
+    assert by["Rest 30"].deliv_value_norm_cr == pytest.approx(4679.3, abs=2)
+
+
+# ── Bank Nifty / Fin Nifty / Midcap Select ──────────────────────────────────
+
+_OTHER = ("BANKNIFTY", "FINNIFTY", "MIDCPNIFTY")
+
+
+@pytest.mark.parametrize("sym,sizes", [("BANKNIFTY", [2, 3, 9]),
+                                       ("FINNIFTY", [2, 4, 14]),
+                                       ("MIDCPNIFTY", [5, 5, 15])])
+def test_other_index_buckets_are_complete_disjoint_and_weighted(sym, sizes):
+    """Sizes follow each index's own weight gaps (NSE factsheet, 31 Aug 2026),
+    not Nifty's 10/10/30."""
+    m = ilc.INDEX_BUCKETS[sym]
+    allsyms = [s for v in m["buckets"].values() for s in v]
+    assert [len(v) for v in m["buckets"].values()] == sizes
+    assert len(set(allsyms)) == len(allsyms), "a symbol sits in two buckets"
+    assert list(m["weights"]) == list(m["buckets"]), "weights keyed off-label"
+    assert sum(m["weights"].values()) == pytest.approx(1.0, abs=0.02)
+    assert m["carry_band"] > 0
+
+
+def test_min_valid_lets_a_two_name_bucket_speak_but_never_one_name():
+    """A fixed quorum of 4 would silence Bank Nifty's Top 2 forever."""
+    assert [ilc._min_valid(n) for n in (2, 3, 4, 5, 9, 10, 30)] == [2, 2, 3, 3, 4, 4, 4]
+    top2 = ilc.BucketRow(label="Top 2", n_members=2, n_present=2,
+                         fut_valid=2, fut_long=2)
+    assert top2.fut_lean == 1
+    one = ilc.BucketRow(label="Top 2", n_members=2, n_present=2,
+                        fut_valid=1, fut_long=1)
+    assert one.fut_lean is None
+
+
+def test_state_reads_first_and_last_bucket_by_position():
+    d = ilc.IndexLargeCap(trade_date=None, fno_symbol="BANKNIFTY", display="x")
+    d.rows = [ilc.BucketRow(label="Top 2", n_members=2, n_present=2, adv_pct=100.0),
+              ilc.BucketRow(label="Next 3", n_members=3, n_present=3, adv_pct=0.0),
+              ilc.BucketRow(label="Rest 9", n_members=9, n_present=9, adv_pct=22.0)]
+    assert d.state == ilc.STATE_CARRIED
+
+
+def test_net_score_uses_the_indexs_own_bucket_weights():
+    d = ilc.IndexLargeCap(trade_date=None, fno_symbol="FINNIFTY", display="x")
+    d.rows = [ilc.BucketRow(label="Top 2", n_members=2, n_present=2, deliv_z=1.0),
+              ilc.BucketRow(label="Next 4", n_members=4, n_present=4, deliv_z=-1.0),
+              ilc.BucketRow(label="Rest 14", n_members=14, n_present=14)]
+    w = ilc.INDEX_BUCKETS["FINNIFTY"]["weights"]
+    assert d.net_score == pytest.approx(
+        (w["Top 2"] - w["Next 4"]) / (w["Top 2"] + w["Next 4"]))
+
+
+def test_carry_band_is_per_index():
+    d = ilc.IndexLargeCap(trade_date=None, fno_symbol="BANKNIFTY", display="x")
+    d.index_ret, d.equal_ret, d.carry_spread = -1.0, -1.18, 0.18
+    d.adv_all, d.n_present = 2, 14
+    # 0.18pp would be "top-heavy" on Nifty's 0.15 band; not on Bank Nifty's
+    assert d.regime == "Index and basket moved together"
+
+
+@pytest.mark.parametrize("sym", _OTHER)
+def test_other_index_live_state_matches_a_base_rate_row(sym):
+    from datetime import date as _d
+    d = ilc.get_index_largecap(_d(2026, 9, 28), sym)
+    assert d.data_ok and len(d.rows) == 3
+    assert all(r.n_present == r.n_members for r in d.rows), "a constituent is missing"
+    br = ilc.get_state_base_rates(sym, 5, _d(2026, 9, 28))
+    assert d.state in set(br["state"])
+    parts = br[~br["state"].str.startswith("—")]
+    allrow = br[br["state"].str.startswith("—")]
+    assert int(parts["days"].sum()) == int(allrow.iloc[0]["days"])
+
+
+def test_midcap_select_history_starts_when_its_heavyweights_got_fno():
+    """BSE / PAYTM / POLICYBZR had no stock F&O before 29 Nov 2024, and Midcap
+    Select holds only F&O stocks: earlier rows would be a basket it never owned."""
+    from datetime import date as _d
+    br = ilc.get_state_base_rates("MIDCPNIFTY", 5, _d(2026, 9, 28))
+    n = int(br[br["state"].str.startswith("—")].iloc[0]["days"])
+    assert 400 < n < 480, n
+    Z, _ = ilc._flow_state_matrix("MIDCPNIFTY", _d(2026, 9, 28))
+    assert Z.index.min() >= pd.Timestamp("2024-11-29")
+
+
+@pytest.mark.parametrize("sym", _OTHER)
+def test_concentration_trend_is_not_blanked_by_a_nifty_sized_quorum(sym):
+    from datetime import date as _d
+    if sym == "MIDCPNIFTY":
+        pytest.skip("history starts Nov-2024: only one full calendar year")
+    assert not ilc.get_concentration_trend(sym, 5, _d(2026, 9, 28)).empty
+
+
+def test_every_other_index_ships_its_own_measured_verdict():
+    """A Nifty verdict must never render above a Bank Nifty table."""
+    from src.dashboard.views import sector_rotation as sr
+    for sym in _OTHER:
+        assert "scripts/ilc_multi_index_backtest.py" in sr._ILC_VERDICT[sym]
+        assert "does not forecast" in sr._ILC_SCORE_VERDICT[sym]
+        assert "48.2%" not in sr._ILC_SCORE_VERDICT[sym], "Nifty's number leaked"
+
+
+# ── dated membership: NSE review effective 30 Sep 2026 ──────────────────────
+
+def test_basket_switches_on_the_effective_date_not_before():
+    from datetime import date as _d
+    pre, post = ilc.index_meta("NIFTY", _d(2026, 9, 29)), ilc.index_meta("NIFTY", _d(2026, 9, 30))
+    pre_all = {s for v in pre["buckets"].values() for s in v}
+    post_all = {s for v in post["buckets"].values() for s in v}
+    assert "WIPRO" in pre_all and "BSE" not in pre_all
+    assert "BSE" in post["buckets"]["Rest 30"] and "WIPRO" not in post_all
+    assert len(post_all) == 50
+
+
+def test_midcap_select_loses_bse_and_is_marked_provisional():
+    from datetime import date as _d
+    m = ilc.index_meta("MIDCPNIFTY", _d(2026, 9, 30))
+    allsyms = [s for v in m["buckets"].values() for s in v]
+    assert len(allsyms) == 25 == len(set(allsyms))
+    assert {"BSE", "FORTIS", "HINDPETRO", "POLYCAB"}.isdisjoint(allsyms)
+    assert {"FEDERALBNK", "GVT&D", "INDHOTEL", "MCX"} <= set(allsyms)
+    assert m["provisional"] and list(m["weights"]) == list(m["buckets"])
+    assert not ilc.index_meta("MIDCPNIFTY", _d(2026, 9, 29))["provisional"]
+
+
+def test_bank_and_fin_nifty_are_unchanged_by_the_review():
+    """The 10 Aug 2026 release: 'No changes are being made in Nifty Bank, Nifty
+    Financial Services ...'."""
+    from datetime import date as _d
+    for sym in ("BANKNIFTY", "FINNIFTY"):
+        assert (ilc.index_meta(sym, _d(2026, 9, 30))["buckets"]
+                == ilc.INDEX_BUCKETS[sym]["buckets"])
+
+
+def test_live_read_uses_the_basket_in_force_on_the_date():
+    from datetime import date as _d
+    d = ilc.get_index_largecap(_d(2026, 9, 28), "MIDCPNIFTY")
+    assert [r.label for r in d.rows] == ["Top 5", "Next 5", "Rest 15"]
+    assert d.bucket_weights == ilc.INDEX_BUCKETS["MIDCPNIFTY"]["weights"]
+
+
+# ── tie-break and the classified-name quorum ────────────────────────────────
+
+def test_exact_half_tie_is_broken_by_bucket_return():
+    """Bank/Fin Top 2 splits one-up/one-down on 34% of sessions; filing every
+    tie as 'not up' misfiled ~17% of all days."""
+    assert ilc._classify(50, 60, 0.8, 0.1) == ilc.STATE_BROAD_UP
+    assert ilc._classify(50, 60, -0.8, 0.1) == ilc.STATE_LAGGED
+    assert ilc._classify(50, 50) == ilc.STATE_BROAD_DOWN   # no returns: old rule
+
+
+def test_one_active_name_cannot_decide_a_small_buckets_lean():
+    """41.6% of Top-2 leans were one stock building while the other sat flat."""
+    r = ilc.BucketRow(label="Top 2", n_members=2, n_present=2,
+                      fut_valid=2, fut_long=1)
+    assert r.fut_lean == 0
+    both = ilc.BucketRow(label="Top 2", n_members=2, n_present=2,
+                         fut_valid=2, fut_long=2)
+    assert both.fut_lean == 1

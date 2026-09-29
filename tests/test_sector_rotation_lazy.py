@@ -87,7 +87,8 @@ def test_every_index_largecap_column_has_a_tooltip():
     import re
     from pathlib import Path
     src = Path("src/dashboard/views/sector_rotation.py").read_text(encoding="utf-8")
-    start = src.index("def _render_index_largecap")
+    # the tables live in the per-index body since the index selector was added
+    start = src.index("def _render_ilc_body")
     nxt = re.search(r"\ndef ", src[start + 10:])
     body = src[start:] if nxt is None else src[start:start + 10 + nxt.start()]
 

@@ -6414,6 +6414,195 @@ def _render_trend_survival(selected_date: date) -> None:
 # INDEX & LARGE CAP — who actually moved the index today
 # ═══════════════════════════════════════════════════════════════════════════
 
+# Per-index verdicts for the non-Nifty indices. MEASURED on each index's own
+# constituents, not inherited from Nifty: scripts/ilc_multi_index_backtest.py,
+# same construction as the live panel, 2022-01 .. 2026-09 (Midcap Select from
+# 2024-11-29). The script reproduces Nifty's shipped null first (composite gap
+# t +3.12 alone -> +0.02 beside close-strength), so the harness is calibrated.
+_ILC_VERDICT = {
+    "BANKNIFTY": (
+        "**A decomposition, not a forecast — re-measured on Bank Nifty's own 14 "
+        "names, not borrowed from Nifty.** `scripts/ilc_multi_index_backtest.py`, "
+        "1,174 sessions 2022-2026.\n\n"
+        "- **Same answer as Nifty: every signal is close-strength in disguise.** "
+        "Over the 51-candidate family the strongest are Top-2 breadth → next gap "
+        "(|t| 3.74) and the Top-2 futures read (|t| 3.48), family p=0.002 — but "
+        "both correlate +0.44 to +0.57 with the index's own close-strength, and "
+        "beside it they fall to **t=+1.35 and +1.72**. The futures read's sign "
+        "comes from the PRICE move (long build and short cover both need price "
+        "up), so it is partly a price signal with an OI label. The rest fall to "
+        "-0.07 .. +1.08.\n"
+        "- **The index got less top-heavy in 2026, and history mixes both.** "
+        "Regressing the index on its three bucket returns, the Top 2 carried "
+        "**~0.55** of the moves every quarter from 2022 to 2025, then **0.47** "
+        "(Mar-2026) and **0.39** (Jun-2026) — the SEBI concentration cap (top "
+        "name ≤20%, top three ≤45%) biting. HDFCBANK is 17.0% today.\n\n"
+        "So no arrow. The state table is a **base rate** from a more top-heavy "
+        "index than the one on screen."),
+    "FINNIFTY": (
+        "**A decomposition, not a forecast — re-measured on Fin Nifty's own 20 "
+        "names.** `scripts/ilc_multi_index_backtest.py`, 1,174 sessions "
+        "2022-2026.\n\n"
+        "- **Its top 6 are banks plus Bajaj Finance (70.7% of the index).** "
+        "Top 2 (HDFCBANK, ICICIBANK) is the same pair as Bank Nifty's, so on "
+        "most days the two tabs read the same heavyweights.\n"
+        "- **Every signal dies beside close-strength.** Family p<0.001, led by "
+        "Rest-14 breadth → gap (|t| 3.90) and the Top-2 futures read (|t| 3.68); "
+        "beside the index's own close-strength they fall to **t=+1.86 and "
+        "+1.75**.\n"
+        "- **One lead that did not survive.** The carry spread → next day reads "
+        "t=+2.23 and holds beside close-strength (+2.26), with the same sign on "
+        "Nifty (+1.72) and Bank Nifty (+1.50). But it is one of 51 tests, the "
+        "family's null 95th percentile is 3.19, and the three indices share "
+        "their biggest stocks, so they are not three independent confirmations.\n"
+        "- **Same weight cap as Bank Nifty:** Top 2 carried ~0.55-0.63 of the "
+        "moves through 2025, **0.33** by Jun-2026.\n\n"
+        "So no arrow. The state table is a **base rate**, not a call."),
+    "MIDCPNIFTY": (
+        "**A decomposition, not a forecast — and the weakest-evidenced of the "
+        "four.** `scripts/ilc_multi_index_backtest.py`, **453 sessions only**: "
+        "most of this basket's heavyweights (BSE, PAYTM, POLICYBZR) had no stock "
+        "F&O before 29 Nov 2024, and Midcap Select only holds F&O stocks, so "
+        "earlier history is a basket the index could not have owned. It is cut "
+        "there.\n\n"
+        "- **Nothing survives.** Family p=0.056 on 51 candidates; the best "
+        "(Rest-15 futures → gap, |t| 3.30) falls to t=+1.34 beside close-strength.\n"
+        "- **The composite flips sign out of sample:** next-day −10.0 bps, 47.1% "
+        "hit after Oct-2025.\n"
+        "- **The bucket boundary is arbitrary.** BSE is 9.6%; ranks 2-10 all sit "
+        "between 5.2% and 4.1%, and rank 5 vs rank 6 is 4.63% vs 4.61%.\n"
+        "- **BSE is NOT the carry spread.** Checked: BSE minus the basket "
+        "explains R² 0.02 of it. The spread is broad, not one stock.\n\n"
+        "So no arrow. Treat every number here as thin."),
+    # the basket in force from 30 Sep 2026 (BSE promoted to Nifty 50)
+    "MIDCPNIFTY_2609": (
+        "**A decomposition, not a forecast — on a basket that barely has "
+        "heavyweights.** From 30 Sep 2026 BSE (9.6%) moves to Nifty 50, and the "
+        "largest names left are ~6%. `scripts/ilc_multi_index_backtest.py "
+        "--asof 2026-09-30`, today's 25 applied to **453 sessions** "
+        "(Nov-2024+).\n\n"
+        "- **The Top 2 barely move the index:** regressed on the three bucket "
+        "returns they carry **0.06-0.13** of its moves; the Rest 18 carries "
+        "0.66-0.88. \"Heavyweights carried it\" means little here.\n"
+        "- **Nothing survives.** Family p=0.032, led by Rest-18 breadth → gap "
+        "(|t| 3.16), which falls to **t=+1.01** beside close-strength.\n"
+        "- **Out of sample the composite is worse than a coin:** next day "
+        "−14.2 bps at 46.9% after Oct-2025.\n\n"
+        "So no arrow, and the buckets are **provisional** (above)."),
+}
+
+_ILC_SCORE_VERDICT = {
+    "BANKNIFTY": (
+        "**This score does not forecast Bank Nifty — measured, 1,174 sessions "
+        "2022-2026.**\n\n"
+        "| | next open (gap) | next day | next 5 sessions |\n|---|---|---|---|\n"
+        "| **net score hit rate** | 54.0% | **49.7%** | **49.8%** |\n"
+        "| base rate (up days) | 57.2% | 52.8% | 55.0% |\n"
+        "| information coefficient | +0.079 | −0.002 | +0.014 |\n\n"
+        "The gap IC is close-strength again (net score t=+0.51 beside it). Out "
+        "of sample after May-2024 the next-day read runs **−5.2 bps at 46.5%**, "
+        "below a coin flip. On disjoint weeks the five weekday offsets span −18.0 "
+        "to +23.0 bps. Read it as **what positioning is doing**."),
+    "FINNIFTY": (
+        "**This score does not forecast Fin Nifty — measured, 1,174 sessions "
+        "2022-2026.**\n\n"
+        "| | next open (gap) | next day | next 5 sessions |\n|---|---|---|---|\n"
+        "| **net score hit rate** | 53.9% | **51.3%** | **50.9%** |\n"
+        "| base rate (up days) | 56.8% | 53.1% | 53.8% |\n"
+        "| information coefficient | +0.113 | +0.032 | +0.034 |\n\n"
+        "Beside close-strength the score is t=+1.61 at the gap and +1.80 next "
+        "day — not significant. Out of sample after May-2024 next day runs "
+        "**−2.3 bps at 49.1%**. Read it as **what positioning is doing**."),
+    "MIDCPNIFTY": (
+        "**This score does not forecast Midcap Select — measured, 453 sessions "
+        "(Nov-2024+).**\n\n"
+        "| | next open (gap) | next day | next 5 sessions |\n|---|---|---|---|\n"
+        "| **net score hit rate** | 52.0% | **49.1%** | **51.6%** |\n"
+        "| base rate (up days) | 70.0% | 53.9% | 52.6% |\n"
+        "| information coefficient | +0.124 | −0.027 | −0.008 |\n\n"
+        "Beside close-strength: t=+0.36 at the gap, −0.87 next day. Out of "
+        "sample after Oct-2025 next day runs **−10.0 bps at 47.1%**. Read it as "
+        "**what positioning is doing**."),
+    "MIDCPNIFTY_2609": (
+        "**This score does not forecast Midcap Select — measured on the "
+        "30-Sep-2026 basket, 453 sessions (Nov-2024+).**\n\n"
+        "| | next open (gap) | next day | next 5 sessions |\n|---|---|---|---|\n"
+        "| **net score hit rate** | 54.9% | **46.7%** | **49.6%** |\n"
+        "| base rate (up days) | 70.0% | 53.9% | 52.6% |\n"
+        "| information coefficient | +0.126 | −0.032 | +0.010 |\n\n"
+        "Beside close-strength: t=+0.22 at the gap, −0.76 next day. Out of "
+        "sample after Oct-2025 next day runs **−14.2 bps at 46.9%**. Read it as "
+        "**what positioning is doing**."),
+}
+
+
+def _ilc_verdict_key(sym: str, meta: dict) -> str:
+    """Midcap Select's verdict depends on WHICH basket is in force."""
+    eff = meta.get("effective")
+    if sym == "MIDCPNIFTY" and eff is not None and eff >= date(2026, 9, 30):
+        return "MIDCPNIFTY_2609"
+    return sym
+
+
+def _render_ilc_index_notes(sym: str, selected_date: date) -> None:
+    """Which basket is in force on the date, and how its buckets were drawn."""
+    from src.analytics.index_largecap import index_meta
+    meta = index_meta(sym, selected_date)
+    if meta["effective"] is not None:
+        st.caption(
+            f"**Basket in force from {meta['effective']:%d %b %Y}** — "
+            f"{meta['source']}. Dates before that use the previous basket.")
+    if meta["provisional"]:
+        st.warning(
+            "**Provisional buckets.** NSE publishes the new weights in the "
+            "30 Sep factsheet. Until then they are ESTIMATED: Midcap Select "
+            "weights are exactly proportional to Nifty Midcap 100's (BSE/PAYTM "
+            "= 1.855 in both), which places FEDERALBNK ~6.3% and MCX ~6.2% "
+            "ahead of PAYTM 5.2%. INDHOTEL (top 10 per NSE, rank unknown) and "
+            "GVT&D sit in the last bucket until the factsheet confirms.")
+    if sym == "NIFTY":
+        st.caption(
+            "**Buckets are NSE's own ranking:** Top 10 = the members of NSE's "
+            "*Nifty Top 10 Equal Weight* index, Next 10 = *Top 20* minus *Top 10*. "
+            "NSE picks them by 6-month average free-float cap every March and "
+            "September, so a month of price moves cannot reshuffle them — the "
+            "spot factsheet ranks differ at the edge (31 Aug: SBIN #6, M&M #10), "
+            "and the September review moves SBIN into the Top 10 from 30 Sep.")
+        return
+    parts =" · ".join(f"**{k}**: {', '.join(v)}" for k, v in meta["buckets"].items())
+    why = {
+        "BANKNIFTY": "Cut on the two widest gaps in the published weights: "
+                     "17.0, 14.9 | 10.3, 9.9, 9.2 | 7.2 and below.",
+        "FINNIFTY": "Cut on the two widest gaps in the published weights: "
+                    "17.3, 15.1 | 10.4, 9.6, 9.5, 8.8 | 4.9 and below.",
+        "MIDCPNIFTY": ("With BSE gone the index is close to equal weight: the "
+                       "only gap wider than 0.3pp is after rank 2 (~6.2 vs 5.2), "
+                       "and the Top 2 hold only ~13%. Expect a small carry "
+                       "spread and a weak heavyweight story."
+                       if meta["provisional"] else
+                       "No natural cut past BSE (9.6%) — ranks 2-10 span only "
+                       "5.2% to 4.1%, so Top 5 / Next 5 is a layout choice, "
+                       "not structure."),
+    }[sym]
+    st.caption(
+        f"**Buckets**: {parts}. {why} "
+        "Only the top 10 weights are published, so every cut sits inside the top "
+        "10 and the last bucket is simply everyone else. A cut on a wide gap "
+        "keeps membership stable as prices move; a cut between near-equal "
+        "weights would reshuffle every month.")
+    if selected_date < date(2025, 12, 1) and sym in ("BANKNIFTY", "FINNIFTY"):
+        st.caption(
+            "⚠ The date on screen predates the SEBI weight cap. The buckets are "
+            "TODAY's, and the index weighted its Top 2 more heavily then (~55% "
+            "of its moves against ~35% now).")
+    if sym == "MIDCPNIFTY" and selected_date < meta["history_from"]:
+        st.caption(
+            f"⚠ Before {meta['history_from']:%d %b %Y} most of today's Midcap "
+            "Select heavyweights had no stock F&O, and the index only holds F&O "
+            "names — this date shows a basket the index could not have held. "
+            "Base rates and matches start at that date.")
+
+
 def _ilc_chip(text: str, colour: str) -> str:
     return (f"<span style='background:{colour}22;border:1px solid {colour}55;"
             f"color:{colour};padding:2px 8px;border-radius:10px;"
@@ -6509,18 +6698,29 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                                              cached_state_base_rates,
                                              cached_flow_analogues,
                                              cached_bucket_analogues)
+    from src.analytics.index_largecap import INDEX_BUCKETS, index_meta
+    sym = st.segmented_control(
+        "Index", list(INDEX_BUCKETS), default="NIFTY", key="ilc_index",
+        format_func=lambda s: INDEX_BUCKETS[s]["display"],
+        help="Each index is split on the widest gaps in its OWN published "
+             "weights, so the bucket sizes differ by index — and by date, since "
+             "NSE reconstitutes every March and September.") or "NIFTY"
+    meta = index_meta(sym, selected_date)
+    _labels = list(meta["buckets"])
+    _n_all = sum(len(v) for v in meta["buckets"].values())
+    _name = meta["display"]
     st.markdown(
-        "Nifty is free-float **cap weighted**, so its 50 members do not move it "
-        "equally. This panel splits the index into weight buckets and shows which "
-        "one actually carried it - and how often the index and its own basket "
-        "disagree.")
+        f"{_name} is free-float **cap weighted**, so its {_n_all} members do not "
+        "move it equally. This panel splits the index into weight buckets and "
+        "shows which one actually carried it - and how often the index and its "
+        "own basket disagree.")
     st.caption(
         "The sidebar **Min Traded Value** filter does not apply here: the basket is "
         "fixed index membership, not a liquidity screen. Everything below is "
         "anchored on the selected date.")
 
     try:
-        d = cached_index_largecap(selected_date, "NIFTY")
+        d = cached_index_largecap(selected_date, sym)
     except Exception as exc:                                   # noqa: BLE001
         st.error(f"Index & Large Cap unavailable: {exc}")
         return
@@ -6528,32 +6728,69 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
         st.info(d.note or "No constituent data for this date.")
         return
 
+    _render_ilc_index_notes(sym, selected_date)
+    if sym != "NIFTY":
+        st.warning(_ILC_VERDICT[_ilc_verdict_key(sym, meta)])
+    else:
+        _render_ilc_nifty_verdict()
+
+    _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
+                     cached_concentration_trend, cached_state_base_rates,
+                     cached_flow_analogues)
+
+
+def _render_ilc_nifty_verdict() -> None:
     # ── honesty rail: this panel describes, it does not forecast ─────────────
+    # Re-measured 29 Sep 2026 on NSE's own Top 10 / Top 20 buckets. The first
+    # version of this panel measured a mis-bucketed list (3 of the Top 10 and 5
+    # of the Next 10 wrong); every script was re-run with the corrected lists and
+    # the verdict held -- or, for the three-way gate, got weaker.
     st.warning(
         "**This is a decomposition, not a forecast - and that is measured, not "
-        "caution.** Re-tested end to end in "
-        "`scripts/nifty_bucket_backtest_v2.py` + stages 2-4: a 1,153-session cash "
-        "panel (2022+) and a 492-session F&O panel (2024-07+, where "
-        "`fno_bhavcopy` begins), 200 candidates.\n\n"
-        "- **Futures and options OI add nothing.** Reality check over the whole "
-        "F&O family: **p=0.65**, with the best |t| of 2.74 sitting *below* the "
-        "null's own median of 2.96.\n"
+        "caution.** Re-tested end to end on NSE's own Top-10 / Top-20 buckets "
+        "(`scripts/nifty_bucket_backtest_v2.py` + stages 2-4): a 1,322-session "
+        "cash panel (2021+) and a 1,173-session F&O panel (2022+), 200 "
+        "candidates.\n\n"
+        "- **Futures and options OI add nothing as a family.** Reality check over "
+        "all 140 F&O candidates: **p=0.39** (best |t| 3.14 against a null 95th "
+        "percentile of 4.42).\n"
         "- **Breadth is close-strength wearing a hat.** Top-10 breadth predicts "
-        "the overnight gap at t=+3.09 alone - but put it in one regression with "
-        "the index's own CLR and it collapses to **t=+0.35** while CLR holds "
-        "**t=+3.43** (they correlate +0.655).\n"
+        "the overnight gap at t=+2.65 alone - but in one regression with the "
+        "index's own close-strength it goes to **t=-0.49** while CLR holds "
+        "**t=+3.81** (they correlate +0.661). Next-10 breadth is the cash panel's "
+        "best at |t| 4.17 (p=0.041) and dies the same way: **t=+1.83** beside CLR.\n"
         "- **The week horizon is an overlap artifact.** On strictly disjoint "
-        "weeks the h=5 result is t=+0.12, and the five weekday phase offsets run "
-        "-8.5 to +28.6 bps. The answer depends on which weekday you start "
-        "counting.\n"
-        "- **The three-way gate fails the sharpest test.** Heavy top-10 delivery "
-        "AND rising futures OI AND price up pays +76bps/5d vs a -2bps base across "
-        "21 distinct episodes - but **no single leg and no pair pays** (-5, -11, "
-        "+5, +4, +2 bps). Signals that truly confirm leave a trace in the pairs. "
-        "A control drawing 21 random contiguous blocks of matched size has "
-        "sd 45bps and a 95th percentile of +76.6 against the observed +78.4.\n\n"
+        "weeks Top-10 breadth is t=+0.65, and the top-vs-rest divergence swings "
+        "-5.2 to +18.6 bps across the five weekday phases.\n"
+        "- **The three-way gate is gone.** Heavy top-10 delivery AND rising "
+        "futures OI AND price up now pays +27.6bps/5d over base across 38 "
+        "episodes; random blocks of matched size beat it **20% of the time** "
+        "and dropping its largest episode leaves +7.5bps. On the old mis-bucketed "
+        "list it read +57.5 - a result that halves when three stocks change "
+        "bucket is not structure.\n"
+        "- **One lead, not shipped.** When the Top 10's put OI grows faster than "
+        "call OI, NIFTY's next 5 sessions averaged **+34 bps (59% up)** against "
+        "**-7 bps (50% up)** for the reverse, positive in every year 2022-2026 "
+        "and as large out of sample, and it survives close-strength and 1/5/20-"
+        "day momentum (t=+3.54). But across the whole F&O family it is not "
+        "significant, and at ~0.11 sd per week, confirming it on fresh data "
+        "would take **~6.5 years** of weeks. It stays a lead.\n\n"
         "So no arrow is shown. The state table below is a **base rate**, not a "
         "call.")
+
+
+def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
+                     cached_concentration_trend, cached_state_base_rates,
+                     cached_flow_analogues) -> None:
+    _top, _tail = _labels[0], _labels[-1]
+    _mid = _labels[1] if len(_labels) > 2 else None
+    _top_names = ", ".join(meta["buckets"][_top][:3])
+    _bucket_help = (
+        f"Which slice of the {_name}. {_top} = the "
+        f"{len(meta['buckets'][_top])} biggest by index weight ({_top_names}"
+        f"{'...' if len(meta['buckets'][_top]) > 3 else ''})."
+        + (f" {_mid} = the next {len(meta['buckets'][_mid])}." if _mid else "")
+        + f" {_tail} = everything else.")
 
     # ── today's decomposition ────────────────────────────────────────────────
     st.markdown(f"#### 📐 {d.display} - {selected_date:%d %b %Y}")
@@ -6564,11 +6801,16 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
               f"{d.index_ret:+.2f}%" if d.index_ret is not None else "-")
     c2.metric("Equal-weight basket",
               f"{d.equal_ret:+.2f}%" if d.equal_ret is not None else "-",
-              help="Plain mean of the 50 constituents. No weights needed - exact.")
+              help=f"Plain mean of the {_n_all} constituents. No weights needed "
+                   "- exact.")
     c3.metric("Carry spread",
               f"{d.carry_spread:+.2f} pp" if d.carry_spread is not None else "-",
               help="Index minus equal-weight. Positive = heavyweights carrying it; "
-                   "negative = the broad basket is beating the index.")
+                   "negative = the broad basket is beating the index. Called "
+                   f"top-heavy / broad beyond ±{d.carry_band:.2f} pp for "
+                   f"{_name} — the same percentile of its own history that "
+                   "Nifty's ±0.15 pp sits at, because a small index's spread is "
+                   "naturally wider.")
     c4.metric("Advancing", f"{d.adv_all} / {d.n_present}")
 
     _col = ("#00C853" if "carried" in d.regime else
@@ -6580,7 +6822,7 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
     st.caption(
         "Buckets are **membership by published index weight**, not the weights "
         "themselves - the DB holds no free-float data and weights are *not* "
-        "recoverable from the index series (a returns fit reproduces the index at "
+        "recoverable from the index series (a returns fit reproduces Nifty at "
         "OOS R-squared 0.957 yet drops HDFCBANK out of the top 20; a price-levels "
         "fit gets rank correlation -0.06). Returns below are **equal-weighted "
         "inside each bucket**, so they are not index points.")
@@ -6605,11 +6847,7 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
     st.dataframe(pd.DataFrame(rows), hide_index=True, use_container_width=True,
                  column_config={
                      "Bucket": st.column_config.TextColumn(
-                         "Bucket",
-                         help="Which slice of the Nifty 50. Top 10 = the ten "
-                              "biggest by index weight (RELIANCE, HDFCBANK, "
-                              "ICICIBANK...). Next 10 = ranks 11-20. Rest 30 = "
-                              "everything else."),
+                         "Bucket", help=_bucket_help),
                      "Return %": st.column_config.NumberColumn(
                          "Return %", format="%.2f",
                          help="Plain average of the bucket's stock returns today. "
@@ -6642,7 +6880,7 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                      "Deliv z": st.column_config.NumberColumn(
                          "Deliv z", format="%.2f",
                          help="Mean of each stock's delivery z against ITS OWN "
-                              "100-day normal. Per-symbol, not a z of the bucket "
+                              "21-session normal. Per-symbol, not a z of the bucket "
                               "mean: the Rest-30 mean had correlation +0.674 with "
                               "how many of its names reported that day, so a "
                               "bucket-level z was partly a coverage signal."),
@@ -6727,9 +6965,7 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
     st.dataframe(pd.DataFrame(_flow), hide_index=True, use_container_width=True,
                  column_config={
                      "Bucket": st.column_config.TextColumn(
-                         "Bucket",
-                         help="Top 10 = the ten biggest Nifty stocks by weight. "
-                              "Next 10 = ranks 11-20. Rest 30 = the other thirty."),
+                         "Bucket", help=_bucket_help),
                      "Delivery": st.column_config.TextColumn(
                          "Delivery",
                          help="Was real buying unusually HEAVY or LIGHT today, "
@@ -6799,23 +7035,26 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
     if d.is_expiry_session:
         st.caption("Settlement session — futures and options OI are suppressed, so "
                    "the score runs on the delivery leg alone.")
-    st.error(
+    if sym != "NIFTY":
+        st.error(_ILC_SCORE_VERDICT[_ilc_verdict_key(sym, meta)])
+    else:
+      st.error(
         "**This score does not forecast the index, and that is measured on the "
-        "full four years.** `scripts/nifty_bucket_composite.py`, 1,149 sessions "
-        "2022-2026 on the backfilled F&O history:\n\n"
+        "full four years.** `scripts/nifty_bucket_composite.py`, 1,170 sessions "
+        "2022-2026, on NSE's own Top-10 / Top-20 buckets:\n\n"
         "| | next day | next 5 sessions |\n|---|---|---|\n"
-        "| **net score hit rate** | **48.2%** | **49.1%** |\n"
-        "| base rate (all sessions) | 52.2% | 54.7% |\n"
-        "| information coefficient | -0.012 | +0.005 |\n\n"
-        "It loses to the index's own close-strength (t +2.15 vs -0.69), adds "
-        "nothing beside that control (t -0.17), its quintiles are not monotone, "
-        "and out of sample after Sep-2024 the next-day hit rate falls to **46.3%**. "
-        "The top-10-only variant hits **44.6%**, *below a coin flip*. Read this "
+        "| **net score hit rate** | **49.3%** | **49.6%** |\n"
+        "| base rate (all sessions) | 52.1% | 54.3% |\n"
+        "| information coefficient | -0.016 | +0.011 |\n\n"
+        "It loses to the index's own close-strength (t +1.96 vs +0.27), adds "
+        "nothing beside that control (t -0.29), its quintiles are not monotone, "
+        "and out of sample after Sep-2024 the next-day hit rate is **48.0%**. "
+        "The top-10-only variant hits **44.1%**, *below a coin flip*. Read this "
         "block as **what positioning is doing**, never as where the index is going.")
 
     # ── historical match: the actual sessions, and what NIFTY did next ──────
-    st.markdown("##### When these numbers occurred before — what NIFTY did next")
-    _fa = cached_flow_analogues(selected_date, "NIFTY", 25)
+    st.markdown(f"##### When these numbers occurred before — what {_name} did next")
+    _fa = cached_flow_analogues(selected_date, sym, 25)
     if not _fa.get("ok"):
         st.info(_fa.get("note") or "No historical match available.")
     else:
@@ -6825,14 +7064,14 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
         def _trip(row, leg):
             """Top / Next / Rest for one leg, as one compact cell."""
             return " · ".join(
-                f"{row[f'{b} {leg}']:+.2f}" for b in ("Top 10", "Next 10", "Rest 30"))
+                f"{row[f'{b} {leg}']:+.2f}" for b in _labels)
 
         def _opt_word(v):
             return "call" if v < -0.25 else "put" if v > 0.25 else "bal"
 
         def _optrip(row):
             return " · ".join(
-                _opt_word(row[f"{b} options"]) for b in ("Top 10", "Next 10", "Rest 30"))
+                _opt_word(row[f"{b} options"]) for b in _labels)
 
         _today = pd.Series(_fa["today"])
         _disp = [{
@@ -6877,13 +7116,13 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                          "closest days on record, not perfect twins - the top "
                          "match is typically 30-45%."),
                 "Delivery z": st.column_config.TextColumn(
-                    "Delivery z  (T · N · R)",
-                    help="Three numbers: Top 10, then Next 10, then Rest 30. Each "
-                         "is that bucket's delivery against its own 100-day "
+                    f"Delivery z  ({' · '.join(_labels)})",
+                    help=f"Three numbers: {', then '.join(_labels)}. Each "
+                         "is that bucket's delivery against its own 21-session "
                          "normal. Example: today reads +1.13 / +0.58 / +0.42, and "
                          "a row showing +1.29 / +0.63 / +0.44 is a close match."),
                 "Futures pressure": st.column_config.TextColumn(
-                    "Futures pressure  (T · N · R)",
+                    f"Futures pressure  ({' · '.join(_labels)})",
                     help="NOT the same number as 'Fut OI %' in the Flow read "
                          "table above — that one is the plain average OI change, "
                          "this one is the OI change SIGNED by each stock's price "
@@ -6894,7 +7133,7 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                          "+0.25 plain but -0.72 signed, because OI rose mostly "
                          "on stocks that FELL."),
                 "Call vs put": st.column_config.TextColumn(
-                    "Call vs put  (T · N · R)",
+                    f"Call vs put  ({' · '.join(_labels)})",
                     help="Which option side grew faster in each bucket. "
                          "'call' = calls grew faster (leans bearish), "
                          "'put' = puts grew faster (leans bullish), "
@@ -6903,19 +7142,20 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                     "Next day pts", format="%d",
                     help="That session's % move applied to TODAY'S level"
                          + (f" ({_spot:,.0f})" if _spot else "")
-                         + ". Nifty ran ~17,000 in 2022 and ~23,900 now, so raw "
-                           "historical points are not comparable across the window."),
+                         + ". The index level has moved a long way since 2022, "
+                           "so raw historical points are not comparable across "
+                           "the window."),
                 "Next day %": st.column_config.NumberColumn(
                     "Next day %", format="%.2f",
-                    help="What NIFTY actually did on the session AFTER that day. "
+                    help=f"What {_name} actually did on the session AFTER that day. "
                          "+0.25 means it closed 0.25% higher the next day."),
                 "Next 5 sessions %": st.column_config.NumberColumn(
                     "Next 5 sessions %", format="%.2f",
-                    help="What NIFTY did over the following FIVE sessions - "
+                    help=f"What {_name} did over the following FIVE sessions - "
                          "roughly the next week - measured from that day's close."),
                 "Next 5d pts": st.column_config.NumberColumn(
                     "Next 5d pts", format="%d",
-                    help="The same week move in NIFTY points at today's level, so "
+                    help=f"The same week move in {_name} points at today's level, so "
                          "old and recent rows are directly comparable."),
             })
         _s1, _s5 = _fa["summary"]["d1"], _fa["summary"]["d5"]
@@ -6945,15 +7185,24 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
             f"(a neighbour from last week shares most of its forward window with "
             f"this one). The 25th match sits at distance {_mq['kth']:.2f} against "
             f"{_mq['median_random']:.2f} for a typical day.")
-        st.error(
-            "**Read the spread, not the average.** Measured on 947 sessions "
-            "walk-forward: |mean(25 NEAREST) - actual| = **1.444%** against "
-            "|mean(25 FARTHEST) - actual| = **1.462%** - the most similar days "
-            "forecast NIFTY no better than the *least* similar ones. k nearest vs "
-            "k RANDOM past days is 54.5% vs 54.3%, and beside the index's own "
-            "close-strength the match dies (t +0.67 vs +2.78). Matching a single "
-            "bucket does not rescue it (TOP10-only: IC -0.008, 50.0% hit at 1 "
-            "day). Real analogues, real spread, no predictive content.")
+        if sym != "NIFTY":
+            st.caption(
+                f"**The analogue engine was audited on Nifty, not re-audited on "
+                f"{_name}.** On Nifty the 25 nearest days forecast no better "
+                "than the 25 FARTHEST (1.444% vs 1.462% error), and the flow "
+                f"score it matches on is measured null on {_name} too (above). "
+                "Read the rows as what happened, not as what will.")
+        else:
+          st.error(
+            "**Read the spread, not the average.** Measured walk-forward on 968 "
+            "sessions: |mean(25 NEAREST) - actual| = **1.389%** against "
+            "|mean(25 FARTHEST) - actual| = **1.470%** - the most similar days "
+            "forecast NIFTY barely better than the *least* similar ones. The 25 "
+            "nearest hit 49.1% next day against 51.2% for 25 RANDOM past days, "
+            "and beside the index's own close-strength the match dies (t -0.11 "
+            "vs +2.48). Matching the Top 10 alone does not rescue it (IC +0.076, "
+            "t +1.70 at 1 day). Real analogues, real spread, no predictive "
+            "content.")
 
     # ── state base rates ─────────────────────────────────────────────────────
     st.markdown("##### What has followed this state, historically")
@@ -6961,7 +7210,7 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
     if _st is None:
         st.caption("Today's state is unavailable — a bucket is too thin to "
                    "classify, so no base rate is shown.")
-    br = cached_state_base_rates("NIFTY", 5, selected_date)
+    br = cached_state_base_rates(sym, 5, selected_date)
     if br.empty:
         st.caption("Not enough history for state base rates.")
     else:
@@ -6994,10 +7243,10 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
             column_config={
                 "State": st.column_config.TextColumn(
                     "State",
-                    help="Which half of the index rose. 'Broad up' = both the "
-                         "Top 10 and the Rest 30 mostly rose. 'Top-10 carried' = "
-                         "the heavyweights rose while most of the other 30 fell - "
-                         "the narrow rally you asked about. 'Top-10 lagged' is the "
+                    help=f"Which end of the index rose. 'Broad up' = both the "
+                         f"{_top} and the {_tail} mostly rose. 'Heavyweights "
+                         f"carried' = the {_top} rose while most of the {_tail} "
+                         "fell - the narrow rally. 'Heavyweights lagged' is the "
                          "reverse. Every session falls in exactly one."),
                 "Days": st.column_config.NumberColumn(
                     "Days", format="%d",
@@ -7007,7 +7256,7 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                     "Gap bps", format="%.1f",
                     help="Average OVERNIGHT move: from that day's close to the "
                          "next morning's open. 100 bps = 1.00%, so 16.1 means "
-                         "about 0.16% - roughly 38 NIFTY points at 24,000."),
+                         "about 0.16% of the index."),
                 "Gap up %": st.column_config.NumberColumn(
                     "Gap up %", format="%.1f",
                     help="How often the next morning opened HIGHER. Compare with "
@@ -7029,7 +7278,7 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                          "resolve anything smaller than roughly 36 bps at a week."),
                 "5d up %": st.column_config.NumberColumn(
                     "5d up %", format="%.1f",
-                    help="How often NIFTY was higher a week later."),
+                    help=f"How often {_name} was higher a week later."),
             })
         st.caption(
             "Every session lands in exactly one state, so this is the record, "
@@ -7038,12 +7287,23 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
             "the 5-day column on non-overlapping windows. Read the 5d numbers as "
             "*not measurable here*, not as *real*. And the gap column's ordering "
             "is close-strength: control for CLR and the breadth signal goes to "
-            "t=+0.35. Survivorship applies — this is today's 50 applied to history.")
+            + ("t=-0.49." if sym == "NIFTY" else
+               "no longer significant (see the verdict at the top of this tab).")
+            + f" Survivorship applies — this is today's {_n_all} applied to "
+            "history."
+            + ("" if sym == "NIFTY" else
+               f" The **{_top}** held ~55% of {_name}'s moves until 2025 and ~35% "
+               "since the SEBI weight cap bit in 2026, so older rows describe a "
+               "more top-heavy index than today's."
+               if sym in ("BANKNIFTY", "FINNIFTY") else
+               f" History starts 29 Nov 2024 (when most of today's {_top} got "
+               "stock F&O), so each row rests on few sessions — the 5d column "
+               "especially."))
 
     # ── the measured trend ───────────────────────────────────────────────────
     with st.expander("📈 How often does the index disagree with its own basket?",
                      expanded=False):
-        tr = cached_concentration_trend("NIFTY", 5, selected_date)
+        tr = cached_concentration_trend(sym, 5, selected_date)
         if tr.empty:
             st.info("Not enough history for the concentration trend.")
         else:
@@ -7066,13 +7326,13 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                     "|Carry spread| pp": st.column_config.NumberColumn(
                         "|Carry spread| pp", format="%.3f",
                         help="How far the index typically drifted from a simple "
-                             "average of its 50 stocks, ignoring direction. "
+                             f"average of its {_n_all} stocks, ignoring direction. "
                              "Bigger = the heavyweights and the rest went their "
                              "own ways more often."),
                     "Carried (days)": st.column_config.NumberColumn(
                         "Carried (days)", format="%d",
                         help="Days the index CLOSED UP while fewer than half its "
-                             "own 50 stocks rose - the heavyweights dragged it "
+                             f"own {_n_all} stocks rose - the heavyweights dragged it "
                              "green on their own."),
                     "Carried %": st.column_config.NumberColumn(
                         "Carried %", format="%.1f",
@@ -7088,7 +7348,16 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
                         "Dragged %", format="%.1f",
                         help="The same as a share of that year's sessions."),
                 })
-            st.caption(
+            if sym != "NIFTY":
+                st.caption(
+                    "**Carried** = the index rose while under half its own "
+                    "members did. **Dragged** = it fell while over half "
+                    f"advanced. **A record of today's {_n_all}, not a trend** — "
+                    "the same survivorship that broke Nifty's apparent rise "
+                    "applies here, and was not re-tested per index. Partial "
+                    "calendar years are dropped.")
+            else:
+              st.caption(
                 "**Carried** = the index rose while under half its own members did. "
                 "**Dragged** = it fell while over half advanced.\n\n"
                 "**Read this as a record of today's 50, not as a trend.** On this "

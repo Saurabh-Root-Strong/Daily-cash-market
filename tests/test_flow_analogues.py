@@ -46,7 +46,10 @@ def test_analogue_docstring_keeps_both_halves_of_the_verdict():
 
 
 def test_unknown_index_and_settlement_session_degrade_cleanly():
-    assert not ilc.get_flow_analogues(_dt.date(2026, 9, 3), "BANKNIFTY")["ok"]
+    # BANKNIFTY became a real index here on 29 Sep 2026; SENSEX never will be
+    assert not ilc.get_flow_analogues(_dt.date(2026, 9, 3), "SENSEX")["ok"]
+    # and a defined index WITH history must now produce matches
+    assert ilc.get_flow_analogues(_dt.date(2026, 9, 3), "BANKNIFTY")["ok"]
     r = ilc.get_flow_analogues(_dt.date(2026, 8, 25), "NIFTY")
     if not r["ok"]:
         assert "settlement" in r["note"] or "flow state" in r["note"]

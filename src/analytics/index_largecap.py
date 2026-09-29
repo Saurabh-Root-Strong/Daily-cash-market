@@ -75,39 +75,215 @@ __all__ = [
     "get_index_largecap", "IndexLargeCap", "BucketRow",
     "INDEX_BUCKETS", "get_concentration_trend",
     "get_state_base_rates", "get_flow_analogues", "get_bucket_analogues",
+    "index_meta",
 ]
 
 # ── Bucket membership ─────────────────────────────────────────────────────────
-# Ranked by published index weight (Sep 2026). MEMBERSHIP is what this module
-# needs -- the exact weights are not used and are not claimed. Top-10 membership
-# is stable across rebalances, which is why a bucket read survives without a
-# point-in-time weight table; the exact percentages do not.
-_NIFTY_TOP10 = ("RELIANCE", "BHARTIARTL", "HDFCBANK", "ICICIBANK", "SBIN",
-                "TCS", "BAJFINANCE", "LT", "HINDUNILVR", "INFY")
-_NIFTY_NEXT10 = ("SUNPHARMA", "TITAN", "KOTAKBANK", "MARUTI", "ADANIENT",
-                 "AXISBANK", "M&M", "ADANIPORTS", "HCLTECH", "ULTRACEMCO")
+# NIFTY: NSE's OWN top-10 and top-20, not a hand ranking. NSE Indices runs
+# "Nifty Top 10 / Top 20 Equal Weight" indices whose members are the 10 / 20
+# largest Nifty 50 names by 6-MONTH AVERAGE free-float cap, re-selected every
+# March and September (IndexConstituent/ind_niftytop{10,20}equalweight_list.csv).
+# That is exactly the property a bucket needs: an authoritative rank that does
+# not flip with a week's prices. Spot weights disagree at the margin -- the
+# 31 Aug 2026 factsheet has SBIN #6 and M&M #10 while the averaged selection
+# still held TCS and ITC -- and a spot cut would re-shuffle every month.
+#
+# The list shipped before 29 Sep 2026 had 3 of 10 Top-10 names and 5 of 10
+# Next-10 names wrong against this (TCS/BAJFINANCE/HINDUNILVR/SBIN in the top;
+# ADANIENT, ADANIPORTS, ULTRACEMCO in Next 10; ITC, ETERNAL, NTPC in Rest 30).
+# The verdict numbers measured on it were re-run on these buckets and hold --
+# scripts/ilc_multi_index_backtest.py.
+# In force Mar 2026 .. 29 Sep 2026 (a dated version below takes over on 30 Sep).
+_NIFTY_TOP10 = ("HDFCBANK", "ICICIBANK", "RELIANCE", "BHARTIARTL", "LT",
+                "INFY", "AXISBANK", "KOTAKBANK", "TCS", "ITC")
+_NIFTY_NEXT10 = ("SBIN", "BAJFINANCE", "HINDUNILVR", "M&M", "MARUTI",
+                 "ETERNAL", "HCLTECH", "NTPC", "SUNPHARMA", "TITAN")
 _NIFTY_REST30 = (
-    "APOLLOHOSP", "ASIANPAINT", "BAJAJ-AUTO", "BAJAJFINSV", "BEL", "CIPLA",
-    "COALINDIA", "DRREDDY", "EICHERMOT", "ETERNAL", "GRASIM", "HDFCLIFE",
-    "HINDALCO", "ITC", "INDIGO", "JSWSTEEL", "JIOFIN", "MAXHEALTH", "NTPC",
+    "ADANIENT", "ADANIPORTS", "APOLLOHOSP", "ASIANPAINT", "BAJAJ-AUTO",
+    "BAJAJFINSV", "BEL", "CIPLA", "COALINDIA", "DRREDDY", "EICHERMOT", "GRASIM",
+    "HDFCLIFE", "HINDALCO", "INDIGO", "JIOFIN", "JSWSTEEL", "MAXHEALTH",
     "NESTLEIND", "ONGC", "POWERGRID", "SBILIFE", "SHRIRAMFIN", "TATACONSUM",
-    "TMPV", "TATASTEEL", "TECHM", "TRENT", "WIPRO")
+    "TATASTEEL", "TECHM", "TMPV", "TRENT", "ULTRACEMCO", "WIPRO")
 
-# fno_symbol -> (index_data name, display, {bucket label: symbols})
+# ── The sectoral / midcap F&O indices ────────────────────────────────────────
+# Source: NSE Indices factsheets dated 31 Aug 2026 (top-10 weights) and the
+# niftyindices.com constituent CSVs. Only the TOP 10 weights are published, so
+# every split below is placed at or above rank 10 -- the "Rest" bucket is simply
+# everyone else and its internal order is never needed.
+#
+# WHERE THE SPLITS SIT, AND WHY. A rank cut placed between two near-equal weights
+# flips membership month to month as prices move, and a bucket whose members
+# churn is not a bucket. So each cut sits on the widest WEIGHT GAP in the
+# published top 10, not on a round number copied from Nifty's 10/10/30:
+#   Bank Nifty   17.02 14.86 | 10.27  9.88  9.20 |  7.15 ...    gaps 4.6pp, 2.1pp
+#   Fin Nifty    17.26 15.07 | 10.42  9.63  9.51  8.83 | 4.85   gaps 4.6pp, 4.0pp
+#   Midcap Sel.   9.57 |  5.16  5.05  4.78  4.63 | 4.61 ... 4.13 (flat)
+# Both bank-heavy indices now sit under the SEBI concentration cap phased in
+# through 2025-26 (top name <= 20%, top three <= 45%): HDFCBANK was ~28% of Bank
+# Nifty before it. So "Top 2" today is ~32% of the index, where it used to be
+# ~50% -- see get_state_base_rates for what that does to the history.
+#
+# MIDCAP SELECT HAS NO NATURAL CUT past BSE. Ranks 2-10 span 5.16 to 4.13, so
+# the Top 5 / Next 5 boundary (4.63 vs 4.61) is 0.02pp wide and WILL churn. Its
+# buckets are kept for a consistent layout, and the panel says the boundary is
+# arbitrary rather than presenting it as structure.
+_BANK_TOP2 = ("HDFCBANK", "ICICIBANK")
+_BANK_NEXT3 = ("SBIN", "KOTAKBANK", "AXISBANK")
+_BANK_REST9 = ("FEDERALBNK", "INDUSINDBK", "AUBANK", "IDFCFIRSTB", "BANKBARODA",
+               "CANBK", "PNB", "UNIONBANK", "YESBANK")
+
+_FIN_TOP2 = ("HDFCBANK", "ICICIBANK")
+_FIN_NEXT4 = ("SBIN", "KOTAKBANK", "AXISBANK", "BAJFINANCE")
+_FIN_REST14 = ("SHRIRAMFIN", "BSE", "BAJAJFINSV", "CHOLAFIN", "HDFCLIFE",
+               "ICICIGI", "JIOFIN", "LICHSGFIN", "MFSL", "MUTHOOTFIN", "PFC",
+               "RECLTD", "SBICARD", "SBILIFE")
+
+_MID_TOP5 = ("BSE", "PAYTM", "HEROMOTOCO", "INDUSINDBK", "POLICYBZR")
+_MID_NEXT5 = ("BHEL", "DIXON", "AUBANK", "PERSISTENT", "SUZLON")
+_MID_REST15 = ("ASHOKLEY", "AUROPHARMA", "BHARATFORG", "FORTIS", "HINDPETRO",
+               "INDIANB", "INDUSTOWER", "NAUKRI", "LICI", "LUPIN", "MARICO",
+               "POLYCAB", "SRF", "SWIGGY", "YESBANK")
+
+# fno_symbol -> index_data name, display, ordered {bucket label: symbols}, and
+# the per-index constants that used to be Nifty literals:
+#   weights     rough published weight share per bucket, used ONLY to blend the
+#               display score (never claimed as index points)
+#   carry_band  |carry spread| beyond which the day is called top-heavy / broad.
+#               Nifty's 0.15pp is the median of its own |spread| (p50.7). Each
+#               other band is 0.15 x (that index's median / Nifty's median) over
+#               the sessions since Mar 2026, i.e. the CURRENT regime: the SEBI
+#               cap halved Bank Nifty's median |spread| (0.369 -> 0.184) and cut
+#               Fin Nifty's (0.335 -> 0.235), so a full-history band (0.34 / 0.32)
+#               would call almost no post-cap day top-heavy.
+#               scripts/ilc_multi_index_backtest.py [8].
+#   history_from  earliest session the base rates and analogues may use -- see
+#               get_state_base_rates for why this is not always "5 years".
+# The FIRST bucket is the heavyweights and the LAST is the tail; the state
+# partition reads those two by POSITION, so labels are free to differ by index.
 INDEX_BUCKETS: dict[str, dict] = {
     "NIFTY": dict(
         index_name="Nifty 50", display="Nifty 50",
         buckets={"Top 10": _NIFTY_TOP10,
                  "Next 10": _NIFTY_NEXT10,
                  "Rest 30": _NIFTY_REST30},
+        weights={"Top 10": 0.46, "Next 10": 0.24, "Rest 30": 0.30},
+        carry_band=0.15, history_from=None,
+    ),
+    "BANKNIFTY": dict(
+        index_name="Nifty Bank", display="Bank Nifty",
+        buckets={"Top 2": _BANK_TOP2, "Next 3": _BANK_NEXT3,
+                 "Rest 9": _BANK_REST9},
+        weights={"Top 2": 0.32, "Next 3": 0.29, "Rest 9": 0.39},
+        carry_band=0.21, history_from=None,
+    ),
+    "FINNIFTY": dict(
+        index_name="Nifty Financial Services", display="Fin Nifty",
+        buckets={"Top 2": _FIN_TOP2, "Next 4": _FIN_NEXT4,
+                 "Rest 14": _FIN_REST14},
+        weights={"Top 2": 0.32, "Next 4": 0.38, "Rest 14": 0.30},
+        carry_band=0.27, history_from=None,
+    ),
+    "MIDCPNIFTY": dict(
+        index_name="Nifty Midcap Select", display="Midcap Select",
+        buckets={"Top 5": _MID_TOP5, "Next 5": _MID_NEXT5,
+                 "Rest 15": _MID_REST15},
+        weights={"Top 5": 0.29, "Next 5": 0.22, "Rest 15": 0.49},
+        carry_band=0.11, history_from=date(2024, 11, 29),
     ),
 }
 
-# Rough published weight share of each bucket, used only to blend the display
-# score. The exact weights are not recoverable from this DB (see the module
-# docstring); these are share-of-index approximations and the composite was
-# tested under equal weighting too, with the same null result.
-_BUCKET_WEIGHT = {"Top 10": 0.46, "Next 10": 0.24, "Rest 30": 0.30}
+# Nifty's weights, kept under the old name: the composite was measured with
+# them (scripts/nifty_bucket_composite.py) and tested under equal weighting too,
+# with the same null result.
+_BUCKET_WEIGHT = INDEX_BUCKETS["NIFTY"]["weights"]
+
+# ── Membership is DATED ──────────────────────────────────────────────────────
+# INDEX_BUCKETS above is the basket as of the 31 Aug 2026 factsheets. NSE
+# reconstitutes every March and September, so one frozen list goes wrong on the
+# next effective date. Each version below applies from `effective` onward, and
+# index_meta(sym, d) returns the basket in force on d.
+#
+# 30 Sep 2026 (close of 29 Sep), NSE Indices press release 10 Aug 2026
+# (niftyindices.com/Press_Release/ind_prs10082026.pdf):
+#   Nifty 50       WIPRO out, BSE in (6-month avg free-float cap Rs 1,40,xxx Cr
+#                  against Wipro's 55,930 -- far below the Next-10 cut, so Rest 30)
+#   Nifty Top 10 Equal Weight: TCS out, SBIN in; Top 15 / Top 20 unchanged ->
+#                  SBIN moves up to Top 10 and TCS down to Next 10
+#   Nifty Bank, Nifty Financial Services: "No changes are being made"
+#   Midcap Select  out BSE, FORTIS, HINDPETRO, POLYCAB
+#                  in  FEDERALBNK, GVT&D, INDHOTEL, MCX
+# Midcap Select loses BSE, its only real heavyweight (9.57%), so its buckets are
+# re-cut. PROVISIONAL until NSE's 30 Sep factsheet: Nifty Midcap 100 is uncapped
+# free-float weighted and Midcap Select's weights are exactly proportional to it
+# (BSE/PAYTM = 9.57/5.16 = 1.855 in Select, 3.84/2.07 = 1.855 in Midcap 100,
+# both 31 Aug 2026), so incoming names can be placed on Select's scale:
+#   FEDERALBNK 2.52 -> ~6.28   MCX 2.48 -> ~6.18   | PAYTM 5.16 HERO 5.06
+#   INDUSINDBK 4.78 POLICYBZR 4.63 BHEL 4.61 | DIXON 4.40 AUBANK 4.39 ...
+# The only gap wider than 0.3pp is after rank 2 (1.02pp) -> Top 2 / Next 5 /
+# Rest 18. INDHOTEL ranks inside the top 10 per NSE's note but is not in Midcap
+# 100 yet, so its exact rank is unknown; GVT&D entered on FULL market cap, its
+# free float is ~49%. Both sit in Rest 18 until the factsheet says otherwise.
+_NIFTY_TOP10_2609 = tuple(s if s != "TCS" else "SBIN" for s in _NIFTY_TOP10)
+_NIFTY_NEXT10_2609 = tuple(s if s != "SBIN" else "TCS" for s in _NIFTY_NEXT10)
+_NIFTY_REST30_2609 = tuple(sorted(
+    (set(_NIFTY_REST30) - {"WIPRO"}) | {"BSE"}))
+_MID2609_TOP2 = ("FEDERALBNK", "MCX")
+_MID2609_NEXT5 = ("PAYTM", "HEROMOTOCO", "INDUSINDBK", "POLICYBZR", "BHEL")
+_MID2609_REST18 = ("DIXON", "AUBANK", "PERSISTENT", "SUZLON", "INDHOTEL",
+                   "GVT&D", "ASHOKLEY", "AUROPHARMA", "BHARATFORG", "INDIANB",
+                   "INDUSTOWER", "NAUKRI", "LICI", "LUPIN", "MARICO", "SRF",
+                   "SWIGGY", "YESBANK")
+
+_VERSIONS: dict[str, list[dict]] = {
+    "NIFTY": [dict(
+        effective=date(2026, 9, 30),
+        buckets={"Top 10": _NIFTY_TOP10_2609, "Next 10": _NIFTY_NEXT10_2609,
+                 "Rest 30": _NIFTY_REST30_2609},
+        source=("NSE review 10 Aug 2026: WIPRO out, BSE in (Rest 30); "
+                "SBIN up to Top 10, TCS down to Next 10"),
+        provisional=False)],
+    "MIDCPNIFTY": [dict(
+        effective=date(2026, 9, 30),
+        buckets={"Top 2": _MID2609_TOP2, "Next 5": _MID2609_NEXT5,
+                 "Rest 18": _MID2609_REST18},
+        weights={"Top 2": 0.13, "Next 5": 0.25, "Rest 18": 0.62},
+        source=("NSE review 10 Aug 2026: BSE, FORTIS, HINDPETRO, POLYCAB out; "
+                "FEDERALBNK, GVT&D, INDHOTEL, MCX in"),
+        provisional=True)],
+}
+
+
+def index_meta(fno_symbol: str, on: Optional[date] = None) -> Optional[dict]:
+    """The basket in force on `on` (default: today). None for an unknown index.
+
+    Returns a copy carrying `effective` (None for the base factsheet basket),
+    `source` and `provisional`, so the panel can say which basket it used.
+    """
+    base = INDEX_BUCKETS.get(fno_symbol)
+    if base is None:
+        return None
+    meta = dict(base, effective=None, provisional=False,
+                source=("NSE Top 10 / Top 20 Equal Weight membership"
+                        if fno_symbol == "NIFTY" else "NSE factsheets, 31 Aug 2026"))
+    on = on or date.today()
+    for v in _VERSIONS.get(fno_symbol, []):
+        if on >= v["effective"]:
+            meta.update(v)
+            if "weights" not in v:
+                # same labels, same rough shares
+                meta["weights"] = base["weights"]
+    return meta
+
+
+def _min_valid(n_members: int) -> int:
+    """F&O names a bucket needs before its futures/options read is shown.
+
+    Four for Nifty's 10- and 30-name buckets, as before. A fixed four would
+    silence a 2- or 3-name heavyweight bucket FOREVER -- Bank Nifty's Top 2 could
+    never print a futures lean -- so small buckets need all-but-none of their
+    names, and never fewer than two: one stock is a stock, not a bucket.
+    """
+    return max(2, min(4, -(-n_members * 3 // 5)))
 # Sessions the delivery normal is measured over. 21 = roughly one trading month.
 #
 # Measured against a 100-session alternative (scripts/ilc_deliv_baseline.py):
@@ -180,7 +356,8 @@ class BucketRow:
         This is a RELATIVE read and deliberately not conditioned on price -- it is
         the construction the user described, and it was tested as such.
         """
-        if self.opt_valid < 4 or self.ce_oi_pct is None or self.pe_oi_pct is None:
+        if (self.opt_valid < _min_valid(self.n_members)
+                or self.ce_oi_pct is None or self.pe_oi_pct is None):
             return None
         d = self.pe_oi_pct - self.ce_oi_pct
         if abs(d) < 0.25:
@@ -211,10 +388,16 @@ class BucketRow:
     @property
     def fut_lean(self) -> Optional[int]:
         """+1 net fresh-long / -1 net fresh-short / 0 mixed. None when too thin."""
-        if self.fut_valid < 4:
+        if self.fut_valid < _min_valid(self.n_members):
             return None
         bull = self.fut_long + self.fut_cover
         bear = self.fut_short + self.fut_unwind
+        # A lean needs the quorum among names that actually MOVED OI (>0.5%), not
+        # just names with a futures row. Otherwise one stock building while its
+        # partner sat flat printed "net long build" for the whole bucket: 41.6% of
+        # Bank/Fin Top-2 leans were exactly that (Nifty buckets: 0.6-0.8%).
+        if bull + bear < _min_valid(self.n_members):
+            return 0
         if bull > bear * 1.5:  return 1
         if bear > bull * 1.5:  return -1
         return 0
@@ -251,6 +434,8 @@ class IndexLargeCap:
     # 2023-11-12 runs the other way at 64.1% delivery against ~53% on its
     # neighbours. Shown as a caveat rather than suppressed.
     unusual_session: Optional[str] = None
+    # rough weight share per bucket label, from the basket in force on the date
+    bucket_weights: dict = field(default_factory=dict)
 
     @property
     def net_score(self) -> Optional[float]:
@@ -264,6 +449,13 @@ class IndexLargeCap:
         nothing beside that control (t -0.17), its quintiles are not monotone, and
         the walk-forward half is worse than the in-sample half (46.3% next-day hit
         after 2024-09). The top-10-only variant hits 44.6%, BELOW a coin flip.
+
+        RE-MEASURED 29 Sep 2026 on NSE's own Top-10 / Top-20 buckets (the list
+        above had 3 Top-10 and 5 Next-10 names wrong), 1,170 sessions:
+            next day   IC -0.016   hit 49.3%   against a 52.1% base rate
+            next 5 d   IC +0.011   hit 49.6%   against a 54.3% base rate
+        beside close-strength t -0.29, walk-forward 48.0%, top-10-only 44.1% --
+        the same verdict. Other indices: scripts/ilc_multi_index_backtest.py.
         """
         scored = [r for r in self.rows if r.flow_score is not None]
         if not scored:
@@ -272,26 +464,34 @@ class IndexLargeCap:
         # future index whose buckets are not named "Top 10"/"Next 10"/"Rest 30"
         # would render a blank score with no explanation. Fall back to equal
         # weighting instead: an approximate blend beats a mystery blank.
-        if any(r.label not in _BUCKET_WEIGHT for r in scored):
+        wmap = (self.bucket_weights
+                or INDEX_BUCKETS.get(self.fno_symbol, {}).get("weights", _BUCKET_WEIGHT))
+        if any(r.label not in wmap for r in scored):
             return float(np.mean([r.flow_score for r in scored]))
-        tw = sum(_BUCKET_WEIGHT[r.label] for r in scored)
+        tw = sum(wmap[r.label] for r in scored)
         if not tw:
             return None
-        return float(sum(r.flow_score * _BUCKET_WEIGHT[r.label]
-                         for r in scored) / tw)
+        return float(sum(r.flow_score * wmap[r.label] for r in scored) / tw)
 
     @property
     def state(self) -> Optional[str]:
-        """Which of the four top-10 / rest-30 states today falls in.
+        """Which of the four heavyweight / tail states today falls in.
 
-        Shares its label constants with get_state_base_rates(), so the live read
-        and the historical table can never fall out of sync.
+        Reads the FIRST bucket (heavyweights) and the LAST (the tail) by position,
+        so Bank Nifty's "Top 2 / Rest 9" classifies exactly as Nifty's "Top 10 /
+        Rest 30" does. Shares its label constants with get_state_base_rates(), so
+        the live read and the historical table can never fall out of sync.
         """
-        by = {r.label: r for r in self.rows}
-        t, r30 = by.get("Top 10"), by.get("Rest 30")
-        if t is None or r30 is None or t.thin or r30.thin:
+        if len(self.rows) < 2:
             return None
-        return _classify(t.adv_pct, r30.adv_pct)
+        t, tail = self.rows[0], self.rows[-1]
+        if t.thin or tail.thin:
+            return None
+        return _classify(t.adv_pct, tail.adv_pct, t.ret_pct, tail.ret_pct)
+
+    @property
+    def carry_band(self) -> float:
+        return INDEX_BUCKETS.get(self.fno_symbol, {}).get("carry_band", 0.15)
 
     @property
     def regime(self) -> str:
@@ -303,9 +503,9 @@ class IndexLargeCap:
             return "Heavyweights carried a red market"
         if self.index_ret < 0 and br > 50:
             return "Heavyweights dragged a green market"
-        if self.carry_spread > 0.15:
+        if self.carry_spread > self.carry_band:
             return "Index ahead of its own basket — top-heavy day"
-        if self.carry_spread < -0.15:
+        if self.carry_spread < -self.carry_band:
             return "Basket ahead of the index — broad day"
         return "Index and basket moved together"
 
@@ -539,13 +739,14 @@ def _bucket_row(label: str, members: tuple, hist: pd.DataFrame,
 
 def get_index_largecap(trade_date: date, fno_symbol: str = "NIFTY") -> IndexLargeCap:
     """Weight-bucket decomposition of one index for `trade_date`. Causal."""
-    meta = INDEX_BUCKETS.get(fno_symbol)
+    meta = index_meta(fno_symbol, trade_date)
     if meta is None:
         return IndexLargeCap(trade_date=trade_date, fno_symbol=fno_symbol,
                              display=fno_symbol, data_ok=False,
                              note=f"No bucket definition for {fno_symbol}.")
     out = IndexLargeCap(trade_date=trade_date, fno_symbol=fno_symbol,
-                        display=meta["display"])
+                        display=meta["display"],
+                        bucket_weights=dict(meta["weights"]))
     all_syms = tuple(s for b in meta["buckets"].values() for s in b)
 
     hist = _load_cash(all_syms, trade_date)
@@ -656,7 +857,7 @@ def get_concentration_trend(fno_symbol: str = "NIFTY", years: int = 5,
     would settle it. Until then this is a description of one basket, not evidence
     that concentration is rising.
     """
-    meta = INDEX_BUCKETS.get(fno_symbol)
+    meta = index_meta(fno_symbol, as_of)
     if meta is None:
         return pd.DataFrame()
     all_syms = tuple(s for b in meta["buckets"].values() for s in b)
@@ -665,6 +866,8 @@ def get_concentration_trend(fno_symbol: str = "NIFTY", years: int = 5,
     # render 2026 rows underneath it. The panel is a record as of the date on screen.
     anchor = as_of or date.today()
     start = anchor - timedelta(days=365 * years + 30)
+    if meta.get("history_from"):
+        start = max(start, meta["history_from"])
     df = query_dataframe(f"""
         SELECT trade_date, symbol,
                (close_price - prev_close) / NULLIF(prev_close, 0) * 100 AS r
@@ -685,7 +888,9 @@ def get_concentration_trend(fno_symbol: str = "NIFTY", years: int = 5,
     R = df.pivot_table("r", "trade_date", "symbol").sort_index()
     y = idx.set_index("trade_date")["pct_chg"].astype(float).reindex(R.index)
     cov = R.notna().sum(axis=1)
-    keep = cov >= 40                       # need most of the basket for breadth
+    # most of the basket is needed for breadth: 40 of Nifty's 50, and the same
+    # 80% share of a 14-, 20- or 25-name index (a literal 40 blanked all three)
+    keep = cov >= 0.8 * len(all_syms)
     R, y = R[keep], y[keep]
     ew = R.mean(axis=1)
     adv = (R > 0).sum(axis=1) / R.notna().sum(axis=1) * 100
@@ -713,18 +918,43 @@ def get_concentration_trend(fno_symbol: str = "NIFTY", years: int = 5,
 # Labels are shared by the live read and the historical table so the two can
 # never drift apart. Order is the order they are rendered in.
 STATE_BROAD_UP   = "Broad up"
-STATE_CARRIED    = "Top-10 carried (narrow up)"
-STATE_LAGGED     = "Top-10 lagged (broad up)"
+# "Heavyweights", not "Top-10": the same partition runs on every index, and on
+# Bank Nifty the heavyweight bucket is two names.
+STATE_CARRIED    = "Heavyweights carried (narrow up)"
+STATE_LAGGED     = "Heavyweights lagged (broad up)"
 STATE_BROAD_DOWN = "Broad down"
 
 
-def _classify(a10: Optional[float], a30: Optional[float]) -> Optional[str]:
-    """Four-way split on whether each half of the index advanced."""
-    if a10 is None or a30 is None:
+def _up(adv: float, ret: Optional[float]) -> bool:
+    """Did this bucket advance? Majority of names up; an exact tie goes to the
+    bucket's equal-weight return.
+
+    Without the tie-break an exactly-half day counted as NOT up. Harmless-looking,
+    but measured (2022-2026): Bank/Fin Nifty's Top 2 split one-up/one-down on
+    34.0% of sessions, and on those days the pair's return was positive 51% of
+    the time -- so ~17% of ALL sessions were filed under the wrong state, piling
+    into "down". Nifty's Top 10 ties on 12.0% (59% of them up). An odd-sized
+    bucket cannot tie, so Midcap Select's old Top 5 was unaffected.
+    """
+    if adv != 50 or ret is None or pd.isna(ret):
+        return adv > 50
+    return ret > 0
+
+
+def _classify(a10: Optional[float], a30: Optional[float],
+              r10: Optional[float] = None,
+              r30: Optional[float] = None) -> Optional[str]:
+    """Four-way split on whether each end of the index advanced.
+
+    r10/r30 are the buckets' equal-weight returns, used only to break an exact
+    50% tie (see _up). Without them a tie counts as not up, as before.
+    """
+    if a10 is None or a30 is None or pd.isna(a10) or pd.isna(a30):
         return None
-    if a10 > 50 and a30 > 50:   return STATE_BROAD_UP
-    if a10 > 50:                return STATE_CARRIED
-    if a30 > 50:                return STATE_LAGGED
+    u10, u30 = _up(a10, r10), _up(a30, r30)
+    if u10 and u30:   return STATE_BROAD_UP
+    if u10:           return STATE_CARRIED
+    if u30:           return STATE_LAGGED
     return STATE_BROAD_DOWN
 
 
@@ -768,19 +998,52 @@ def get_state_base_rates(fno_symbol: str = "NIFTY", years: int = 5,
         absence. The gap horizon (~5bps detectable) is the only one that can see
         an economically relevant effect.
 
+    RE-MEASURED 29 Sep 2026 ON THE CORRECTED BUCKETS. The bullets above were
+    measured on a hand-ranked list with 3 Top-10 and 5 Next-10 names wrong. The
+    same scripts re-run on NSE's own Top-10 / Top-20 membership (1,322 cash
+    sessions, 1,173 F&O sessions):
+      * the CARRIED state's gap edge vanishes: +0.2bps against a +5bps base;
+      * top-10 breadth beside close-strength: t=-0.49 (CLR +3.81, corr +0.661);
+        next-10 breadth is the cash panel's best (|t| 4.17, reality check
+        p=0.041) and falls to t=+1.83 beside CLR;
+      * F&O family reality check p=0.39;
+      * the three-way gate drops to +27.6bps excess over 38 episodes, random
+        blocks beat it 20% of the time, episode-t +0.50 -- it halved when three
+        stocks changed bucket, which is what a subsample does;
+      * ONE LEAD, NOT AN EDGE: top-10 put OI growing faster than call OI ->
+        next 5 sessions +34bps (59% up) vs -7bps (50% up), every year positive,
+        as large out of sample, t=+3.54 beside CLR and 1/5/20d momentum. Not
+        significant across the F&O family, and at ~0.11 sd per disjoint week a
+        fresh-data confirmation needs ~340 weeks. Recorded, not shipped.
+
     Survivorship applies here as it does to the concentration trend: the basket
     is TODAY's 50 applied to history.
+
+    BANK NIFTY, FIN NIFTY, MIDCAP SELECT -- re-measured, not inherited
+    (scripts/ilc_multi_index_backtest.py). Same null: every family survivor is
+    close-strength again (Bank Top-2 futures -> gap |t| 3.48 alone, +1.72 beside
+    CLR; Fin 3.68 -> +1.75; Midcap family p=0.056, and 0.032 on the 30-Sep-2026
+    basket with the best falling to +1.01). Two index-specific caveats:
+      * the SEBI cap (top name <= 20%, top 3 <= 45%) cut the Top-2 bucket's
+        implied share of Bank Nifty moves from ~0.55 (2022-2025) to 0.39 by
+        Jun-2026, Fin Nifty's to 0.33 -- older base-rate rows describe a more
+        top-heavy index than today's;
+      * Midcap Select starts at history_from (29 Nov 2024), when most of its
+        current heavyweights got stock F&O -- ~450 sessions, so every row is thin.
     """
-    meta = INDEX_BUCKETS.get(fno_symbol)
+    meta = index_meta(fno_symbol, as_of)
     if meta is None:
         return pd.DataFrame()
     buckets = meta["buckets"]
-    top10 = tuple(buckets["Top 10"])
-    rest30 = tuple(buckets["Rest 30"])
+    # first bucket = heavyweights, last = tail, by POSITION (see IndexLargeCap.state)
+    top10 = tuple(list(buckets.values())[0])
+    rest30 = tuple(list(buckets.values())[-1])
     all_syms = tuple(s for b in buckets.values() for s in b)
     ph = ", ".join("?" * len(all_syms))
     anchor = as_of or date.today()
     start = anchor - timedelta(days=365 * years + 30)
+    if meta.get("history_from"):
+        start = max(start, meta["history_from"])
     df = query_dataframe(f"""
         SELECT trade_date, symbol,
                (close_price - prev_close) / NULLIF(prev_close, 0) * 100 AS r
@@ -810,16 +1073,20 @@ def get_state_base_rates(fno_symbol: str = "NIFTY", years: int = 5,
         return (s > 0).sum(axis=1) / n.where(n > 0) * 100
 
     a10, a30 = adv_pct(top10), adv_pct(rest30)
+    # equal-weight bucket returns, only to break exact-half ties (see _up)
+    r10 = R[[x for x in top10 if x in R.columns]].mean(axis=1)
+    r30 = R[[x for x in rest30 if x in R.columns]].mean(axis=1)
     # forward returns. Compounded in log space so a 5-day figure is a real return.
     lg = np.log1p(y / 100.0)
     fwd5 = np.expm1(lg.iloc[::-1].rolling(5).sum().iloc[::-1].shift(-1)) * 100.0
     fwd1 = y.shift(-1)
     gap = (idx["open_val"] / idx["close_val"].shift(1) - 1).reindex(ix).shift(-1) * 100
-    k = pd.DataFrame({"a10": a10, "a30": a30, "gap": gap,
-                      "d1": fwd1, "d5": fwd5}).dropna()
+    k = pd.DataFrame({"a10": a10, "a30": a30, "r10": r10, "r30": r30,
+                      "gap": gap, "d1": fwd1, "d5": fwd5}).dropna()
     if k.empty:
         return pd.DataFrame()
-    k["state"] = [_classify(x, z) for x, z in zip(k["a10"], k["a30"])]
+    k["state"] = [_classify(x, z, rx, rz) for x, z, rx, rz
+                  in zip(k["a10"], k["a30"], k["r10"], k["r30"])]
     rows = []
     for st in (STATE_BROAD_UP, STATE_CARRIED, STATE_LAGGED, STATE_BROAD_DOWN):
         g = k[k["state"] == st]
@@ -869,7 +1136,7 @@ def _flow_state_matrix(fno_symbol: str, as_of: date, years: int = 5,
         e = pd.DataFrame()
         return (e, e, e) if with_raw else (e, e)
 
-    meta = INDEX_BUCKETS.get(fno_symbol)
+    meta = index_meta(fno_symbol, as_of)
     if meta is None:
         return _empty()
     buckets = meta["buckets"]
@@ -958,6 +1225,10 @@ def _flow_state_matrix(fno_symbol: str, as_of: date, years: int = 5,
             PE[[s for s in cols if s in PE.columns]].reindex(sub.index)
             - CE[[s for s in cols if s in CE.columns]].reindex(sub.index)).mean(axis=1)
     X = pd.DataFrame(raw).sort_index()
+    if meta.get("history_from"):
+        # cut BEFORE standardising, so no pre-cutoff session leaks into the
+        # 250-session mean/sd that today's z is measured against
+        X = X[X.index >= pd.Timestamp(meta["history_from"])]
     Z = ((X - X.rolling(_Z_WIN, min_periods=_Z_MIN).mean().shift(1)) /
          X.rolling(_Z_WIN, min_periods=_Z_MIN).std().shift(1)
          ).replace([np.inf, -np.inf], np.nan).dropna()
@@ -1005,6 +1276,10 @@ def get_flow_analogues(trade_date: date, fno_symbol: str = "NIFTY",
     The state space is effectively 5.6-dimensional (participation ratio 5.63 of 9),
     so this is not simply the curse of dimensionality -- the neighbours really are
     near. They just do not share a future.
+
+    RE-MEASURED 29 Sep 2026 on NSE's own Top-10 / Top-20 buckets, 968 sessions:
+    nearest 1.389% vs farthest 1.470%; 25 nearest 49.1% vs 25 random 51.2% at 1d;
+    beside CLR t -0.11 (1d) and +0.27 (5d). Same verdict.
     """
     out = {"ok": False, "note": "", "k": k, "purge": purge, "spot": None,
            "matches": pd.DataFrame(), "summary": {}}
@@ -1171,7 +1446,7 @@ def get_bucket_analogues(trade_date: date, fno_symbol: str = "NIFTY",
     """
     out = {"ok": False, "note": "", "k": k, "purge": purge,
            "spot": None, "buckets": {}}
-    meta = INDEX_BUCKETS.get(fno_symbol)
+    meta = index_meta(fno_symbol, trade_date)
     if meta is None:
         out["note"] = f"No bucket map for {fno_symbol}."
         return out
