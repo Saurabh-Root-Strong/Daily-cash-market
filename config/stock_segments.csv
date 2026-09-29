@@ -1,6 +1,8 @@
-# 5th classification level: business SEGMENT inside an NSE basic industry (Pharma/Biotech/Healthcare Research so far).
+# 5th classification level: business SEGMENT inside an NSE basic industry.
 # One primary segment per company by revenue mix; secondary where material. Hand-assigned from company profiles.
 # Re-review annually and after demergers/acquisitions (business mix drifts).
+# Coverage: Pharma/Biotech/HC research, Auto Components, Civil Construction, Specialty Chemicals.
+# Whether a segment groups RETURNS (vs describes the business only) is recorded in config/segment_validation.csv.
 symbol,segment,secondary_segment,market_focus,mnc_subsidiary,confidence,evidence,source,as_of
 AAREYDRUGS,API / Bulk Drugs & Intermediates,,Global B2B,False,medium,APIs + chemical trading,Screener company profile (About/Key Points),2026-09-29
 AARTIDRUGS,API / Bulk Drugs & Intermediates,,Global B2B,False,high,"50+ APIs, global leader fluoroquinolones",Screener company profile (About/Key Points),2026-09-29
@@ -36,12 +38,57 @@ SYMBIOTEC,API / Bulk Drugs & Intermediates,,Global B2B,False,medium,steroid and 
 VALIANTLAB,API / Bulk Drugs & Intermediates,,Global B2B,False,high,paracetamol API,Screener company profile (About/Key Points),2026-09-29
 VINEETLAB,API / Bulk Drugs & Intermediates,,Global B2B,False,medium,API intermediates and bulk drugs,Screener company profile (About/Key Points),2026-09-29
 WANBURY,API / Bulk Drugs & Intermediates,Branded Generics – India & EM,Global B2B,False,high,API exports + India formulations,Screener company profile (About/Key Points),2026-09-29
+ALKYLAMINE,"Amines, Acetyls & Solvent Derivatives",,B2B,False,high,aliphatic amines,Screener company profile (About/Key Points),2026-09-29
+BALAMINES,"Amines, Acetyls & Solvent Derivatives",,B2B,False,high,aliphatic amines and derivatives,Screener company profile (About/Key Points),2026-09-29
+DIAMINESQ,"Amines, Acetyls & Solvent Derivatives",,B2B,False,high,"ethylene amines, piperazine",Screener company profile (About/Key Points),2026-09-29
+LXCHEM,"Amines, Acetyls & Solvent Derivatives",Pharma & Agro Intermediates / Custom Synthesis,B2B,False,high,"ethyl acetate, acetic acid, diketene derivatives",Screener company profile (About/Key Points),2026-09-29
+PRASOLCHEM,"Amines, Acetyls & Solvent Derivatives",Pharma & Agro Intermediates / Custom Synthesis,B2B,False,high,acetone and phosphorus derivatives (web-verified at IPO),Screener profile + web-verified,2026-09-29
 HESTERBIO,Animal Health,,Global,False,high,poultry and animal vaccines,Screener company profile (About/Key Points),2026-09-29
 LASA,Animal Health,API / Bulk Drugs & Intermediates,Global,False,high,veterinary APIs,Screener company profile (About/Key Points),2026-09-29
 NGLFINE,Animal Health,API / Bulk Drugs & Intermediates,Global,False,high,veterinary APIs,Screener company profile (About/Key Points),2026-09-29
 VIYASH,Animal Health,API / Bulk Drugs & Intermediates,Global,False,high,ex-Sequent animal health formulations + APIs,Screener company profile (About/Key Points),2026-09-29
+AARTISURF,"Aroma, Surfactants & Personal-care Ingredients",,B2B,False,high,surfactants for home and personal care,Screener company profile (About/Key Points),2026-09-29
+GALAXYSURF,"Aroma, Surfactants & Personal-care Ingredients",,B2B,False,high,surfactants and specialty care,Screener company profile (About/Key Points),2026-09-29
+GEMAROMA,"Aroma, Surfactants & Personal-care Ingredients",,B2B,False,high,essential oils and aroma chemicals,Screener company profile (About/Key Points),2026-09-29
+JAYAGROGN,"Aroma, Surfactants & Personal-care Ingredients",,B2B,False,medium,castor oil oleochemicals,Screener company profile (About/Key Points),2026-09-29
+NITTAGELA,"Aroma, Surfactants & Personal-care Ingredients",,B2B,False,medium,"gelatin, collagen peptide (JV with Nitta Gelatin)",Screener company profile (About/Key Points),2026-09-29
+OAL,"Aroma, Surfactants & Personal-care Ingredients",,B2B,False,high,"aroma chemicals, camphor, flavours",Screener company profile (About/Key Points),2026-09-29
+PRIVISCL,"Aroma, Surfactants & Personal-care Ingredients",,B2B,False,high,aroma and fragrance chemicals,Screener company profile (About/Key Points),2026-09-29
+SHK,"Aroma, Surfactants & Personal-care Ingredients",,B2B,False,high,fragrances and aroma ingredients,Screener company profile (About/Key Points),2026-09-29
+SUNSHIEL,"Aroma, Surfactants & Personal-care Ingredients",Industrial Process Chemicals & Distribution,B2B,False,medium,home/personal care and industrial specialty,Screener company profile (About/Key Points),2026-09-29
+STUDDS,Auto Accessories & Aftermarket,,2W,False,high,2W helmets and accessories,Screener company profile (About/Key Points),2026-09-29
+DHOOTTRANS,"Auto Electricals, Electronics & Lighting",,2W,False,high,2W/3W wiring harness leader (web-verified at IPO),Screener company profile (About/Key Points),2026-09-29
+FIEMIND,"Auto Electricals, Electronics & Lighting",,2W,False,high,automotive lighting 99%,Screener company profile (About/Key Points),2026-09-29
+IGARASHI,"Auto Electricals, Electronics & Lighting",,PV,True,high,PM DC motors,Screener company profile (About/Key Points),2026-09-29
+INDNIPPON,"Auto Electricals, Electronics & Lighting",Engine & ICE Powertrain Parts,2W,False,high,ignition systems,Screener company profile (About/Key Points),2026-09-29
+LUMAXIND,"Auto Electricals, Electronics & Lighting",,PV,False,high,automotive lighting,Screener company profile (About/Key Points),2026-09-29
+MINDACORP,"Auto Electricals, Electronics & Lighting","Body, Interiors, Glass & Sheet Metal",2W,False,medium,"wiring harness, electronics, security systems",Screener company profile (About/Key Points),2026-09-29
+MSUMI,"Auto Electricals, Electronics & Lighting",,PV,False,high,wiring harness >40% India share,Screener company profile (About/Key Points),2026-09-29
+PRICOLLTD,"Auto Electricals, Electronics & Lighting",,2W,False,high,"instrument clusters, 2nd largest globally",Screener company profile (About/Key Points),2026-09-29
+SEDEMAC,"Auto Electricals, Electronics & Lighting",,2W,False,high,control electronics,Screener company profile (About/Key Points),2026-09-29
+UNOMINDA,"Auto Electricals, Electronics & Lighting","Chassis, Suspension, Brakes, Steering & Wheels",Diversified,False,high,"switches, lighting, acoustics, alloy wheels, seats",Screener company profile (About/Key Points),2026-09-29
+VARROC,"Auto Electricals, Electronics & Lighting","Body, Interiors, Glass & Sheet Metal",2W,False,medium,"2W lighting, electricals, polymer parts",Screener company profile (About/Key Points),2026-09-29
+ARE&M,Batteries & Energy Storage,,Diversified,False,high,lead-acid + lithium; auto + industrial,Screener company profile (About/Key Points),2026-09-29
+EXIDEIND,Batteries & Energy Storage,,Diversified,False,high,"lead-acid batteries, aftermarket + OEM + industrial",Screener company profile (About/Key Points),2026-09-29
 BIOCON,"Biologics, Biosimilars & Vaccines",CDMO / CRDMO,Global,False,high,"biosimilars 60%, research services 22%",Screener company profile (About/Key Points),2026-09-29
 PANACEABIO,"Biologics, Biosimilars & Vaccines",,Global,False,high,"vaccines (polio, pentavalent)",Screener company profile (About/Key Points),2026-09-29
+ACGL,"Body, Interiors, Glass & Sheet Metal",,CV,False,medium,bus bodies and pressings,Screener company profile (About/Key Points),2026-09-29
+ASAHIINDIA,"Body, Interiors, Glass & Sheet Metal",,PV,False,high,auto + architectural glass,Screener company profile (About/Key Points),2026-09-29
+ASAL,"Body, Interiors, Glass & Sheet Metal",,CV,False,medium,stampings for Tata Motors,Screener company profile (About/Key Points),2026-09-29
+AUTOIND,"Body, Interiors, Glass & Sheet Metal",,Diversified,False,medium,sheet metal stampings and assemblies,Screener company profile (About/Key Points),2026-09-29
+BELRISE,"Body, Interiors, Glass & Sheet Metal","Chassis, Suspension, Brakes, Steering & Wheels",2W,False,high,"sheet metal, polymer, suspension, mirrors",Screener company profile (About/Key Points),2026-09-29
+BHARATSE,"Body, Interiors, Glass & Sheet Metal",,PV,False,high,seating systems,Screener company profile (About/Key Points),2026-09-29
+JAYBARMARU,"Body, Interiors, Glass & Sheet Metal","Drivetrain, Transmission & Bearings",PV,False,high,BIW sheet metal + rear axles for Maruti,Screener company profile (About/Key Points),2026-09-29
+JBMA,"Body, Interiors, Glass & Sheet Metal",,CV,False,medium,sheet metal components + e-bus OEM,Screener company profile (About/Key Points),2026-09-29
+LUMAXTECH,"Body, Interiors, Glass & Sheet Metal","Auto Electricals, Electronics & Lighting",PV,False,medium,"gear shifters, interiors, lamps, plastic parts",Screener company profile (About/Key Points),2026-09-29
+MUNJALAU,"Body, Interiors, Glass & Sheet Metal",Engine & ICE Powertrain Parts,2W,False,medium,"exhaust, wheel rims, fuel tanks, BIW",Screener company profile (About/Key Points),2026-09-29
+NDRAUTO,"Body, Interiors, Glass & Sheet Metal",,PV,False,high,seat frames and trims,Screener company profile (About/Key Points),2026-09-29
+OMAXAUTO,"Body, Interiors, Glass & Sheet Metal",,CV,False,medium,"sheet metal, chassis frames",Screener company profile (About/Key Points),2026-09-29
+PAVNAIND,"Body, Interiors, Glass & Sheet Metal",,2W,False,medium,locks and auto parts,Screener company profile (About/Key Points),2026-09-29
+PPAP,"Body, Interiors, Glass & Sheet Metal",,PV,False,high,"body sealing, plastic interior/exterior parts",Screener company profile (About/Key Points),2026-09-29
+SANDHAR,"Body, Interiors, Glass & Sheet Metal",,2W,False,medium,"locks, mirrors, cabins, sheet metal",Screener company profile (About/Key Points),2026-09-29
+SEKURITIND,"Body, Interiors, Glass & Sheet Metal",,PV,True,high,automotive glass; Saint-Gobain,Screener company profile (About/Key Points),2026-09-29
+SJS,"Body, Interiors, Glass & Sheet Metal",,Diversified,False,high,"decorative aesthetics (logos, dials, overlays)",Screener company profile (About/Key Points),2026-09-29
 ABBOTINDIA,Branded Generics – India & EM,,India,True,high,"Abbott Labs subsidiary, domestic brands",Screener company profile (About/Key Points),2026-09-29
 AJANTPHARM,Branded Generics – India & EM,Generics & Specialty – US/Regulated,India & Emerging,False,high,"India 30%, US 29%, Asia/Africa branded 38%",Screener company profile (About/Key Points),2026-09-29
 ALBERTDAVD,Branded Generics – India & EM,,India,False,medium,"formulations, infusions, herbal",Screener company profile (About/Key Points),2026-09-29
@@ -50,7 +97,7 @@ AMBALALSA,Branded Generics – India & EM,,India,False,low,small pharma + electr
 ASTRAZEN,Branded Generics – India & EM,,India,True,high,AstraZeneca subsidiary,Screener company profile (About/Key Points),2026-09-29
 BALPHARMA,Branded Generics – India & EM,API / Bulk Drugs & Intermediates,India,False,low,bulk + prescription + generics,Screener company profile (About/Key Points),2026-09-29
 BETA,Branded Generics – India & EM,,India,False,medium,"oncology formulations, domestic + export",Screener company profile (About/Key Points),2026-09-29
-CORONA,Branded Generics – India & EM,,India,False,high,#14 in IPM,Screener company profile (About/Key Points),2026-09-29
+CORONA,Branded Generics – India & EM,,India,False,high,,,
 ERIS,Branded Generics – India & EM,,India,False,high,domestic branded formulations,Screener company profile (About/Key Points),2026-09-29
 FDC,Branded Generics – India & EM,Consumer Health / OTC & Nutraceuticals,India,False,high,"formulations 92%, ORS leader",Screener company profile (About/Key Points),2026-09-29
 GLAXO,Branded Generics – India & EM,"Biologics, Biosimilars & Vaccines",India,True,high,GSK India: medicines + vaccines,Screener company profile (About/Key Points),2026-09-29
@@ -61,7 +108,7 @@ JAGSNPHARM,Branded Generics – India & EM,,India,False,high,women-health focuse
 JBCHEPHARM,Branded Generics – India & EM,,India,False,high,domestic branded; Torrent-controlled from 2026,Screener company profile (About/Key Points),2026-09-29
 JENBURPH,Branded Generics – India & EM,,India,False,high,85 domestic brands,Screener company profile (About/Key Points),2026-09-29
 MAKERSL,Branded Generics – India & EM,Formulation Contract Manufacturing – India,India,False,medium,domestic generics + job work for Ipca,Screener company profile (About/Key Points),2026-09-29
-MANKIND,Branded Generics – India & EM,Consumer Health / OTC & Nutraceuticals,India,False,high,#1 prescriptions India + consumer brands,Screener company profile (About/Key Points),2026-09-29
+MANKIND,Branded Generics – India & EM,Consumer Health / OTC & Nutraceuticals,India,False,high,,,
 MEDICAPQ,Branded Generics – India & EM,,India,False,low,pharma subsidiary + real estate parent,Screener company profile (About/Key Points),2026-09-29
 NOVARTIND,Branded Generics – India & EM,,India,True,high,"Novartis subsidiary, imports and markets",Screener company profile (About/Key Points),2026-09-29
 ORTINGLOBE,Branded Generics – India & EM,,India,False,low,small formulations + real estate,Screener company profile (About/Key Points),2026-09-29
@@ -70,6 +117,14 @@ RPGLIFE,Branded Generics – India & EM,API / Bulk Drugs & Intermediates,India,F
 SANOFI,Branded Generics – India & EM,,India,True,high,"Sanofi subsidiary, prescription business",Screener company profile (About/Key Points),2026-09-29
 THEMISMED,Branded Generics – India & EM,API / Bulk Drugs & Intermediates,India,False,low,formulations + APIs,Screener company profile (About/Key Points),2026-09-29
 TORNTPHARM,Branded Generics – India & EM,Generics & Specialty – US/Regulated,India,False,high,"branded generics 74% (India, Brazil)",Screener company profile (About/Key Points),2026-09-29
+AHLUCONT,Buildings & Urban Construction,,Private – govt contracts,False,high,"institutional, hospital, metro buildings",Screener company profile (About/Key Points),2026-09-29
+BLKASHYAP,Buildings & Urban Construction,,Private – private clients,False,high,high-rise commercial/residential buildings,Screener company profile (About/Key Points),2026-09-29
+CAPACITE,Buildings & Urban Construction,,Private – private clients,False,high,high-rise and urban buildings,Screener company profile (About/Key Points),2026-09-29
+DBEIL,Buildings & Urban Construction,,Private – govt contracts,False,high,institutional and hospital buildings,Screener company profile (About/Key Points),2026-09-29
+GARUDA,Buildings & Urban Construction,,Private – private clients,False,high,residential/commercial civil construction,Screener company profile (About/Key Points),2026-09-29
+KRIDHANINF,Buildings & Urban Construction,,Private – private clients,False,low,piling and couplers,Screener company profile (About/Key Points),2026-09-29
+PSPPROJECT,Buildings & Urban Construction,,Private – private clients,False,high,"industrial, institutional, residential buildings",Screener company profile (About/Key Points),2026-09-29
+SAB,Buildings & Urban Construction,,Private – private clients,False,low,civil construction + real estate,Screener company profile (About/Key Points),2026-09-29
 ANTHEM,CDMO / CRDMO,,Global B2B,False,high,CRDMO: NCE + NBE,Screener company profile (About/Key Points),2026-09-29
 COHANCE,CDMO / CRDMO,API / Bulk Drugs & Intermediates,Global B2B,False,high,ex-Suven Pharma; top-20 global CDMO,Screener company profile (About/Key Points),2026-09-29
 DCAL,CDMO / CRDMO,,Global B2B,False,high,CRAMS via Carbogen Amcis,Screener company profile (About/Key Points),2026-09-29
@@ -81,11 +136,108 @@ INDGN,"CRO, Testing & Life-sciences Services",,Global B2B,False,high,life-scienc
 TAKE,"CRO, Testing & Life-sciences Services",,Global B2B,False,medium,clinical/BA-BE services,Screener company profile (About/Key Points),2026-09-29
 VIMTALABS,"CRO, Testing & Life-sciences Services",,Global B2B,False,high,contract research and testing,Screener company profile (About/Key Points),2026-09-29
 VIVOBIOT,"CRO, Testing & Life-sciences Services",,Global B2B,False,high,preclinical CRO,Screener company profile (About/Key Points),2026-09-29
+ASKAUTOLTD,"Chassis, Suspension, Brakes, Steering & Wheels",,2W,False,high,2W braking ~50% share,Screener company profile (About/Key Points),2026-09-29
+ENDURANCE,"Chassis, Suspension, Brakes, Steering & Wheels","Forgings, Castings & Precision Machining",2W,False,high,"suspension, braking, transmission, die castings",Screener company profile (About/Key Points),2026-09-29
+ENKEIWHEL,"Chassis, Suspension, Brakes, Steering & Wheels",,Diversified,True,high,aluminium alloy wheels; Enkei,Screener company profile (About/Key Points),2026-09-29
+FRONTSP,"Chassis, Suspension, Brakes, Steering & Wheels","Forgings, Castings & Precision Machining",Rail,False,high,springs and forgings for railways,Screener company profile (About/Key Points),2026-09-29
+GABRIEL,"Chassis, Suspension, Brakes, Steering & Wheels",,2W,False,high,"shock absorbers, struts, front forks",Screener company profile (About/Key Points),2026-09-29
+HINDCOMPOS,"Chassis, Suspension, Brakes, Steering & Wheels",,Diversified,False,medium,friction materials (brake lining),Screener company profile (About/Key Points),2026-09-29
+JAMNAAUTO,"Chassis, Suspension, Brakes, Steering & Wheels",,CV,False,high,leaf springs 62-65% CV OEM share,Screener company profile (About/Key Points),2026-09-29
+JTEKTINDIA,"Chassis, Suspension, Brakes, Steering & Wheels",,PV,True,high,steering ~94%; JTEKT,Screener company profile (About/Key Points),2026-09-29
+KROSS,"Chassis, Suspension, Brakes, Steering & Wheels","Forgings, Castings & Precision Machining",CV,False,high,"trailer axles, suspension, forged parts",Screener company profile (About/Key Points),2026-09-29
+MUNJALSHOW,"Chassis, Suspension, Brakes, Steering & Wheels",,2W,False,high,"shock absorbers, front forks",Screener company profile (About/Key Points),2026-09-29
+REMSONSIND,"Chassis, Suspension, Brakes, Steering & Wheels","Auto Electricals, Electronics & Lighting",Diversified,False,medium,"control cables, gear shifters + electronics",Screener company profile (About/Key Points),2026-09-29
+RML,"Chassis, Suspension, Brakes, Steering & Wheels","Forgings, Castings & Precision Machining",Diversified,False,high,steering and linkages + light metal castings,Screener company profile (About/Key Points),2026-09-29
+SSWL,"Chassis, Suspension, Brakes, Steering & Wheels",,Diversified,False,high,steel and alloy wheels,Screener company profile (About/Key Points),2026-09-29
+SUNDRMBRAK,"Chassis, Suspension, Brakes, Steering & Wheels",,Diversified,False,medium,friction materials,Screener company profile (About/Key Points),2026-09-29
+SUPRAJIT,"Chassis, Suspension, Brakes, Steering & Wheels","Auto Electricals, Electronics & Lighting",Diversified,False,medium,control cables + lamps + clusters,Screener company profile (About/Key Points),2026-09-29
+WHEELS,"Chassis, Suspension, Brakes, Steering & Wheels",,CV,False,high,road wheels + construction-equipment parts,Screener company profile (About/Key Points),2026-09-29
+ZFCVINDIA,"Chassis, Suspension, Brakes, Steering & Wheels",,CV,True,high,CV braking systems; ZF WABCO,Screener company profile (About/Key Points),2026-09-29
+ZFSTEERING,"Chassis, Suspension, Brakes, Steering & Wheels",,CV,False,high,hydraulic steering for CVs,Screener company profile (About/Key Points),2026-09-29
+HINDCON,Construction Chemicals & Adhesives,"Inorganic, Chlor-alkali & Marine Chemicals",B2B,False,medium,"sodium silicate, construction chemicals",Screener company profile (About/Key Points),2026-09-29
+HPAL,Construction Chemicals & Adhesives,,B2C brands,False,high,"solvent cements, adhesives, sealants",Screener company profile (About/Key Points),2026-09-29
+JYOTIRES,Construction Chemicals & Adhesives,,B2C brands,False,high,Euro 7000 wood adhesive,Screener company profile (About/Key Points),2026-09-29
+PIDILITIND,Construction Chemicals & Adhesives,,B2C brands,False,high,"Fevicol adhesives, sealants, construction chemicals",Screener company profile (About/Key Points),2026-09-29
 AMRUTANJAN,Consumer Health / OTC & Nutraceuticals,,India,False,high,"OTC pain balm, hygiene, beverages",Screener company profile (About/Key Points),2026-09-29
 PGHL,Consumer Health / OTC & Nutraceuticals,,India,True,high,"VMS brands Evion, Neurobion",Screener company profile (About/Key Points),2026-09-29
 SANOFICONR,Consumer Health / OTC & Nutraceuticals,,India,True,high,Sanofi consumer healthcare demerger,Screener company profile (About/Key Points),2026-09-29
+BOSCHLTD,Diversified Auto Systems,Engine & ICE Powertrain Parts,Diversified,True,high,"fuel injection, aftermarket, power tools; Bosch GmbH",Screener company profile (About/Key Points),2026-09-29
+MOTHERSON,Diversified Auto Systems,"Auto Electricals, Electronics & Lighting",PV,False,high,"mirrors, polymer modules, wiring; global",Screener company profile (About/Key Points),2026-09-29
+TIINDIA,Diversified Auto Systems,,Diversified,False,medium,"engineering tubes, chains, bicycles, holding in CG Power",Screener company profile (About/Key Points),2026-09-29
+AARTIIND,Diversified Chemicals,Pharma & Agro Intermediates / Custom Synthesis,B2B,False,medium,"benzene/NCB value chains for agro, pharma, polymers",Screener company profile (About/Key Points),2026-09-29
+ATUL,Diversified Chemicals,Pharma & Agro Intermediates / Custom Synthesis,B2B,False,high,"life-science + performance chemicals, 9 businesses",Screener company profile (About/Key Points),2026-09-29
+BASF,Diversified Chemicals,,B2B,True,high,"BASF SE subsidiary, agri to materials",Screener company profile (About/Key Points),2026-09-29
+DSFCL,Diversified Chemicals,,B2B,False,low,no profile on source; DCM Shriram group fine chemicals,Screener company profile (About/Key Points),2026-09-29
+JUBLCPL,Diversified Chemicals,,B2B,False,medium,performance polymers + agri nutrients,Screener company profile (About/Key Points),2026-09-29
+AFCONS,Diversified Infrastructure EPC,Railways & Metro,Private – govt contracts,False,high,"complex EPC (marine, metro, tunnels); Shapoorji Pallonji",Screener company profile (About/Key Points),2026-09-29
+ANNU,Diversified Infrastructure EPC,"Water, Irrigation, Hydro & Sanitation",Private – govt contracts,False,medium,"telecom, sewerage, gas pipeline, rail signalling EPC (web-verified)",Screener profile + web-verified,2026-09-29
+BRAHMINFRA,Diversified Infrastructure EPC,,Private – govt contracts,False,low,"NE India roads, bridges, buildings",Screener company profile (About/Key Points),2026-09-29
+CEMPRO,Diversified Infrastructure EPC,Railways & Metro,Private – govt contracts,False,medium,"ex-ITD Cementation: marine, metro, hydro, urban",Screener company profile (About/Key Points),2026-09-29
+GLOBECIVIL,Diversified Infrastructure EPC,Buildings & Urban Construction,Private – govt contracts,False,low,transport + buildings EPC,Screener company profile (About/Key Points),2026-09-29
+HCC,Diversified Infrastructure EPC,"Water, Irrigation, Hydro & Sanitation",Private – govt contracts,False,high,"dams, tunnels, bridges, hydro and nuclear",Screener company profile (About/Key Points),2026-09-29
+ISGEC,Diversified Infrastructure EPC,,Private – private clients,False,medium,process plant equipment + boiler/plant EPC,Screener company profile (About/Key Points),2026-09-29
+LT,Diversified Infrastructure EPC,Power T&D and Energy EPC,Private – govt contracts,False,high,"EPC across infra, hydrocarbon, power, defence + IT/financial subs",Screener company profile (About/Key Points),2026-09-29
+MADHAVIPL,Diversified Infrastructure EPC,Solar / Renewable EPC,Private – govt contracts,False,low,infra + solar generation,Screener company profile (About/Key Points),2026-09-29
+MADHUCON,Diversified Infrastructure EPC,,Private – govt contracts,False,low,EPC; stressed,Screener company profile (About/Key Points),2026-09-29
+NCC,Diversified Infrastructure EPC,Buildings & Urban Construction,Private – govt contracts,False,high,"buildings, water, transport, electrical EPC",Screener company profile (About/Key Points),2026-09-29
+RKEC,Diversified Infrastructure EPC,,Private – govt contracts,False,low,"marine, defence, industrial civil works",Screener company profile (About/Key Points),2026-09-29
+RPPINFRA,Diversified Infrastructure EPC,,Private – govt contracts,False,low,multi-segment small EPC,Screener company profile (About/Key Points),2026-09-29
+SIMPLEXINF,Diversified Infrastructure EPC,,Private – govt contracts,False,low,diversified civil EPC; stressed,Screener company profile (About/Key Points),2026-09-29
+WSI,Diversified Infrastructure EPC,,Private – govt contracts,False,low,small infra and electrical projects,Screener company profile (About/Key Points),2026-09-29
+AUTOAXLES,"Drivetrain, Transmission & Bearings","Chassis, Suspension, Brakes, Steering & Wheels",CV,False,high,axles and brakes for trucks/buses,Screener company profile (About/Key Points),2026-09-29
+BHARATGEAR,"Drivetrain, Transmission & Bearings",,CV,False,high,"ring gears, pinions, transmission gears",Screener company profile (About/Key Points),2026-09-29
+CARRARO,"Drivetrain, Transmission & Bearings",,Off-highway/Tractor,True,high,axles and transmissions for tractors/construction,Screener company profile (About/Key Points),2026-09-29
+DIVGIITTS,"Drivetrain, Transmission & Bearings",,PV,False,high,transfer cases; largest India EV transmission maker,Screener company profile (About/Key Points),2026-09-29
+GNA,"Drivetrain, Transmission & Bearings",,CV,False,high,rear axle shafts for CV/tractors/SUVs,Screener company profile (About/Key Points),2026-09-29
+HEROMOTORS,"Drivetrain, Transmission & Bearings","Forgings, Castings & Precision Machining",Diversified,False,high,gears/transmissions + e-bike powertrain + sheet-metal assemblies,Screener company profile (About/Key Points),2026-09-29
+LGBBROSLTD,"Drivetrain, Transmission & Bearings",,2W,False,high,chains and sprockets 85%,Screener company profile (About/Key Points),2026-09-29
+NRBBEARING,"Drivetrain, Transmission & Bearings",,Diversified,False,high,needle roller bearings,Screener company profile (About/Key Points),2026-09-29
+RACLGEAR,"Drivetrain, Transmission & Bearings",,Diversified,False,high,transmission gears and shafts,Screener company profile (About/Key Points),2026-09-29
+SCHAEFFLER,"Drivetrain, Transmission & Bearings",Engine & ICE Powertrain Parts,Diversified,True,high,"bearings, engine and transmission systems; Schaeffler AG",Screener company profile (About/Key Points),2026-09-29
+SHIVAMAUTO,"Drivetrain, Transmission & Bearings",,2W,False,medium,transmission gears and shafts,Screener company profile (About/Key Points),2026-09-29
+SONACOMS,"Drivetrain, Transmission & Bearings","Auto Electricals, Electronics & Lighting",PV,False,high,"differential assemblies, gears + EV traction motors",Screener company profile (About/Key Points),2026-09-29
+UNIPARTS,"Drivetrain, Transmission & Bearings","Forgings, Castings & Precision Machining",Off-highway/Tractor,False,medium,precision systems for off-highway vehicles,Screener company profile (About/Key Points),2026-09-29
 SPARC,Drug Discovery (R&D stage),,Global,False,high,"innovative R&D, Sun demerger",Screener company profile (About/Key Points),2026-09-29
 SUVEN,Drug Discovery (R&D stage),,Global,False,high,clinical-stage CNS NCEs,Screener company profile (About/Key Points),2026-09-29
+DYNPRO,"Dyes, Pigments & Food Colours",,B2B,False,high,food colours and dye intermediates,Screener company profile (About/Key Points),2026-09-29
+ISHANCH,"Dyes, Pigments & Food Colours",,B2B,False,high,CPC blue and pigment blue,Screener company profile (About/Key Points),2026-09-29
+VIDHIING,"Dyes, Pigments & Food Colours",,B2B,False,high,synthetic and natural food colours,Screener company profile (About/Key Points),2026-09-29
+BANCOINDIA,Engine & ICE Powertrain Parts,,Diversified,False,high,engine cooling modules,Screener company profile (About/Key Points),2026-09-29
+BIMETAL,Engine & ICE Powertrain Parts,,Diversified,False,high,"engine bearings, bushings",Screener company profile (About/Key Points),2026-09-29
+FMGOETZE,Engine & ICE Powertrain Parts,,Diversified,True,high,"pistons, piston rings; Tenneco",Screener company profile (About/Key Points),2026-09-29
+IPRINGLTD,Engine & ICE Powertrain Parts,,Diversified,False,medium,engine and transmission components,Screener company profile (About/Key Points),2026-09-29
+MENNPIS,Engine & ICE Powertrain Parts,,CV,False,high,pistons and pins for diesel engines,Screener company profile (About/Key Points),2026-09-29
+MENONBE,Engine & ICE Powertrain Parts,,CV,False,high,"engine bearings, bushes",Screener company profile (About/Key Points),2026-09-29
+PRECAM,Engine & ICE Powertrain Parts,,PV,False,high,camshafts,Screener company profile (About/Key Points),2026-09-29
+SHARDAMOTR,Engine & ICE Powertrain Parts,"Chassis, Suspension, Brakes, Steering & Wheels",PV,False,high,emission control + suspension,Screener company profile (About/Key Points),2026-09-29
+SHRIPISTON,Engine & ICE Powertrain Parts,"Auto Electricals, Electronics & Lighting",Diversified,False,high,"pistons, rings, valves + EV diversification",Screener company profile (About/Key Points),2026-09-29
+SINTERCOM,Engine & ICE Powertrain Parts,"Drivetrain, Transmission & Bearings",PV,False,medium,sintered engine and powertrain parts,Screener company profile (About/Key Points),2026-09-29
+TALBROAUTO,Engine & ICE Powertrain Parts,"Forgings, Castings & Precision Machining",Diversified,False,medium,"gaskets, heat shields, forgings",Screener company profile (About/Key Points),2026-09-29
+TENNIND,Engine & ICE Powertrain Parts,"Chassis, Suspension, Brakes, Steering & Wheels",PV,True,high,clean-air (exhaust) + ride performance; Tenneco,Screener company profile (About/Key Points),2026-09-29
+UCAL,Engine & ICE Powertrain Parts,,2W,False,medium,"carburettors, fuel management",Screener company profile (About/Key Points),2026-09-29
+CMPDI,Engineering Consultancy & PMC,,PSU,False,high,mining consultancy (Coal India sub),Screener company profile (About/Key Points),2026-09-29
+ENGINERSIN,Engineering Consultancy & PMC,,PSU,False,high,hydrocarbon engineering consultancy + turnkey,Screener company profile (About/Key Points),2026-09-29
+MOLDTECH,Engineering Consultancy & PMC,,Private – private clients,False,high,civil/structural engineering design services,Screener company profile (About/Key Points),2026-09-29
+NBCC,Engineering Consultancy & PMC,Buildings & Urban Construction,PSU,False,high,project management consultancy 95%,Screener company profile (About/Key Points),2026-09-29
+REPL,Engineering Consultancy & PMC,,Private – govt contracts,False,medium,urban infrastructure consultancy,Screener company profile (About/Key Points),2026-09-29
+RITES,Engineering Consultancy & PMC,Railways & Metro,PSU,False,high,transport consultancy + rolling-stock exports,Screener company profile (About/Key Points),2026-09-29
+SEMAC,Engineering Consultancy & PMC,,Private – private clients,False,medium,design and engineering consultancy,Screener company profile (About/Key Points),2026-09-29
+FLUOROCHEM,Fluorochemicals,,B2B,False,high,"fluoropolymers, fluoro-specialities, refrigerants",Screener company profile (About/Key Points),2026-09-29
+NAVINFLUOR,Fluorochemicals,Pharma & Agro Intermediates / Custom Synthesis,B2B,False,high,"refrigerants, inorganic fluorides, specialty fluoro + CRAMS",Screener company profile (About/Key Points),2026-09-29
+ALICON,"Forgings, Castings & Precision Machining",Engine & ICE Powertrain Parts,Diversified,False,high,aluminium castings incl. cylinder heads,Screener company profile (About/Key Points),2026-09-29
+BHARATFORG,"Forgings, Castings & Precision Machining",,Diversified,False,high,"forged/machined parts for auto, industrial, defence",Screener company profile (About/Key Points),2026-09-29
+CIEINDIA,"Forgings, Castings & Precision Machining",,Diversified,True,high,"forgings, castings, stampings; CIE Automotive",Screener company profile (About/Key Points),2026-09-29
+CRAFTSMAN,"Forgings, Castings & Precision Machining",,Diversified,False,high,"precision machining, aluminium castings",Screener company profile (About/Key Points),2026-09-29
+ISTLTD,"Forgings, Castings & Precision Machining",,Diversified,False,low,precision components + SEZ/trading,Screener company profile (About/Key Points),2026-09-29
+MMFL,"Forgings, Castings & Precision Machining",,CV,False,high,steel forgings,Screener company profile (About/Key Points),2026-09-29
+PRITIKAUTO,"Forgings, Castings & Precision Machining",,Off-highway/Tractor,False,medium,machined castings for tractors,Screener company profile (About/Key Points),2026-09-29
+RICOAUTO,"Forgings, Castings & Precision Machining",,Diversified,False,high,aluminium and ferrous castings,Screener company profile (About/Key Points),2026-09-29
+RKFORGE,"Forgings, Castings & Precision Machining",,CV,False,high,"forgings for CVs, rail wagons",Screener company profile (About/Key Points),2026-09-29
+ROLEXRINGS,"Forgings, Castings & Precision Machining",,Diversified,False,high,forged bearing rings + auto components,Screener company profile (About/Key Points),2026-09-29
+SANSERA,"Forgings, Castings & Precision Machining",,2W,False,high,precision forged/machined engine parts + aerospace,Screener company profile (About/Key Points),2026-09-29
+STERTOOLS,"Forgings, Castings & Precision Machining","Auto Electricals, Electronics & Lighting",Diversified,False,medium,high-tensile fasteners + EV motor control units,Screener company profile (About/Key Points),2026-09-29
+SUNCLAY,"Forgings, Castings & Precision Machining",,2W,False,medium,aluminium die castings,Screener company profile (About/Key Points),2026-09-29
+SUNDRMFAST,"Forgings, Castings & Precision Machining",,Diversified,False,high,"fasteners, powertrain components, sintered parts",Screener company profile (About/Key Points),2026-09-29
 AKUMS,Formulation Contract Manufacturing – India,,India B2B,False,high,largest India formulation CDMO,Screener company profile (About/Key Points),2026-09-29
 ALPA,Formulation Contract Manufacturing – India,Branded Generics – India & EM,India B2B,False,low,own brand + third-party formulations,Screener company profile (About/Key Points),2026-09-29
 BIOFILCHEM,Formulation Contract Manufacturing – India,,India B2B,False,low,job work + trading,Screener company profile (About/Key Points),2026-09-29
@@ -115,10 +267,23 @@ RUBICON,Generics & Specialty – US/Regulated,,Regulated (US/EU),False,high,"99.
 SENORES,Generics & Specialty – US/Regulated,Injectables & Critical Care,Regulated (US/EU),False,high,complex generics US/Canada/UK,Screener company profile (About/Key Points),2026-09-29
 STAR,Generics & Specialty – US/Regulated,Formulations Export – Emerging Markets,Regulated (US/EU),False,high,regulated-market generics + branded EM,Screener company profile (About/Key Points),2026-09-29
 UNICHEMLAB,Generics & Specialty – US/Regulated,API / Bulk Drugs & Intermediates,Regulated (US/EU),False,medium,generics + APIs + CMO; Ipca-controlled,Screener company profile (About/Key Points),2026-09-29
+BLACKROSE,Industrial Process Chemicals & Distribution,,B2B,False,medium,specialty chemicals distribution + manufacturing,Screener company profile (About/Key Points),2026-09-29
+CHEMBOND,Industrial Process Chemicals & Distribution,Construction Chemicals & Adhesives,B2B,False,medium,"sealants, adhesives, metal treatment, coatings",Screener company profile (About/Key Points),2026-09-29
+DAICHI,Industrial Process Chemicals & Distribution,,B2B,False,medium,"specialty chemicals, Dai-ichi Kogyo collaboration",Screener company profile (About/Key Points),2026-09-29
+FOSECOIND,Industrial Process Chemicals & Distribution,,B2B,True,high,foundry additives and consumables; Vesuvius,Screener company profile (About/Key Points),2026-09-29
+IVP,Industrial Process Chemicals & Distribution,,B2B,False,low,value-added industrial chemicals,Screener company profile (About/Key Points),2026-09-29
 BPLPHARMA,Injectables & Critical Care,,Global,False,medium,powder injections and SVPs,Screener company profile (About/Key Points),2026-09-29
 GLAND,Injectables & Critical Care,CDMO / CRDMO,Global,False,high,"B2B complex injectables, Fosun-promoted",Screener company profile (About/Key Points),2026-09-29
 GUFICBIO,Injectables & Critical Care,Branded Generics – India & EM,Global,False,high,"lyophilized injections, critical care",Screener company profile (About/Key Points),2026-09-29
 VENUSREM,Injectables & Critical Care,,Global,False,high,"complex injectables, 100+ countries",Screener company profile (About/Key Points),2026-09-29
+ACI,"Inorganic, Chlor-alkali & Marine Chemicals",,B2B,False,high,"bromine, industrial salt, sulphate of potash",Screener company profile (About/Key Points),2026-09-29
+AMAL,"Inorganic, Chlor-alkali & Marine Chemicals",,B2B,False,medium,"sulphuric acid, oleum (Atul group)",Screener company profile (About/Key Points),2026-09-29
+CHEMPLASTS,"Inorganic, Chlor-alkali & Marine Chemicals",Pharma & Agro Intermediates / Custom Synthesis,B2B,False,high,specialty paste PVC + chlorochemicals + custom manufacturing,Screener company profile (About/Key Points),2026-09-29
+DMCC,"Inorganic, Chlor-alkali & Marine Chemicals",,B2B,False,medium,"sulphur, boron, ethanol chemistry",Screener company profile (About/Key Points),2026-09-29
+EPIGRAL,"Inorganic, Chlor-alkali & Marine Chemicals","Performance, Polymer & Rubber Additives",B2B,False,high,"chloromethanes, caustic, CPVC resin",Screener company profile (About/Key Points),2026-09-29
+KRONOX,"Inorganic, Chlor-alkali & Marine Chemicals",Pharma & Agro Intermediates / Custom Synthesis,B2B,False,medium,high-purity inorganic and phosphate fine chemicals,Screener company profile (About/Key Points),2026-09-29
+VISHNU,"Inorganic, Chlor-alkali & Marine Chemicals",,B2B,False,high,chromium and barium chemicals,Screener company profile (About/Key Points),2026-09-29
+VITAL,"Inorganic, Chlor-alkali & Marine Chemicals",,B2B,False,medium,phosphorus derivatives,Screener company profile (About/Key Points),2026-09-29
 APLLTD,Integrated Global Pharma,Generics & Specialty – US/Regulated,Global,False,high,"FY26: India branded 31%, US 30%, ex-US 20%, API 19%",Screener profile + FY26 results (web-verified),2026-09-29
 CIPLA,Integrated Global Pharma,,Global,False,high,"India 45%, N America 24%, Africa 15%",Screener company profile (About/Key Points),2026-09-29
 DRREDDY,Integrated Global Pharma,"Biologics, Biosimilars & Vaccines",Global,False,high,"API, custom pharma services, generics, biosimilars",Screener company profile (About/Key Points),2026-09-29
@@ -128,6 +293,34 @@ LUPIN,Integrated Global Pharma,,Global,False,high,branded + generics in 100 mark
 SUNPHARMA,Integrated Global Pharma,,Global,False,high,branded India + US specialty/generics + API,Screener company profile (About/Key Points),2026-09-29
 WOCKPHARMA,Integrated Global Pharma,Drug Discovery (R&D stage),Global,False,medium,formulations (India/UK/EM) + novel antibiotics,Screener company profile (About/Key Points),2026-09-29
 ZYDUSLIFE,Integrated Global Pharma,,Global,False,high,US 40% + India branded + consumer,Screener company profile (About/Key Points),2026-09-29
+TPHQ,Other / Non-construction,,Private – private clients,False,low,"trading, securities, film content",Screener company profile (About/Key Points),2026-09-29
+ARVEE,"Performance, Polymer & Rubber Additives",,B2B,False,medium,polymer modifiers (SIPA salts),Screener company profile (About/Key Points),2026-09-29
+CAMLINFINE,"Performance, Polymer & Rubber Additives","Aroma, Surfactants & Personal-care Ingredients",B2B,False,high,antioxidants and shelf-life solutions,Screener company profile (About/Key Points),2026-09-29
+CLEAN,"Performance, Polymer & Rubber Additives",Pharma & Agro Intermediates / Custom Synthesis,B2B,False,high,MEHQ/BHA performance chemicals + pharma intermediates,Screener company profile (About/Key Points),2026-09-29
+DDEVPLSTIK,"Performance, Polymer & Rubber Additives",,B2B,False,high,polymer compounds for cables,Screener company profile (About/Key Points),2026-09-29
+DEEP,"Performance, Polymer & Rubber Additives",,B2B,False,medium,masterbatches,Screener company profile (About/Key Points),2026-09-29
+DEEPAKNTR,"Performance, Polymer & Rubber Additives","Amines, Acetyls & Solvent Derivatives",B2B,False,medium,phenolics 68% + basic/fine intermediates,Screener company profile (About/Key Points),2026-09-29
+ELANTAS,"Performance, Polymer & Rubber Additives",,B2B,True,high,electrical insulation resins; ELANTAS GmbH,Screener company profile (About/Key Points),2026-09-29
+FINEORG,"Performance, Polymer & Rubber Additives","Aroma, Surfactants & Personal-care Ingredients",B2B,False,high,"oleochemical additives for plastics, food, cosmetics",Screener company profile (About/Key Points),2026-09-29
+NOCIL,"Performance, Polymer & Rubber Additives",,B2B,False,high,rubber chemicals for tyres,Screener company profile (About/Key Points),2026-09-29
+PLASTIBLEN,"Performance, Polymer & Rubber Additives",,B2B,False,high,masterbatches,Screener company profile (About/Key Points),2026-09-29
+PLATIND,"Performance, Polymer & Rubber Additives",,B2B,False,high,"PVC stabilisers, CPVC additives",Screener company profile (About/Key Points),2026-09-29
+STYRENIX,"Performance, Polymer & Rubber Additives",,B2B,False,high,ABS/SAN engineering thermoplastics,Screener company profile (About/Key Points),2026-09-29
+VIKASECO,"Performance, Polymer & Rubber Additives",,B2B,False,medium,rubber-plastic compounds and additives,Screener company profile (About/Key Points),2026-09-29
+VINATIORGA,"Performance, Polymer & Rubber Additives",Pharma & Agro Intermediates / Custom Synthesis,B2B,False,high,"specialty monomers (ATBS), butyl phenols, antioxidants",Screener company profile (About/Key Points),2026-09-29
+YASHO,"Performance, Polymer & Rubber Additives","Aroma, Surfactants & Personal-care Ingredients",B2B,False,high,"antioxidants, aroma, rubber accelerators, lubricant additives",Screener company profile (About/Key Points),2026-09-29
+AETHER,Pharma & Agro Intermediates / Custom Synthesis,,B2B,False,high,"advanced intermediates, custom synthesis",Screener company profile (About/Key Points),2026-09-29
+ALKALI,Pharma & Agro Intermediates / Custom Synthesis,,B2B,False,medium,"sodium and pyridine derivatives, APIs",Screener company profile (About/Key Points),2026-09-29
+ANURAS,Pharma & Agro Intermediates / Custom Synthesis,,B2B,False,high,agro (65%) and pharma custom synthesis,Screener company profile (About/Key Points),2026-09-29
+CHEMCON,Pharma & Agro Intermediates / Custom Synthesis,Industrial Process Chemicals & Distribution,B2B,False,high,"silanes, pharma intermediates, oilfield chemicals",Screener company profile (About/Key Points),2026-09-29
+CHEMCRUX,Pharma & Agro Intermediates / Custom Synthesis,,B2B,False,medium,bulk-drug intermediates,Screener company profile (About/Key Points),2026-09-29
+EXCELINDUS,Pharma & Agro Intermediates / Custom Synthesis,Industrial Process Chemicals & Distribution,B2B,False,medium,"DETC, phosphonates, pharma intermediates",Screener company profile (About/Key Points),2026-09-29
+INDOAMIN,Pharma & Agro Intermediates / Custom Synthesis,"Amines, Acetyls & Solvent Derivatives",B2B,False,medium,fine/specialty intermediates,Screener company profile (About/Key Points),2026-09-29
+JUBLINGREA,Pharma & Agro Intermediates / Custom Synthesis,"Aroma, Surfactants & Personal-care Ingredients",B2B,False,high,"pyridines, vitamins, nutrition, agro intermediates",Screener company profile (About/Key Points),2026-09-29
+NEOGEN,Pharma & Agro Intermediates / Custom Synthesis,"Performance, Polymer & Rubber Additives",B2B,False,high,bromine/lithium intermediates + battery chemicals,Screener company profile (About/Key Points),2026-09-29
+PAUSHAKLTD,Pharma & Agro Intermediates / Custom Synthesis,,B2B,False,high,phosgene-based intermediates,Screener company profile (About/Key Points),2026-09-29
+TATVA,Pharma & Agro Intermediates / Custom Synthesis,"Performance, Polymer & Rubber Additives",B2B,False,high,"structure directing agents, PTCs, pharma/agro intermediates",Screener company profile (About/Key Points),2026-09-29
+VALIANTORG,Pharma & Agro Intermediates / Custom Synthesis,,B2B,False,high,"chlorophenol/benzene derivatives, pharma intermediates",Screener company profile (About/Key Points),2026-09-29
 ADVENZYMES,"Pharma Inputs (Excipients, Capsules, Enzymes, Packaging)",,Global B2B,False,high,enzymes,Screener company profile (About/Key Points),2026-09-29
 BI,"Pharma Inputs (Excipients, Capsules, Enzymes, Packaging)","CRO, Testing & Life-sciences Services",Global B2B,False,medium,pharma packaging + clinical services,Screener company profile (About/Key Points),2026-09-29
 FABTECH,"Pharma Inputs (Excipients, Capsules, Enzymes, Packaging)",,Global B2B,False,medium,pharma plant engineering (not a drug maker),Screener company profile (About/Key Points),2026-09-29
@@ -137,3 +330,65 @@ SUDEEPPHRM,"Pharma Inputs (Excipients, Capsules, Enzymes, Packaging)",,Global B2
 SUNLOC,"Pharma Inputs (Excipients, Capsules, Enzymes, Packaging)",,Global B2B,False,high,empty capsule shells,Screener company profile (About/Key Points),2026-09-29
 VAISHALI,Pharma Retail & Distribution,,India,False,medium,pharma marketing/trading,Screener company profile (About/Key Points),2026-09-29
 ZOTA,Pharma Retail & Distribution,Formulations Export – Emerging Markets,India,False,high,"Davaindia pharmacy chain 77% of FY26 revenue, 2,579 stores",Screener profile + FY26 results (web-verified),2026-09-29
+A2ZINFRA,Power T&D and Energy EPC,Other / Non-construction,Private – govt contracts,False,low,power/telecom EPC + facility mgmt + waste,Screener company profile (About/Key Points),2026-09-29
+HECPROJECT,Power T&D and Energy EPC,,Private – private clients,False,medium,"substations, cabling, solar EPC",Screener company profile (About/Key Points),2026-09-29
+KEC,Power T&D and Energy EPC,Railways & Metro,Private – govt contracts,False,high,T&D EPC + railways + civil + cables,Screener company profile (About/Key Points),2026-09-29
+KPIL,Power T&D and Energy EPC,Diversified Infrastructure EPC,Private – govt contracts,False,high,"T&D, pipelines, railways, buildings EPC",Screener company profile (About/Key Points),2026-09-29
+LIKHITHA,Power T&D and Energy EPC,,Private – private clients,False,high,oil and gas pipeline laying,Screener company profile (About/Key Points),2026-09-29
+OMPOWER,Power T&D and Energy EPC,,Private – govt contracts,False,high,HV/EHV transmission EPC,Screener company profile (About/Key Points),2026-09-29
+POWERMECH,Power T&D and Energy EPC,,Private – private clients,False,high,power-plant erection + O&M,Screener company profile (About/Key Points),2026-09-29
+TECHNOE,Power T&D and Energy EPC,,Private – private clients,False,high,"T&D, FGD, smart metering EPC + data centres",Screener company profile (About/Key Points),2026-09-29
+VIKRAN,Power T&D and Energy EPC,"Water, Irrigation, Hydro & Sanitation",Private – govt contracts,False,high,power T&D + water EPC,Screener company profile (About/Key Points),2026-09-29
+VINDHYATEL,Power T&D and Energy EPC,Diversified Infrastructure EPC,Private – govt contracts,False,medium,cables + telecom/power/water EPC,Screener company profile (About/Key Points),2026-09-29
+VIVIANA,Power T&D and Energy EPC,,Private – govt contracts,False,high,power transmission erection,Screener company profile (About/Key Points),2026-09-29
+INTERARCH,Pre-engineered Buildings & Structures,,Private – private clients,False,high,pre-engineered steel buildings,Screener company profile (About/Key Points),2026-09-29
+MBEL,Pre-engineered Buildings & Structures,,Private – private clients,False,high,pre-engineered buildings,Screener company profile (About/Key Points),2026-09-29
+BCPL,Railways & Metro,,Private – govt contracts,False,high,railway electrification (OHE),Screener company profile (About/Key Points),2026-09-29
+GPTINFRA,Railways & Metro,,Private – govt contracts,False,high,railway bridges and track + sleepers,Screener company profile (About/Key Points),2026-09-29
+IRCON,Railways & Metro,Roads & Highways EPC,PSU,False,high,railway construction PSU,Screener company profile (About/Key Points),2026-09-29
+JKIL,Railways & Metro,Roads & Highways EPC,Private – govt contracts,False,high,metro (elevated/underground) + flyovers,Screener company profile (About/Key Points),2026-09-29
+RVNL,Railways & Metro,,PSU,False,high,rail infrastructure for Ministry of Railways,Screener company profile (About/Key Points),2026-09-29
+TICL,Railways & Metro,Roads & Highways EPC,Private – govt contracts,False,low,railway and road projects,Screener company profile (About/Key Points),2026-09-29
+ATLANTAA,Road Concessions & Toll Assets,,Asset owner (BOT/HAM),False,low,legacy toll assets + real estate,Screener company profile (About/Key Points),2026-09-29
+BRNL,Road Concessions & Toll Assets,,Asset owner (BOT/HAM),False,medium,road BOT SPVs,Screener company profile (About/Key Points),2026-09-29
+IRB,Road Concessions & Toll Assets,,Asset owner (BOT/HAM),False,high,largest road BOT/toll operator,Screener company profile (About/Key Points),2026-09-29
+SADBHIN,Road Concessions & Toll Assets,,Asset owner (BOT/HAM),False,medium,road BOT/HAM asset holder,Screener company profile (About/Key Points),2026-09-29
+ABINFRA,Roads & Highways EPC,Railways & Metro,Private – govt contracts,False,medium,"roads, railway sidings, bridges",Screener company profile (About/Key Points),2026-09-29
+AKASH,Roads & Highways EPC,,Private – govt contracts,False,low,Gujarat road works + lubricant trading,Screener company profile (About/Key Points),2026-09-29
+ASHOKA,Roads & Highways EPC,Railways & Metro,Private – govt contracts,False,high,road EPC + BOT + rail/power,Screener company profile (About/Key Points),2026-09-29
+CEIGALL,Roads & Highways EPC,,Private – govt contracts,False,high,"elevated roads, flyovers, expressways",Screener company profile (About/Key Points),2026-09-29
+DBL,Roads & Highways EPC,,Private – govt contracts,False,high,road EPC ~93%,Screener company profile (About/Key Points),2026-09-29
+GAYAPROJ,Roads & Highways EPC,"Water, Irrigation, Hydro & Sanitation",Private – govt contracts,False,low,roads + irrigation; stressed,Screener company profile (About/Key Points),2026-09-29
+GRINFRA,Roads & Highways EPC,,Private – govt contracts,False,high,road EPC + BOT,Screener company profile (About/Key Points),2026-09-29
+HAZOOR,Roads & Highways EPC,,Private – govt contracts,False,medium,highway sub-contractor,Screener company profile (About/Key Points),2026-09-29
+HGINFRA,Roads & Highways EPC,Railways & Metro,Private – govt contracts,False,high,road EPC diversifying to rail/solar,Screener company profile (About/Key Points),2026-09-29
+KNRCON,Roads & Highways EPC,"Water, Irrigation, Hydro & Sanitation",Private – govt contracts,False,high,highways + irrigation,Screener company profile (About/Key Points),2026-09-29
+MARKOLINES,Roads & Highways EPC,,Private – govt contracts,False,high,highway operations and maintenance,Screener company profile (About/Key Points),2026-09-29
+MBLINFRA,Roads & Highways EPC,,Private – govt contracts,False,medium,roads and highways,Screener company profile (About/Key Points),2026-09-29
+NIRAJ,Roads & Highways EPC,,Private – govt contracts,False,low,roads and water works,Screener company profile (About/Key Points),2026-09-29
+PNCINFRA,Roads & Highways EPC,"Water, Irrigation, Hydro & Sanitation",Private – govt contracts,False,high,highways EPC + HAM,Screener company profile (About/Key Points),2026-09-29
+SADBHAV,Roads & Highways EPC,,Private – govt contracts,False,medium,road EPC; stressed,Screener company profile (About/Key Points),2026-09-29
+SRM,Roads & Highways EPC,,Private – govt contracts,False,high,"hill roads, tunnels, slope stabilisation",Screener company profile (About/Key Points),2026-09-29
+SUPREMEINF,Roads & Highways EPC,Diversified Infrastructure EPC,Private – govt contracts,False,low,roads EPC; lender compromise,Screener company profile (About/Key Points),2026-09-29
+TARMAT,Roads & Highways EPC,,Private – govt contracts,False,medium,highways and runways,Screener company profile (About/Key Points),2026-09-29
+USK,Roads & Highways EPC,,Private – govt contracts,False,medium,high-altitude road projects,Screener company profile (About/Key Points),2026-09-29
+WELENT,Roads & Highways EPC,"Water, Irrigation, Hydro & Sanitation",Asset owner (BOT/HAM),False,high,road and water HAM developer,Screener company profile (About/Key Points),2026-09-29
+GKENERGY,Solar / Renewable EPC,,Private – govt contracts,False,high,solar agri-pump EPC (PM-KUSUM),Screener company profile (About/Key Points),2026-09-29
+SOLARWORLD,Solar / Renewable EPC,,Private – private clients,False,high,solar EPC,Screener company profile (About/Key Points),2026-09-29
+SWSOLAR,Solar / Renewable EPC,,Private – private clients,False,high,solar EPC + O&M (Reliance-backed),Screener company profile (About/Key Points),2026-09-29
+ZODIAC,Solar / Renewable EPC,,Private – private clients,False,high,solar plant EPC,Screener company profile (About/Key Points),2026-09-29
+FCL,Textile & Leather Chemicals,,B2B,False,high,textile auxiliaries + construction/water chemicals,Screener company profile (About/Key Points),2026-09-29
+INDOKEM,Textile & Leather Chemicals,"Dyes, Pigments & Food Colours",B2B,False,medium,"textile chemicals, dyes",Screener company profile (About/Key Points),2026-09-29
+ROSSARI,Textile & Leather Chemicals,"Aroma, Surfactants & Personal-care Ingredients",B2B,False,high,textile specialty + home/personal care + animal health,Screener company profile (About/Key Points),2026-09-29
+RAJRATAN,Tyre Inputs,,Diversified,False,high,tyre bead wire,Screener company profile (About/Key Points),2026-09-29
+TRITONV,Tyre Inputs,,Diversified,False,medium,tube valves for tyres,Screener company profile (About/Key Points),2026-09-29
+BANKA,"Water, Irrigation, Hydro & Sanitation",,Private – govt contracts,False,medium,bio-toilets and sanitation,Screener company profile (About/Key Points),2026-09-29
+INDIANHUME,"Water, Irrigation, Hydro & Sanitation",Railways & Metro,Private – govt contracts,False,high,water pipelines + rail sleepers,Screener company profile (About/Key Points),2026-09-29
+LCCPROJECT,"Water, Irrigation, Hydro & Sanitation",,Private – govt contracts,False,high,irrigation and water-supply EPC (web-verified at IPO),Screener profile + web-verified,2026-09-29
+NAVKARURB,"Water, Irrigation, Hydro & Sanitation",,Private – govt contracts,False,medium,"sewage treatment, water pipelines",Screener company profile (About/Key Points),2026-09-29
+OMINFRAL,"Water, Irrigation, Hydro & Sanitation",,Private – govt contracts,False,high,hydro-mechanical equipment for dams,Screener company profile (About/Key Points),2026-09-29
+PATELENG,"Water, Irrigation, Hydro & Sanitation",Roads & Highways EPC,Private – govt contracts,False,high,"hydro, irrigation, tunnels",Screener company profile (About/Key Points),2026-09-29
+RAMKY,"Water, Irrigation, Hydro & Sanitation",Diversified Infrastructure EPC,Private – govt contracts,False,high,"water/wastewater, irrigation EPC",Screener company profile (About/Key Points),2026-09-29
+SEPC,"Water, Irrigation, Hydro & Sanitation",Diversified Infrastructure EPC,Private – govt contracts,False,medium,"water, process and metallurgy EPC",Screener company profile (About/Key Points),2026-09-29
+SPMLINFRA,"Water, Irrigation, Hydro & Sanitation",Power T&D and Energy EPC,Private – govt contracts,False,high,water treatment + power + waste,Screener company profile (About/Key Points),2026-09-29
+VPRPL,"Water, Irrigation, Hydro & Sanitation",Railways & Metro,Private – govt contracts,False,medium,water supply + railway + roads,Screener company profile (About/Key Points),2026-09-29

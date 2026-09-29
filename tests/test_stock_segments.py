@@ -5,6 +5,7 @@ import pandas as pd
 
 ROOT = Path(__file__).resolve().parent.parent
 SEGMENTS = {
+    # Pharma / Biotech / Healthcare research
     "Integrated Global Pharma", "Branded Generics – India & EM",
     "Generics & Specialty – US/Regulated", "Formulations Export – Emerging Markets",
     "API / Bulk Drugs & Intermediates", "CDMO / CRDMO",
@@ -12,6 +13,25 @@ SEGMENTS = {
     "Injectables & Critical Care", "Consumer Health / OTC & Nutraceuticals", "Animal Health",
     "CRO, Testing & Life-sciences Services", "Drug Discovery (R&D stage)",
     "Pharma Inputs (Excipients, Capsules, Enzymes, Packaging)", "Pharma Retail & Distribution",
+    # Auto components
+    "Engine & ICE Powertrain Parts", "Drivetrain, Transmission & Bearings",
+    "Auto Electricals, Electronics & Lighting", "Chassis, Suspension, Brakes, Steering & Wheels",
+    "Body, Interiors, Glass & Sheet Metal", "Forgings, Castings & Precision Machining",
+    "Batteries & Energy Storage", "Diversified Auto Systems", "Auto Accessories & Aftermarket",
+    "Tyre Inputs",
+    # Civil construction
+    "Roads & Highways EPC", "Road Concessions & Toll Assets", "Railways & Metro",
+    "Water, Irrigation, Hydro & Sanitation", "Power T&D and Energy EPC", "Solar / Renewable EPC",
+    "Buildings & Urban Construction", "Diversified Infrastructure EPC",
+    "Engineering Consultancy & PMC", "Pre-engineered Buildings & Structures",
+    "Other / Non-construction",
+    # Specialty chemicals
+    "Fluorochemicals", "Pharma & Agro Intermediates / Custom Synthesis",
+    "Amines, Acetyls & Solvent Derivatives", "Performance, Polymer & Rubber Additives",
+    "Aroma, Surfactants & Personal-care Ingredients", "Construction Chemicals & Adhesives",
+    "Textile & Leather Chemicals", "Inorganic, Chlor-alkali & Marine Chemicals",
+    "Diversified Chemicals", "Dyes, Pigments & Food Colours",
+    "Industrial Process Chemicals & Distribution",
 }
 
 
@@ -40,3 +60,9 @@ def test_confidence_and_mnc_values():
     s = _seg()
     assert set(s["confidence"]) <= {"high", "medium", "low"}
     assert set(s["mnc_subsidiary"]) <= {"True", "False"}
+
+
+def test_every_segmented_industry_has_a_validation_record():
+    val = pd.read_csv(ROOT / "config" / "segment_validation.csv", comment="#", dtype=str)
+    assert set(val["verdict"]) <= {"structural", "weak", "descriptive"}
+    assert len(val) >= 4
