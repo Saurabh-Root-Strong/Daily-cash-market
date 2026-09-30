@@ -6603,6 +6603,14 @@ def _render_ilc_index_notes(sym: str, selected_date: date) -> None:
             "Base rates and matches start at that date.")
 
 
+def _ilc_oi_cell(v, expiry_opt: bool = False) -> str:
+    """OI % change as text. Streamlit renders a missing number as a grey 'None',
+    which reads as a broken feed; an empty OI cell always has a reason."""
+    if v is not None and not pd.isna(v):
+        return f"{v:+.2f}"
+    return "off · expiry day" if expiry_opt else "—"
+
+
 def _ilc_chip(text: str, colour: str) -> str:
     return (f"<span style='background:{colour}22;border:1px solid {colour}55;"
             f"color:{colour};padding:2px 8px;border-radius:10px;"
@@ -6840,7 +6848,7 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
                                     ("-" if b.deliv_pct is None
                                      else f"{b.deliv_pct:.1f}")),
             "Deliv z": None if b.deliv_z is None else round(b.deliv_z, 2),
-            "Futures OI %": None if b.fut_oi_pct is None else round(b.fut_oi_pct, 2),
+            "Futures OI %": _ilc_oi_cell(b.fut_oi_pct),
             "Futures read": lean,
             "F&O names": f"{b.fut_valid}/{b.n_members}",
         })
@@ -6871,8 +6879,8 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
                               "today 60.4 against 65.6 yesterday. Big stocks always "
                               "sit higher than small ones, so judge the LEVEL with "
                               "Deliv z, not with these raw numbers."),
-                     "Futures OI %": st.column_config.NumberColumn(
-                         "Futures OI %", format="%.2f",
+                     "Futures OI %": st.column_config.TextColumn(
+                         "Futures OI %",
                          help="Change in the number of open futures contracts vs "
                               "yesterday, averaged across the bucket. +2 means 2% "
                               "more open positions (new money coming in); -2 means "
@@ -6911,7 +6919,17 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
                 unsafe_allow_html=True)
 
     # ── flow summary: delivery + futures + options, per bucket ──────────────
-    if d.unusual_session:
+    if d.unusual_session and d.unusual_kind == "heavy":
+        st.warning(
+            f"**Heavy, basket-wide session — {d.unusual_session}.** Index funds "
+            "and ETFs trade a rebalance at the closing price, and those trades are "
+            "delivery by construction, so every bucket reads 'heavy delivery' and "
+            "the score leans long for a mechanical reason, not a conviction one. "
+            "Measured: every NSE rebalance close checked sits beyond the ordinary-"
+            "day 95th percentile of both basket delivery z (0.62) and activity "
+            "(+41%) — 27 Sep 2024 z +0.96 / +70%, 29 Sep 2025 +0.79 / +94%. Read "
+            "the delivery column today as the rebalance, not as investors.")
+    elif d.unusual_session:
         st.warning(
             f"**This is a special session — {d.unusual_session}.** NSE runs live "
             "sessions on Budget days and for Muhurat trading, and they are short "
@@ -6921,6 +6939,17 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
             "2023 ran the other way at 64% delivery against ~53% on its "
             "neighbours. The numbers are correct; read them with that in mind.")
     st.markdown("##### Flow read — delivery, futures OI, options OI")
+    if d.is_expiry_session:
+        st.info(
+            "**Monthly expiry day.** Futures OI counts every contract **including "
+            "the one settling today**, on both days — NSE still reports its OI at "
+            "the close, so the total runs straight through the roll (settlement-"
+            "day bucket leans match ordinary days: Nifty long/mixed/short 38/22/40 "
+            "vs 36/30/34). Its level runs ~+1.5pp above an ordinary day, so read "
+            "the lean, not the size. **Options OI is switched off today**: "
+            "expiring calls drop away faster than puts, and the read would come "
+            "out 'put side heavier' on 72-86% of expiry days against 42-46% "
+            "normally — a fake bullish signal every month.")
     if d.front_expiry:
         _dte = d.days_to_expiry
         _when = ("settles today" if _dte == 0 else
@@ -6951,14 +6980,16 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
                          else round(b.turnover_vs_norm, 0)),
             "Futures": {1: "🟢 long build / covering", -1: "🔴 short build / unwind",
                         0: "⚪ mixed", None: "—"}[b.fut_lean],
-            "Fut OI %": None if b.fut_oi_pct is None else round(b.fut_oi_pct, 2),
-            "Call OI %": None if b.ce_oi_pct is None else round(b.ce_oi_pct, 2),
-            "Put OI %": None if b.pe_oi_pct is None else round(b.pe_oi_pct, 2),
+            "Fut OI %": _ilc_oi_cell(b.fut_oi_pct),
+            "Call OI %": _ilc_oi_cell(b.ce_oi_pct, d.is_expiry_session),
+            "Put OI %": _ilc_oi_cell(b.pe_oi_pct, d.is_expiry_session),
             "Options": {"put writing": "🟢 put writing",
                         "put side heavier": "🟢 put side heavier",
                         "balanced": "⚪ balanced",
                         "call side heavier": "🔴 call side heavier",
-                        "call writing": "🔴 call writing", None: "—"}[b.opt_read],
+                        "call writing": "🔴 call writing",
+                        None: ("off · expiry day" if d.is_expiry_session
+                               else "—")}[b.opt_read],
             "Bucket score": None if _sc is None else round(_sc, 2),
         })
     _pair_help = _ilc_pair_help(d.rows, selected_date)
@@ -6992,20 +7023,20 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
                               "(supportive). 'short build / unwind' = sellers "
                               "adding or longs exiting (pressure). 'mixed' = the "
                               "bucket disagrees with itself."),
-                     "Fut OI %": st.column_config.NumberColumn(
-                         "Fut OI %", format="%.2f",
+                     "Fut OI %": st.column_config.TextColumn(
+                         "Fut OI %",
                          help="How much the number of open futures contracts "
                               "changed vs yesterday. +0.25 = 0.25% more open "
                               "positions. Negative = positions were closed. "
                               "Counted across ALL expiry months, so a position "
                               "rolling to next month is not mistaken for an exit."),
-                     "Call OI %": st.column_config.NumberColumn(
-                         "Call OI %", format="%.2f",
+                     "Call OI %": st.column_config.TextColumn(
+                         "Call OI %",
                          help="Change in open CALL option positions vs yesterday. "
                               "Rising calls usually means sellers writing calls "
                               "above the market - they expect a ceiling."),
-                     "Put OI %": st.column_config.NumberColumn(
-                         "Put OI %", format="%.2f",
+                     "Put OI %": st.column_config.TextColumn(
+                         "Put OI %",
                          help="Change in open PUT option positions vs yesterday. "
                               "Rising puts usually means sellers writing puts "
                               "below the market - they expect a floor."),
@@ -7033,8 +7064,8 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
         st.markdown(_ilc_chip(f"Net flow score {_ns:+.2f} — {_lbl}", _c),
                     unsafe_allow_html=True)
     if d.is_expiry_session:
-        st.caption("Settlement session — futures and options OI are suppressed, so "
-                   "the score runs on the delivery leg alone.")
+        st.caption("Expiry day — the options leg is off (see above), so the score "
+                   "runs on delivery and futures only.")
     if sym != "NIFTY":
         st.error(_ILC_SCORE_VERDICT[_ilc_verdict_key(sym, meta)])
     else:

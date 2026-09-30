@@ -284,6 +284,45 @@ def _min_valid(n_members: int) -> int:
     names, and never fewer than two: one stock is a stock, not a bucket.
     """
     return max(2, min(4, -(-n_members * 3 // 5)))
+
+
+_HEAVY_Z, _HEAVY_ACT = 0.62, 41.0    # ordinary-day p95s, see get_index_largecap
+
+
+def _basket_heat(hist: pd.DataFrame, trade_date: date):
+    """All-member mean delivery z (21-session, per symbol) and turnover vs norm %."""
+    try:
+        dl = hist.pivot_table("deliv_per", "trade_date", "symbol").sort_index()
+        tv = (hist.pivot_table("turnover_lacs", "trade_date", "symbol")
+              .sort_index().sum(axis=1))
+        if trade_date not in dl.index:
+            return None, None
+        prior = dl[dl.index < trade_date].tail(_DELIV_BASE)
+        if len(prior) < _DELIV_MINP:
+            return None, None
+        mu, sd = prior.mean(), prior.std()
+        z = ((dl.loc[trade_date] - mu) / sd.where(sd > 1e-9)).replace(
+            [np.inf, -np.inf], np.nan).dropna()
+        base = tv[tv.index < trade_date].tail(_DELIV_BASE).mean()
+        act = float(tv[trade_date] / base * 100 - 100) if base > 0 else None
+        return (float(z.mean()) if len(z) else None), act
+    except Exception:                                          # noqa: BLE001
+        return None, None
+
+
+def _is_rebalance_close(trade_date: date) -> Optional[str]:
+    """Source note if trade_date is the last session before a dated basket takes
+    effect (NSE trades the rebalance at that close), else None."""
+    for versions in _VERSIONS.values():
+        for v in versions:
+            eff = v["effective"]
+            if trade_date < eff and (eff - trade_date).days <= 4:
+                later = query_dataframe(
+                    "SELECT 1 FROM daily_data WHERE trade_date > ? AND trade_date < ? "
+                    "LIMIT 1", [trade_date, eff])
+                if later.empty:
+                    return f"basket change effective {eff:%d %b %Y}"
+    return None
 # Sessions the delivery normal is measured over. 21 = roughly one trading month.
 #
 # Measured against a 100-session alternative (scripts/ilc_deliv_baseline.py):
@@ -434,6 +473,8 @@ class IndexLargeCap:
     # 2023-11-12 runs the other way at 64.1% delivery against ~53% on its
     # neighbours. Shown as a caveat rather than suppressed.
     unusual_session: Optional[str] = None
+    # "thin" (Budget Sunday, Muhurat, weekend) or "heavy" (passive rebalance close)
+    unusual_kind: Optional[str] = None
     # rough weight share per bucket label, from the basket in force on the date
     bucket_weights: dict = field(default_factory=dict)
 
@@ -528,7 +569,8 @@ def _load_cash(symbols: tuple, trade_date: date, lookback: int = 220) -> pd.Data
     return df[df["r"].abs() < 40]
 
 
-def _load_futures(symbols: tuple, trade_date: date) -> pd.DataFrame:
+def _load_futures(symbols: tuple, trade_date: date,
+                  include_expiring: bool = False) -> pd.DataFrame:
     """Per-symbol TOTAL futures OI on trade_date and the prior session.
 
     TOTAL, NOT NEAR-MONTH -- this is the rollover trap, measured on this data
@@ -568,6 +610,17 @@ def _load_futures(symbols: tuple, trade_date: date) -> pd.DataFrame:
     while the front bleeds, the next fills, and only their total is flat.
     """
     ph = ", ".join("?" * len(symbols))
+    if include_expiring:
+        # SETTLEMENT SESSION ONLY: keep the contract that settles today, on both
+        # days. See get_index_largecap for why this basis is continuous there.
+        return query_dataframe(f"""
+            SELECT trade_date, symbol, expiry_date, open_interest
+            FROM fno_bhavcopy
+            WHERE instrument = 'FUTSTK' AND open_interest > 0
+              AND symbol IN ({ph})
+              AND trade_date <= ? AND trade_date > (?::date - 20)
+              AND expiry_date >= ?
+        """, [*symbols, trade_date, trade_date, trade_date])
     return query_dataframe(f"""
         SELECT trade_date, symbol, expiry_date, open_interest
         FROM fno_bhavcopy
@@ -779,19 +832,31 @@ def get_index_largecap(trade_date: date, fno_symbol: str = "NIFTY") -> IndexLarg
     if out.index_ret is not None:
         out.carry_spread = out.index_ret - out.equal_ret
 
-    # Expiry SESSION is the one case total-forward OI still cannot read: the front
-    # contract settles and everyone rolls INTO the next month, so forward OI jumps
-    # mechanically. Measured on this data: +14.25% mean on expiry sessions against
-    # +0.47% on every other day, and it is only 26 of 524 sessions (5.0%). Total OI
-    # already fixed the far worse near-month roll bleed (-48% at DTE 0-2, 13.7% of
-    # sessions); this suppresses the residual rather than printing a fake build.
+    # SETTLEMENT SESSION. The forward-only sum (expiry > today on both days) jumps
+    # mechanically here: the front contract settles and everyone rolls INTO the
+    # next month. Measured 2022-2026, 57 settlement sessions, Nifty Top-10 bucket
+    # mean OI change: +18.5% (sd 7.0) against +0.43% (sd 1.28) on ordinary days.
+    #
+    # FUTURES ARE RECOVERED by counting the contract that settles today on BOTH
+    # days: NSE still reports its open interest at the close, so the all-contracts
+    # total is continuous through the roll -- +1.55% (sd 2.56) on settlement days
+    # against +0.07% (sd 2.02) otherwise, and the bucket leans it prints match
+    # ordinary days with no directional tilt (Nifty long/mixed/short 38/22/40 vs
+    # 36/30/34; Bank 39/27/33 vs 36/35/29; Fin 35/36/29 vs 34/40/27; Midcap
+    # 38/27/35 vs 40/26/34). The next session is safe on the usual basis (+0.69%).
+    #
+    # OPTIONS STAY SUPPRESSED. On the same all-contracts basis the expiring calls
+    # fall away faster than the puts (CE -6.2% vs PE -2.0%), and the options read
+    # comes out "put side heavier / put writing" on 72-86% of settlement bucket-
+    # days against 42-46% ordinarily -- a manufactured bullish read every month.
     _exp = query_dataframe("""
         SELECT 1 AS x FROM fno_bhavcopy
         WHERE instrument = 'FUTSTK' AND trade_date = ? AND expiry_date = ? LIMIT 1
     """, [trade_date, trade_date])
     out.is_expiry_session = not _exp.empty
-    oi = (pd.DataFrame(columns=["symbol", "oi", "prev_oi"]) if out.is_expiry_session
-          else _total_oi_change(_load_futures(all_syms, trade_date), trade_date))
+    oi = _total_oi_change(
+        _load_futures(all_syms, trade_date, include_expiring=out.is_expiry_session),
+        trade_date)
     opt = (pd.DataFrame(columns=["symbol", "ce_pct", "pe_pct"])
            if out.is_expiry_session
            else _opt_change(_load_options(all_syms, trade_date), trade_date))
@@ -824,6 +889,26 @@ def get_index_largecap(trade_date: date, fno_symbol: str = "NIFTY") -> IndexLarg
             _why.append(f"turnover {_cur / _norm * 100:.0f}% of the recent norm")
         if _why:
             out.unusual_session = " and ".join(_why)
+            out.unusual_kind = "thin"
+    # HEAVY, basket-wide delivery with heavy activity -- the signature of passive
+    # funds trading an index rebalance at the close, which is delivery by
+    # construction and says nothing about conviction. Thresholds are the ordinary-
+    # day 95th percentiles of the all-member delivery z (0.62) and activity (+41%),
+    # 2022-2026. Every NSE rebalance close checked sits at or beyond both: 27 Sep
+    # 2024 z +0.96 / +70%, 29 Sep 2025 +0.79 / +94%, 29 Sep 2026 +0.75 / +87%.
+    if out.unusual_session is None:
+        z_all, act_all = _basket_heat(hist, trade_date)
+        rebal = _is_rebalance_close(trade_date)
+        if rebal or (z_all is not None and act_all is not None
+                     and z_all > _HEAVY_Z and act_all > _HEAVY_ACT):
+            bits = []
+            if rebal:
+                bits.append(f"NSE index rebalance at this close ({rebal})")
+            if z_all is not None and act_all is not None:
+                bits.append(f"delivery z {z_all:+.2f} and activity {act_all:+.0f}% "
+                            "across the whole basket")
+            out.unusual_session = " — ".join(bits)
+            out.unusual_kind = "heavy"
     if not _exp.empty:
         _f = _exp.iloc[0]
         out.front_expiry = pd.to_datetime(_f["expiry_date"]).date()

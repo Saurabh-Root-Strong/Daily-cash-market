@@ -120,16 +120,40 @@ def test_total_oi_change_needs_two_sessions_and_the_target_date():
         "must not silently read an older session as today"
 
 
-def test_expiry_session_suppresses_the_futures_read():
-    """Forward OI jumps +14.25% on a settlement session against +0.47% elsewhere,
-    because the front settles and everyone rolls in. Show nothing, not a build."""
+def test_expiry_session_reads_futures_on_the_all_contracts_basis():
+    """The forward-only sum jumps +18.5% on a settlement session (roll INTO next
+    month). Counting the contract that settles today on both days is continuous
+    (+1.55% vs +0.07%) and its bucket leans match ordinary days, so the futures
+    read is RECOVERED on expiry day instead of blanked."""
     from datetime import date as _d
+    import inspect
     out = ilc.get_index_largecap(_d(2026, 8, 25), "NIFTY")
     assert out.is_expiry_session, "25 Aug 2026 is a monthly settlement session"
     for b in out.rows:
-        assert b.fut_valid == 0 and b.fut_oi_pct is None and b.fut_lean is None
-    # the cash side must survive the suppression
+        assert b.fut_valid == b.n_members, f"{b.label}: futures still blank"
+        assert b.fut_oi_pct is not None and abs(b.fut_oi_pct) < 15, \
+            "an +18% jump means the forward-only basis leaked back in"
     assert all(b.ret_pct is not None for b in out.rows)
+    assert "expiry_date >= ?" in inspect.getsource(ilc._load_futures)
+
+
+def test_rebalance_close_is_flagged_heavy_and_ordinary_days_are_not():
+    """Index funds trade a rebalance at the close, all delivery: 29 Sep 2026 read
+    'heavy' in every bucket with activity +57..+87%. Flag it, do not hide it."""
+    from datetime import date as _d
+    d = ilc.get_index_largecap(_d(2026, 9, 29), "NIFTY")
+    assert d.unusual_kind == "heavy" and "rebalance" in d.unusual_session
+    # data-driven, no calendar needed: earlier rebalance closes trip it too
+    assert ilc.get_index_largecap(_d(2025, 9, 29), "NIFTY").unusual_kind == "heavy"
+    for day in (_d(2026, 9, 28), _d(2026, 9, 24), _d(2026, 9, 4)):
+        assert ilc.get_index_largecap(day, "NIFTY").unusual_session is None, day
+
+
+def test_empty_oi_cells_say_why_instead_of_none():
+    from src.dashboard.views.sector_rotation import _ilc_oi_cell
+    assert _ilc_oi_cell(0.253) == "+0.25"
+    assert _ilc_oi_cell(None) == "—"
+    assert _ilc_oi_cell(float("nan"), expiry_opt=True) == "off · expiry day"
 
 
 def test_futures_oi_pct_is_winsorised():
