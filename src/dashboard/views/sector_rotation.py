@@ -6614,6 +6614,21 @@ def _ilc_oi_cell(v, expiry_opt: bool = False) -> str:
     return "off · expiry day" if expiry_opt else "—"
 
 
+_ILC_FUT_READ = {
+    "long build": "🟢 long build", "short covering": "🟢 short covering",
+    "long build + covering": "🟢 long build + covering",
+    "short build": "🔴 short build", "long unwind": "🔴 long unwind",
+    "short build + unwind": "🔴 short build + unwind",
+    "mixed": "⚪ mixed", None: "—",
+}
+
+
+def _ilc_num(v, fmt: str = "{:+.2f}") -> str:
+    """A number as text, or a dash. Used where one row (today) has no outcome
+    yet: a NaN in a numeric column renders as a grey 'None'."""
+    return "—" if v is None or pd.isna(v) else fmt.format(v)
+
+
 def _ilc_chip(text: str, colour: str) -> str:
     return (f"<span style='background:{colour}22;border:1px solid {colour}55;"
             f"color:{colour};padding:2px 8px;border-radius:10px;"
@@ -6839,8 +6854,7 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
         "inside each bucket**, so they are not index points.")
     rows = []
     for b in d.rows:
-        lean = {1: "🟢 net long build", -1: "🔴 net short build",
-                0: "⚪ mixed", None: "-"}[b.fut_lean]
+        lean = _ILC_FUT_READ[b.fut_read]
         rows.append({
             "Bucket": b.label + (" ⚠" if b.thin else ""),
             "Return %": None if b.ret_pct is None else round(b.ret_pct, 2),
@@ -6897,14 +6911,26 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
                               "bucket-level z was partly a coverage signal."),
                      "Futures read": st.column_config.TextColumn(
                          "Futures read",
-                         help="TOTAL forward futures OI (every live expiry) vs the "
-                              "prior session, against the stock's cash return. "
-                              "NOT near-month: measured here, near-month OI falls "
-                              "-47.9% on average at 0-2 days to expiry (99.94% of "
-                              "rows negative) because positions MIGRATE to the next "
-                              "contract, which printed basket-wide unwinding on "
-                              "13.7% of sessions. Total OI is flat across every "
-                              "DTE bucket; the expiry session itself is suppressed."),
+                         help="How each bucket's label is built, one session at a time. "
+                              "For every stock: total futures OI across ALL live "
+                              "expiry months, today vs the previous session, "
+                              "against the stock's cash close-to-close move. OI "
+                              "must move more than 0.5% to count. Price up + OI up "
+                              "= long build; price up + OI down = short covering; "
+                              "price down + OI up = short build; price down + OI "
+                              "down = long unwind. The bucket is bullish when "
+                              "(long + cover) outnumber (short + unwind) by more "
+                              "than 1.5x, bearish the other way, else mixed - and "
+                              "it is NAMED by whichever of the two dominates, "
+                              "because fresh positions and closed positions are "
+                              "different things (measured: a bullish bucket is "
+                              "mostly short covering on 37-60% of such days). "
+                              "Limits: OI cannot show who initiated a trade, so "
+                              "the four names are a desk convention; volume is not "
+                              "used; and 14% of votes come from a price move under "
+                              "0.25% (ignoring them never flips a bucket's side, "
+                              "it only moves 10-22% of days between a lean and "
+                              "'mixed')."),
                      "F&O names": st.column_config.TextColumn(
                          "F&O names",
                          help="How many of the bucket's stocks actually have "
@@ -6981,8 +7007,8 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
             "Deliv z": None if b.deliv_z is None else round(b.deliv_z, 2),
             "Activity": (None if b.turnover_vs_norm is None
                          else round(b.turnover_vs_norm, 0)),
-            "Futures": {1: "🟢 long build / covering", -1: "🔴 short build / unwind",
-                        0: "⚪ mixed", None: "—"}[b.fut_lean],
+            "Futures": _ILC_FUT_READ[b.fut_read],
+            "Stock votes": b.fut_votes,
             "Fut OI %": _ilc_oi_cell(b.fut_oi_pct),
             "Call OI %": _ilc_oi_cell(b.ce_oi_pct, d.is_expiry_session),
             "Put OI %": _ilc_oi_cell(b.pe_oi_pct, d.is_expiry_session),
@@ -7021,11 +7047,33 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
                          help=_pair_help),
                      "Futures": st.column_config.TextColumn(
                          "Futures",
-                         help="What futures traders did. 'long build / covering' = "
-                              "buyers adding positions or shorts closing "
-                              "(supportive). 'short build / unwind' = sellers "
-                              "adding or longs exiting (pressure). 'mixed' = the "
-                              "bucket disagrees with itself."),
+                         help="How each bucket's label is built, one session at a time. "
+                              "For every stock: total futures OI across ALL live "
+                              "expiry months, today vs the previous session, "
+                              "against the stock's cash close-to-close move. OI "
+                              "must move more than 0.5% to count. Price up + OI up "
+                              "= long build; price up + OI down = short covering; "
+                              "price down + OI up = short build; price down + OI "
+                              "down = long unwind. The bucket is bullish when "
+                              "(long + cover) outnumber (short + unwind) by more "
+                              "than 1.5x, bearish the other way, else mixed - and "
+                              "it is NAMED by whichever of the two dominates, "
+                              "because fresh positions and closed positions are "
+                              "different things (measured: a bullish bucket is "
+                              "mostly short covering on 37-60% of such days). "
+                              "Limits: OI cannot show who initiated a trade, so "
+                              "the four names are a desk convention; volume is not "
+                              "used; and 14% of votes come from a price move under "
+                              "0.25% (ignoring them never flips a bucket's side, "
+                              "it only moves 10-22% of days between a lean and "
+                              "'mixed')."),
+                     "Stock votes": st.column_config.TextColumn(
+                         "Stock votes",
+                         help="The count behind the Futures label, stock by stock. "
+                              "'▲ 2 long · 5 cover | ▼ 3 short · 0 unwind' means 7 "
+                              "stocks voted bullish (2 fresh longs, 5 shorts "
+                              "closing) against 3 bearish - bullish, and mostly "
+                              "covering. 'flat' = OI moved less than 0.5%."),
                      "Fut OI %": st.column_config.TextColumn(
                          "Fut OI %",
                          help="How much the number of open futures contracts "
@@ -7045,11 +7093,16 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
                               "below the market - they expect a floor."),
                      "Options": st.column_config.TextColumn(
                          "Options",
-                         help="Which option side grew faster today. Example: calls "
-                              "+4.3% and puts +2.0% = 'call side heavier', which "
-                              "leans bearish (traders selling calls expect a "
-                              "ceiling). Puts growing faster leans bullish. Within "
-                              "0.25pp of each other = 'balanced'."),
+                         help="Which option side grew faster today. For each "
+                              "stock, call OI is summed across every strike and "
+                              "every expiry, and put OI the same, each compared "
+                              "with the previous session; the bucket averages "
+                              "them. Example: calls +4.3% and puts +2.0% = 'call "
+                              "side heavier'. Within 0.25pp = 'balanced'. 'Put "
+                              "writing' / 'call writing' only when one side rose "
+                              "and the other fell. Price is not used. The bullish "
+                              "reading of 'put side heavier' ASSUMES the new puts "
+                              "were sold, not bought - OI cannot tell which."),
                      "Bucket score": st.column_config.NumberColumn(
                          "Bucket score", format="%.2f",
                          help="The three columns above averaged into one number, "
@@ -7116,8 +7169,8 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
             "Call vs put": _optrip(_today),
             # NaN, not None: a None here makes the whole column object-typed and
             # Streamlit prints the literal text "None" in today's row.
-            "Next day %": float("nan"), "Next day pts": float("nan"),
-            "Next 5 sessions %": float("nan"), "Next 5d pts": float("nan"),
+            "Next day %": "— not yet", "Next day pts": "—",
+            "Next 5 sessions %": "— not yet", "Next 5d pts": "—",
         }]
         _far = float(_m["distance"].max()) or 1.0
         for _, r in _m.iterrows():
@@ -7127,13 +7180,10 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
                 "Delivery z": _trip(r, "delivery"),
                 "Futures pressure": _trip(r, "futures"),
                 "Call vs put": _optrip(r),
-                "Next day %": round(r["d1"], 2),
-                "Next day pts": float("nan") if pd.isna(r.get("d1_pts"))
-                                else round(r["d1_pts"]),
-                "Next 5 sessions %": float("nan") if pd.isna(r["d5"])
-                                     else round(r["d5"], 2),
-                "Next 5d pts": float("nan") if pd.isna(r.get("d5_pts"))
-                               else round(r["d5_pts"]),
+                "Next day %": _ilc_num(r["d1"]),
+                "Next day pts": _ilc_num(r.get("d1_pts"), "{:+,.0f}"),
+                "Next 5 sessions %": _ilc_num(r["d5"]),
+                "Next 5d pts": _ilc_num(r.get("d5_pts"), "{:+,.0f}"),
             })
         st.dataframe(
             pd.DataFrame(_disp), hide_index=True, use_container_width=True,
@@ -7172,23 +7222,23 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
                          "'call' = calls grew faster (leans bearish), "
                          "'put' = puts grew faster (leans bullish), "
                          "'bal' = neither. Example: 'call · call · bal'."),
-                "Next day pts": st.column_config.NumberColumn(
-                    "Next day pts", format="%d",
+                "Next day pts": st.column_config.TextColumn(
+                    "Next day pts",
                     help="That session's % move applied to TODAY'S level"
                          + (f" ({_spot:,.0f})" if _spot else "")
                          + ". The index level has moved a long way since 2022, "
                            "so raw historical points are not comparable across "
                            "the window."),
-                "Next day %": st.column_config.NumberColumn(
-                    "Next day %", format="%.2f",
+                "Next day %": st.column_config.TextColumn(
+                    "Next day %",
                     help=f"What {_name} actually did on the session AFTER that day. "
                          "+0.25 means it closed 0.25% higher the next day."),
-                "Next 5 sessions %": st.column_config.NumberColumn(
-                    "Next 5 sessions %", format="%.2f",
+                "Next 5 sessions %": st.column_config.TextColumn(
+                    "Next 5 sessions %",
                     help=f"What {_name} did over the following FIVE sessions - "
                          "roughly the next week - measured from that day's close."),
-                "Next 5d pts": st.column_config.NumberColumn(
-                    "Next 5d pts", format="%d",
+                "Next 5d pts": st.column_config.TextColumn(
+                    "Next 5d pts",
                     help=f"The same week move in {_name} points at today's level, so "
                          "old and recent rows are directly comparable."),
             })

@@ -433,6 +433,42 @@ class BucketRow:
         return float(np.mean(legs)) if legs else None
 
     @property
+    def fut_read(self) -> Optional[str]:
+        """The lean, NAMED BY WHAT DOMINATES IT. None when too thin to call.
+
+        fut_lean lumps long build with short covering (both are price-up) and
+        short build with long unwind. They are different things -- fresh money
+        versus positions being closed -- and the lump was labelled "net long
+        build". Measured 2022-2026: on days a bucket reads bullish, its bullish
+        names are MOSTLY SHORT COVERING on 37-60% of them (Nifty Top 10: 60%), so
+        that label was wrong about half the time. Bearish days are cleaner:
+        mostly long unwind on 15-30%.
+        """
+        lean = self.fut_lean
+        if lean is None:
+            return None
+        if lean == 0:
+            return "mixed"
+        if lean > 0:
+            if self.fut_long > self.fut_cover:   return "long build"
+            if self.fut_cover > self.fut_long:   return "short covering"
+            return "long build + covering"
+        if self.fut_short > self.fut_unwind:     return "short build"
+        if self.fut_unwind > self.fut_short:     return "long unwind"
+        return "short build + unwind"
+
+    @property
+    def fut_votes(self) -> str:
+        """Per-stock quadrant counts, so the label can be checked by eye."""
+        if not self.fut_valid:
+            return "—"
+        flat = self.fut_valid - (self.fut_long + self.fut_cover
+                                 + self.fut_short + self.fut_unwind)
+        return (f"▲ {self.fut_long} long · {self.fut_cover} cover  |  "
+                f"▼ {self.fut_short} short · {self.fut_unwind} unwind"
+                + (f"  |  {flat} flat" if flat else ""))
+
+    @property
     def fut_lean(self) -> Optional[int]:
         """+1 net fresh-long / -1 net fresh-short / 0 mixed. None when too thin."""
         if self.fut_valid < _min_valid(self.n_members):

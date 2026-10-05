@@ -392,7 +392,8 @@ def test_today_row_uses_nan_not_none_for_unknown_outcomes():
     i = src.index('"Session": f"{selected_date:%d %b %Y}  ← today"')
     block = src[i:i + 600]
     assert '"Next day %": None' not in block, "today row still emits a bare None"
-    assert 'float("nan")' in block
+    # a NaN renders as the same grey 'None'; the unknown outcome is said in words
+    assert 'float("nan")' not in block and '"— not yet"' in block
 
 
 # ── delivery: 21-session baseline + 4-session trail ─────────────────────────
@@ -667,3 +668,37 @@ def test_one_active_name_cannot_decide_a_small_buckets_lean():
     both = ilc.BucketRow(label="Top 2", n_members=2, n_present=2,
                          fut_valid=2, fut_long=2)
     assert both.fut_lean == 1
+
+
+# ── futures label names what dominates it ───────────────────────────────────
+
+def test_futures_read_separates_fresh_positions_from_closed_ones():
+    """'net long build' covered short covering too, and a bullish bucket is
+    MOSTLY short covering on 37-60% of such days (Nifty Top 10: 60%)."""
+    def row(**k):
+        return ilc.BucketRow(label="b", n_members=10, n_present=10, fut_valid=10, **k)
+    assert row(fut_long=2, fut_cover=5, fut_short=3).fut_read == "short covering"
+    assert row(fut_long=6, fut_cover=1, fut_short=2).fut_read == "long build"
+    assert row(fut_long=3, fut_cover=3, fut_short=1).fut_read == "long build + covering"
+    assert row(fut_short=6, fut_unwind=1, fut_long=2).fut_read == "short build"
+    assert row(fut_short=1, fut_unwind=6, fut_long=2).fut_read == "long unwind"
+    assert row(fut_long=4, fut_short=4).fut_read == "mixed"
+    assert ilc.BucketRow(label="b", n_members=10, n_present=10, fut_valid=2).fut_read is None
+
+
+def test_futures_votes_show_the_count_behind_the_label():
+    r = ilc.BucketRow(label="b", n_members=10, n_present=10, fut_valid=10,
+                      fut_long=2, fut_cover=5, fut_short=3)
+    assert r.fut_votes == "▲ 2 long · 5 cover  |  ▼ 3 short · 0 unwind"
+    r2 = ilc.BucketRow(label="b", n_members=10, n_present=10, fut_valid=10,
+                       fut_long=2, fut_cover=5, fut_short=2)
+    assert r2.fut_votes.endswith("1 flat")
+
+
+def test_both_tables_use_one_futures_vocabulary():
+    """The bucket table said 'net long build' while the flow table beside it said
+    'long build / covering' for the same bucket."""
+    from pathlib import Path
+    src = Path("src/dashboard/views/sector_rotation.py").read_text(encoding="utf-8")
+    assert "net long build" not in src and "net short build" not in src
+    assert src.count("_ILC_FUT_READ[b.fut_read]") == 2
