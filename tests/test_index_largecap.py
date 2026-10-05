@@ -616,15 +616,21 @@ def test_basket_switches_on_the_effective_date_not_before():
     assert len(post_all) == 50
 
 
-def test_midcap_select_loses_bse_and_is_marked_provisional():
+def test_midcap_select_post_review_basket_matches_the_30_sep_factsheet():
     from datetime import date as _d
     m = ilc.index_meta("MIDCPNIFTY", _d(2026, 9, 30))
     allsyms = [s for v in m["buckets"].values() for s in v]
     assert len(allsyms) == 25 == len(set(allsyms))
     assert {"BSE", "FORTIS", "HINDPETRO", "POLYCAB"}.isdisjoint(allsyms)
     assert {"FEDERALBNK", "GVT&D", "INDHOTEL", "MCX"} <= set(allsyms)
-    assert m["provisional"] and list(m["weights"]) == list(m["buckets"])
-    assert not ilc.index_meta("MIDCPNIFTY", _d(2026, 9, 29))["provisional"]
+    # confirmed 05 Oct 2026: MCX 6.41, FEDERALBNK 5.96 | PAYTM, HEROMOTOCO,
+    # INDHOTEL, BHEL, INDUSINDBK | rest. The first estimate had POLICYBZR where
+    # INDHOTEL belongs.
+    assert not m["provisional"] and list(m["weights"]) == list(m["buckets"])
+    assert set(m["buckets"]["Top 2"]) == {"MCX", "FEDERALBNK"}
+    assert set(m["buckets"]["Next 5"]) == {"PAYTM", "HEROMOTOCO", "INDHOTEL",
+                                           "BHEL", "INDUSINDBK"}
+    assert "POLICYBZR" in m["buckets"]["Rest 18"]
 
 
 def test_bank_and_fin_nifty_are_unchanged_by_the_review():

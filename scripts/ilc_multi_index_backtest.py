@@ -321,7 +321,7 @@ def run(sym):
         rows.append(f"{end:%Y-%m} {b[0]:.2f}/{b[1]:.2f}/{b[2]:.2f}")
     print("   " + "  ".join(rows))
 
-    if sym == "MIDCPNIFTY":
+    if sym == "MIDCPNIFTY" and "BSE" in R.columns:      # BSE left on 30 Sep 2026
         print("\n[10] How much of Midcap Select's carry spread is BSE alone?")
         ew = R.mean(axis=1).reindex(K.index)
         bse = (R["BSE"].reindex(K.index) - ew)

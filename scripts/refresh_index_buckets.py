@@ -39,6 +39,7 @@ SRC = {
     "MIDCPNIFTY": ("ind_niftymidcapselect_list.csv", "Factsheet_NiftyMidcapSelect.pdf"),
 }
 NO_CUT = 0.3        # pp: a gap narrower than this is not a structural boundary
+CLEAR_CUT = 1.0     # pp: both gaps this wide = the cut POSITIONS are structure
 
 _S = requests.Session()
 _S.headers["User-Agent"] = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -139,10 +140,17 @@ def check(sym, on):
             print(f"  widest-gap cuts: after rank {k} ({gaps[k]:.2f}pp) and {j} "
                   f"({gaps[j]:.2f}pp) -> Top {k} / Next {j - k} / Rest {len(live) - j}"
                   + ("  = coded" if same else f"  != coded {k_coded}/{j_coded - k_coded}"))
-            if not same or not order_ok:
+            # Coded buckets holding the wrong NAMES is always drift. Different
+            # cut POSITIONS are drift only when both gaps are unmistakable --
+            # Midcap Select's second "gap" is 0.31pp, a layout choice.
+            clear = min(gaps[k], gaps[j]) >= CLEAR_CUT
+            if not order_ok or (not same and clear):
                 drift.append("cuts")
                 print(f"  suggested: Top {k} {tuple(syms[:k])}\n"
                       f"             Next {j - k} {tuple(syms[k:j])}")
+            elif not same:
+                print(f"  (advisory only: gaps under {CLEAR_CUT}pp, coded names "
+                      f"are the correct top {k_coded} / next {j_coded - k_coded})")
         else:
             print(f"  NO NATURAL CUT: widest usable gap {best[0]:.2f}pp < {NO_CUT}pp "
                   f"-- the Top/Next boundary is a layout choice (not drift)")

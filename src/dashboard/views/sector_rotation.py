@@ -6479,16 +6479,16 @@ _ILC_VERDICT = {
         "**A decomposition, not a forecast — on a basket that barely has "
         "heavyweights.** From 30 Sep 2026 BSE (9.6%) moves to Nifty 50, and the "
         "largest names left are ~6%. `scripts/ilc_multi_index_backtest.py "
-        "--asof 2026-09-30`, today's 25 applied to **453 sessions** "
-        "(Nov-2024+).\n\n"
+        "`, today's 25 applied to **457 sessions** (Nov-2024+), buckets per "
+        "NSE's 30 Sep 2026 factsheet.\n\n"
         "- **The Top 2 barely move the index:** regressed on the three bucket "
-        "returns they carry **0.06-0.13** of its moves; the Rest 18 carries "
-        "0.66-0.88. \"Heavyweights carried it\" means little here.\n"
-        "- **Nothing survives.** Family p=0.032, led by Rest-18 breadth → gap "
-        "(|t| 3.16), which falls to **t=+1.01** beside close-strength.\n"
+        "returns they carry **0.03-0.14** of its moves; the Rest 18 carries "
+        "0.62-0.85. \"Heavyweights carried it\" means little here.\n"
+        "- **Nothing survives.** Family p=0.038, led by Rest-18 breadth → gap "
+        "(|t| 3.25), which falls to **t=+1.15** beside close-strength.\n"
         "- **Out of sample the composite is worse than a coin:** next day "
-        "−14.2 bps at 46.9% after Oct-2025.\n\n"
-        "So no arrow, and the buckets are **provisional** (above)."),
+        "−13.5 bps at 47.2% after Oct-2025.\n\n"
+        "So no arrow."),
 }
 
 _ILC_SCORE_VERDICT = {
@@ -6525,13 +6525,13 @@ _ILC_SCORE_VERDICT = {
         "**what positioning is doing**."),
     "MIDCPNIFTY_2609": (
         "**This score does not forecast Midcap Select — measured on the "
-        "30-Sep-2026 basket, 453 sessions (Nov-2024+).**\n\n"
+        "30-Sep-2026 basket, 457 sessions (Nov-2024+).**\n\n"
         "| | next open (gap) | next day | next 5 sessions |\n|---|---|---|---|\n"
-        "| **net score hit rate** | 54.9% | **46.7%** | **49.6%** |\n"
-        "| base rate (up days) | 70.0% | 53.9% | 52.6% |\n"
-        "| information coefficient | +0.126 | −0.032 | +0.010 |\n\n"
-        "Beside close-strength: t=+0.22 at the gap, −0.76 next day. Out of "
-        "sample after Oct-2025 next day runs **−14.2 bps at 46.9%**. Read it as "
+        "| **net score hit rate** | 55.3% | **48.9%** | **51.8%** |\n"
+        "| base rate (up days) | 69.8% | 53.8% | 52.1% |\n"
+        "| information coefficient | +0.135 | −0.022 | +0.009 |\n\n"
+        "Beside close-strength: t=+0.11 at the gap, −0.76 next day. Out of "
+        "sample after Oct-2025 next day runs **−13.5 bps at 47.2%**. Read it as "
         "**what positioning is doing**."),
 }
 
@@ -6575,11 +6575,14 @@ def _render_ilc_index_notes(sym: str, selected_date: date) -> None:
                      "17.0, 14.9 | 10.3, 9.9, 9.2 | 7.2 and below.",
         "FINNIFTY": "Cut on the two widest gaps in the published weights: "
                     "17.3, 15.1 | 10.4, 9.6, 9.5, 8.8 | 4.9 and below.",
-        "MIDCPNIFTY": ("With BSE gone the index is close to equal weight: the "
-                       "only gap wider than 0.3pp is after rank 2 (~6.2 vs 5.2), "
-                       "and the Top 2 hold only ~13%. Expect a small carry "
-                       "spread and a weak heavyweight story."
-                       if meta["provisional"] else
+        "MIDCPNIFTY": ("With BSE gone the index is close to equal weight "
+                       "(30 Sep 2026 factsheet: MCX 6.4, FEDERALBNK 6.0 | PAYTM "
+                       "5.5, HEROMOTOCO 5.2, INDHOTEL 4.9, BHEL 4.6, INDUSINDBK "
+                       "4.5 | AUBANK 4.5 and below). Only the gap after rank 2 "
+                       "(0.46pp) is real; Next 5 vs Rest 18 is a layout choice. "
+                       "The Top 2 hold ~12%, so expect a small carry spread and "
+                       "a weak heavyweight story."
+                       if meta["effective"] is not None else
                        "No natural cut past BSE (9.6%) — ranks 2-10 span only "
                        "5.2% to 4.1%, so Top 5 / Next 5 is a layout choice, "
                        "not structure."),

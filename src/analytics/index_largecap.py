@@ -220,16 +220,23 @@ _BUCKET_WEIGHT = INDEX_BUCKETS["NIFTY"]["weights"]
 #   FEDERALBNK 2.52 -> ~6.28   MCX 2.48 -> ~6.18   | PAYTM 5.16 HERO 5.06
 #   INDUSINDBK 4.78 POLICYBZR 4.63 BHEL 4.61 | DIXON 4.40 AUBANK 4.39 ...
 # The only gap wider than 0.3pp is after rank 2 (1.02pp) -> Top 2 / Next 5 /
-# Rest 18. INDHOTEL ranks inside the top 10 per NSE's note but is not in Midcap
-# 100 yet, so its exact rank is unknown; GVT&D entered on FULL market cap, its
-# free float is ~49%. Both sit in Rest 18 until the factsheet says otherwise.
+# Rest 18.
+#
+# CONFIRMED 05 Oct 2026 against NSE's 30 Sep 2026 factsheet. The estimate put
+# FEDERALBNK ~6.28 and MCX ~6.18 on top; published: MCX 6.41, FEDERALBNK 5.96 --
+# the Top 2 was right. One Next-5 name was wrong: INDHOTEL (rank unknown then)
+# is rank 5 at 4.87 and POLICYBZR fell out of the top 10, so they swap. Published
+# top 10: MCX 6.41 FEDERALBNK 5.96 | PAYTM 5.50 HEROMOTOCO 5.18 INDHOTEL 4.87
+# BHEL 4.61 INDUSINDBK 4.52 | AUBANK 4.47 PERSISTENT 4.37 DIXON 4.15. The gap
+# after rank 2 is 0.46pp; nothing after it exceeds 0.32pp, so the Next 5 / Rest
+# 18 boundary (4.52 vs 4.47) is a layout choice and the panel says so.
 _NIFTY_TOP10_2609 = tuple(s if s != "TCS" else "SBIN" for s in _NIFTY_TOP10)
 _NIFTY_NEXT10_2609 = tuple(s if s != "SBIN" else "TCS" for s in _NIFTY_NEXT10)
 _NIFTY_REST30_2609 = tuple(sorted(
     (set(_NIFTY_REST30) - {"WIPRO"}) | {"BSE"}))
-_MID2609_TOP2 = ("FEDERALBNK", "MCX")
-_MID2609_NEXT5 = ("PAYTM", "HEROMOTOCO", "INDUSINDBK", "POLICYBZR", "BHEL")
-_MID2609_REST18 = ("DIXON", "AUBANK", "PERSISTENT", "SUZLON", "INDHOTEL",
+_MID2609_TOP2 = ("MCX", "FEDERALBNK")
+_MID2609_NEXT5 = ("PAYTM", "HEROMOTOCO", "INDHOTEL", "BHEL", "INDUSINDBK")
+_MID2609_REST18 = ("AUBANK", "PERSISTENT", "DIXON", "SUZLON", "POLICYBZR",
                    "GVT&D", "ASHOKLEY", "AUROPHARMA", "BHARATFORG", "INDIANB",
                    "INDUSTOWER", "NAUKRI", "LICI", "LUPIN", "MARICO", "SRF",
                    "SWIGGY", "YESBANK")
@@ -246,10 +253,11 @@ _VERSIONS: dict[str, list[dict]] = {
         effective=date(2026, 9, 30),
         buckets={"Top 2": _MID2609_TOP2, "Next 5": _MID2609_NEXT5,
                  "Rest 18": _MID2609_REST18},
-        weights={"Top 2": 0.13, "Next 5": 0.25, "Rest 18": 0.62},
+        weights={"Top 2": 0.12, "Next 5": 0.25, "Rest 18": 0.63},
         source=("NSE review 10 Aug 2026: BSE, FORTIS, HINDPETRO, POLYCAB out; "
-                "FEDERALBNK, GVT&D, INDHOTEL, MCX in"),
-        provisional=True)],
+                "FEDERALBNK, GVT&D, INDHOTEL, MCX in; buckets per the 30 Sep "
+                "2026 factsheet"),
+        provisional=False)],
 }
 
 
@@ -1107,8 +1115,8 @@ def get_state_base_rates(fno_symbol: str = "NIFTY", years: int = 5,
     BANK NIFTY, FIN NIFTY, MIDCAP SELECT -- re-measured, not inherited
     (scripts/ilc_multi_index_backtest.py). Same null: every family survivor is
     close-strength again (Bank Top-2 futures -> gap |t| 3.48 alone, +1.72 beside
-    CLR; Fin 3.68 -> +1.75; Midcap family p=0.056, and 0.032 on the 30-Sep-2026
-    basket with the best falling to +1.01). Two index-specific caveats:
+    CLR; Fin 3.68 -> +1.75; Midcap family p=0.056, and 0.038 on the 30-Sep-2026
+    basket with the best falling to +1.15). Two index-specific caveats:
       * the SEBI cap (top name <= 20%, top 3 <= 45%) cut the Top-2 bucket's
         implied share of Bank Nifty moves from ~0.55 (2022-2025) to 0.39 by
         Jun-2026, Fin Nifty's to 0.33 -- older base-rate rows describe a more
