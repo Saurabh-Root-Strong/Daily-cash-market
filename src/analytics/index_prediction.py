@@ -768,11 +768,16 @@ def _compute_constituent_stats(symbols: tuple, trade_date: date) -> _Constituent
     _ph = ", ".join("?" * len(symbols))
 
     # ── 17c: cash breadth + delivery quality ─────────────────────────────────
+    # Split/bonus/demerger adjusted. prev_close in daily_data is RAW, so a 1:1
+    # bonus used to count the stock as a 50% decliner in the turnover-weighted
+    # breadth (HDFCBANK 26 Aug 2025, RELIANCE 28 Oct 2024). Same expression the
+    # Index & Large Cap panel uses -- see index_largecap._R_SQL.
+    from src.analytics.index_largecap import _R_SQL
     _stocks = query_dataframe(f"""
         SELECT
             symbol,
             CASE WHEN prev_close > 0
-                 THEN (close_price - prev_close) / prev_close * 100
+                 THEN {_R_SQL}
                  ELSE NULL END AS pct_chg,
             deliv_per,
             turnover_lacs

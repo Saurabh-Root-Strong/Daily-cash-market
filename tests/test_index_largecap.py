@@ -822,3 +822,41 @@ def test_missing_fno_file_is_named_on_screen():
     from pathlib import Path
     src = Path("src/dashboard/views/sector_rotation.py").read_text(encoding="utf-8")
     assert "No F&O data for" in src and "This is a data gap" in src
+
+
+# ── audit 3: renamed tickers, demergers, per-index options cycle ────────────
+
+def test_renamed_tickers_keep_their_history():
+    """ZOMATO became ETERNAL on 09 Apr 2025 and TATAMOTORS became TMPV on 24 Oct
+    2025. Without the map Nifty's Next 10 read 9/10 on any earlier date."""
+    from datetime import date as _d
+    b = ilc.get_index_largecap(_d(2025, 3, 3), "NIFTY")
+    assert [r.n_present for r in b.rows] == [10, 10, 30]
+    sf = ilc.get_stock_flow(_d(2025, 4, 9), "NIFTY")          # the rename day itself
+    e = sf[sf["symbol"] == "ETERNAL"].iloc[0]
+    assert e["oi_pct"] is not None and abs(e["oi_pct"]) < 20, "OI must chain across the rename"
+    assert ilc._with_old(("TMPV", "ITC")) == ("TMPV", "ITC", "TATAMOTORS")
+
+
+def test_demerger_day_uses_open_to_close_and_casts_no_fno_vote():
+    """A demerger splits value, not shares, so there is no factor; the opening
+    gap is the demerged business. NSE files it under the NEW ticker (TMPV) even
+    though the price row that day still says TATAMOTORS."""
+    from datetime import date as _d
+    for day, sym, lo, hi in ((_d(2025, 10, 14), "TMPV", -3, 1),      # raw -40.2%
+                             (_d(2023, 7, 20), "RELIANCE", 0, 3),    # raw -7.8%
+                             (_d(2025, 1, 6), "ITC", -4, -1)):       # raw -8.1%
+        r = ilc.get_stock_flow(day, "NIFTY")
+        r = r[r["symbol"] == sym].iloc[0]
+        assert lo < r["price_pct"] < hi, (sym, r["price_pct"])
+        assert pd.isna(r["read"]) or r["read"] is None, "contracts were re-listed: no vote"
+
+
+def test_options_cycle_strength_is_per_index():
+    """Pooled norm over-corrected Midcap Select (39% put-side at 1-2 sessions
+    out, 58% at 16+); its own slope on the pooled profile is 0.62."""
+    sc = {k: v["opt_cycle_scale"] for k, v in ilc.INDEX_BUCKETS.items()}
+    assert sc == {"NIFTY": 1.14, "BANKNIFTY": 0.93, "FINNIFTY": 0.95, "MIDCPNIFTY": 0.62}
+    assert ilc._opt_cycle_norm(1, 0.62) == pytest.approx(3.3 * 0.62)
+    d = ilc.get_index_largecap(__import__("datetime").date(2026, 10, 5), "MIDCPNIFTY")
+    assert all(r.opt_scale == 0.62 for r in d.rows)

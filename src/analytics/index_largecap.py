@@ -168,6 +168,7 @@ INDEX_BUCKETS: dict[str, dict] = {
                  "Rest 30": _NIFTY_REST30},
         weights={"Top 10": 0.46, "Next 10": 0.24, "Rest 30": 0.30},
         carry_band=0.15, history_from=None,
+        opt_cycle_scale=1.14,
     ),
     "BANKNIFTY": dict(
         index_name="Nifty Bank", display="Bank Nifty",
@@ -175,6 +176,7 @@ INDEX_BUCKETS: dict[str, dict] = {
                  "Rest 9": _BANK_REST9},
         weights={"Top 2": 0.32, "Next 3": 0.29, "Rest 9": 0.39},
         carry_band=0.21, history_from=None,
+        opt_cycle_scale=0.93,
     ),
     "FINNIFTY": dict(
         index_name="Nifty Financial Services", display="Fin Nifty",
@@ -182,6 +184,7 @@ INDEX_BUCKETS: dict[str, dict] = {
                  "Rest 14": _FIN_REST14},
         weights={"Top 2": 0.32, "Next 4": 0.38, "Rest 14": 0.30},
         carry_band=0.27, history_from=None,
+        opt_cycle_scale=0.95,
     ),
     "MIDCPNIFTY": dict(
         index_name="Nifty Midcap Select", display="Midcap Select",
@@ -189,6 +192,7 @@ INDEX_BUCKETS: dict[str, dict] = {
                  "Rest 15": _MID_REST15},
         weights={"Top 5": 0.29, "Next 5": 0.22, "Rest 15": 0.49},
         carry_band=0.11, history_from=date(2024, 11, 29),
+        opt_cycle_scale=0.62,
     ),
 }
 
@@ -310,18 +314,84 @@ def _min_valid(n_members: int) -> int:
 # NOT inferred from the tape. POLICYBZR fell 36.0% on 24 Sep 2026 with OI +54% --
 # price x OI ~ 1, the exact signature of a re-basing -- and it was a real crash
 # (opened -10%, slid all session on 34x normal volume). Only the official table.
-_F_SQL = ("COALESCE((SELECT EXP(SUM(LN(ca.share_factor))) FROM corp_actions ca "
-          "WHERE ca.symbol = daily_data.symbol AND ca.ex_date = daily_data.trade_date "
-          "AND ca.share_factor > 0 AND ca.share_factor <> 1), 1)")
-_R_SQL = f"(close_price * {_F_SQL} - prev_close) / NULLIF(prev_close, 0) * 100"
+#
+# RENAMED TICKERS. A renamed company keeps its old symbol on every row before the
+# change: ZOMATO until 08 Apr 2025 (ETERNAL after), TATAMOTORS until 23 Oct 2025
+# (TMPV after). Without a map the current basket simply has no history for them
+# -- Nifty's Next 10 read 9/10 on any date before April 2025 -- and worse, NSE
+# files a corporate action under the NEW symbol even when it predates the
+# rename: the Tata Motors demerger is on TMPV, ex 14 Oct 2025, when the price row
+# still says TATAMOTORS. So the map is applied to the price and F&O rows and to
+# the corporate-action lookup alike.
+#
+# DEMERGERS have no share factor: value is split, not the share count. The ex-day
+# OPENING gap is the demerged business, so open-to-close is the day's real move:
+# RELIANCE 20 Jul 2023 printed -7.8% (opened -9.2%, rose intraday), ITC 06 Jan
+# 2025 -8.1% (gap -5.4%), TATAMOTORS 14 Oct 2025 -40.2% (gap -39.5%).
+_ALIAS = {"ZOMATO": "ETERNAL", "TATAMOTORS": "TMPV"}          # old -> current
+
+
+def _sym_sql(tbl: str) -> str:
+    """SQL for the CURRENT ticker of a row in `tbl`."""
+    w = " ".join(f"WHEN '{o}' THEN '{n}'" for o, n in _ALIAS.items())
+    return f"CASE {tbl}.symbol {w} ELSE {tbl}.symbol END"
+
+
+def _factor_sql(tbl: str) -> str:
+    return ("COALESCE((SELECT EXP(SUM(LN(ca.share_factor))) FROM corp_actions ca "
+            f"WHERE ca.symbol = {_sym_sql(tbl)} AND ca.ex_date = {tbl}.trade_date "
+            "AND ca.share_factor > 0 AND ca.share_factor <> 1), 1)")
+
+
+_F_SQL = _factor_sql("daily_data")
+_R_SQL = ("CASE WHEN open_price > 0 AND EXISTS (SELECT 1 FROM corp_actions cd "
+          f"WHERE cd.symbol = {_sym_sql('daily_data')} "
+          "AND cd.ex_date = daily_data.trade_date AND cd.kind IN ('DEMERGER', 'SCHEME')) "
+          "THEN (close_price / open_price - 1) * 100 "
+          f"ELSE (close_price * {_F_SQL} - prev_close) / NULLIF(prev_close, 0) * 100 END")
+
+
+def _demerger_days(symbols, start: date, end: date) -> set:
+    """{(ex_date, symbol)} of demergers in [start, end], on current tickers.
+
+    On a demerger the exchange closes out the existing F&O contracts and lists new
+    ones, so open interest resets mechanically: RELIANCE -66% on 20 Jul 2023, ITC
+    -59% on 06 Jan 2025. That is not positioning, so the stock casts no futures or
+    options vote that day and its cycle figure is withheld.
+    """
+    symbols = tuple(symbols)
+    if not symbols:
+        return set()
+    ph = ", ".join("?" * len(symbols))
+    df = query_dataframe(f"""
+        SELECT symbol, ex_date FROM corp_actions
+        WHERE kind IN ('DEMERGER', 'SCHEME') AND symbol IN ({ph})
+          AND ex_date >= ? AND ex_date <= ?
+    """, [*symbols, start, end])
+    return {(pd.to_datetime(r.ex_date).date(), r.symbol) for r in df.itertuples()}
+
+
+def _with_old(symbols) -> tuple:
+    """The symbols plus any earlier ticker they traded under."""
+    cur = set(symbols)
+    return tuple(symbols) + tuple(o for o, n in _ALIAS.items() if n in cur)
+
+
+def _qdf(sql: str, params=None) -> pd.DataFrame:
+    """query_dataframe, with every row carried under its CURRENT ticker."""
+    df = query_dataframe(sql, params) if params is not None else query_dataframe(sql)
+    if "symbol" in df.columns and len(df):
+        df["symbol"] = df["symbol"].replace(_ALIAS)
+    return df
 
 
 def _share_factors(symbols: tuple, start: date, end: date) -> dict:
     """{(ex_date, symbol): factor} for splits and bonuses in [start, end]."""
     if not symbols:
         return {}
+    symbols = _with_old(symbols)
     ph = ", ".join("?" * len(symbols))
-    df = query_dataframe(f"""
+    df = _qdf(f"""
         SELECT symbol, ex_date, EXP(SUM(LN(share_factor))) AS f FROM corp_actions
         WHERE symbol IN ({ph}) AND share_factor > 0 AND share_factor <> 1
           AND ex_date >= ? AND ex_date <= ?
@@ -332,7 +402,7 @@ def _share_factors(symbols: tuple, start: date, end: date) -> dict:
 
 
 # ── options: what the call/put gap normally is at this point in the cycle ────
-def _opt_cycle_norm(sessions_to_expiry: Optional[int]) -> float:
+def _opt_cycle_norm(sessions_to_expiry: Optional[int], scale: float = 1.0) -> float:
     """Expected (put OI % - call OI %) for a bucket, by sessions left to expiry.
 
     The raw gap is a picture of the expiry calendar. Pooled over every bucket of
@@ -342,16 +412,22 @@ def _opt_cycle_norm(sessions_to_expiry: Optional[int]) -> float:
     Calls are opened faster on a new series and closed faster into expiry, so an
     unadjusted label read "call side heavier" on 70% of bucket-days in the first
     week of a cycle and "put side heavier" on 75% the day before expiry (Nifty
-    83%). The same shape holds on each index separately. The label is therefore
-    taken on the gap MINUS this norm.
+    83%). The label is therefore taken on the gap MINUS this norm.
+
+    `scale` is the index's own strength of that shape -- the slope of its gap on
+    the pooled profile: Nifty 1.14, Bank Nifty 0.93, Fin Nifty 0.95, Midcap Select
+    0.62. The shape is shared; the size is not. On the pooled norm alone Midcap
+    Select was OVER-corrected (39% put-side labels at 1-2 sessions out, 58% at
+    16+); the other three already sat at 45-51% in every phase.
     """
     if sessions_to_expiry is None:
         return 0.0
     n = int(sessions_to_expiry)
-    if n <= 1:  return 3.3
-    if n == 2:  return 1.6
-    if n == 3:  return 0.6
-    return max(-3.0, 0.25 - 0.18 * (n - 4))
+    if n <= 1:    base = 3.3
+    elif n == 2:  base = 1.6
+    elif n == 3:  base = 0.6
+    else:         base = max(-3.0, 0.25 - 0.18 * (n - 4))
+    return base * scale
 
 
 _OI_BAND = 0.5      # % OI change below which a stock casts no vote
@@ -385,12 +461,13 @@ def _quadrant(price_pct, oi_pct, band: float = _OI_BAND) -> Optional[str]:
     return "short build" if oi_pct > 0 else "long unwind"
 
 
-def _opt_label(ce_pct, pe_pct, sessions_to_expiry: Optional[int] = None) -> Optional[str]:
+def _opt_label(ce_pct, pe_pct, sessions_to_expiry: Optional[int] = None,
+               scale: float = 1.0) -> Optional[str]:
     """Call-vs-put OI flow in words, against the norm for this point in the cycle.
     Relative, not conditioned on price."""
     if ce_pct is None or pe_pct is None or pd.isna(ce_pct) or pd.isna(pe_pct):
         return None
-    d = pe_pct - ce_pct - _opt_cycle_norm(sessions_to_expiry)
+    d = pe_pct - ce_pct - _opt_cycle_norm(sessions_to_expiry, scale)
     if abs(d) < 0.25:
         return "balanced"
     # "writing" = one side rose while the other fell, AND the adjusted gap agrees
@@ -430,7 +507,7 @@ def _is_rebalance_close(trade_date: date) -> Optional[str]:
         for v in versions:
             eff = v["effective"]
             if trade_date < eff and (eff - trade_date).days <= 4:
-                later = query_dataframe(
+                later = _qdf(
                     "SELECT 1 FROM daily_data WHERE trade_date > ? AND trade_date < ? "
                     "LIMIT 1", [trade_date, eff])
                 if later.empty:
@@ -489,6 +566,7 @@ class BucketRow:
     pe_oi_pct:    Optional[float] = None     # total forward PUT OI change %
     opt_valid:    int = 0
     opt_dte:      Optional[int] = None       # trading sessions left to expiry
+    opt_scale:    float = 1.0                # the index's options-cycle strength
     movers_up:    list = field(default_factory=list)
     movers_dn:    list = field(default_factory=list)
 
@@ -512,7 +590,7 @@ class BucketRow:
         if (self.opt_valid < _min_valid(self.n_members)
                 or self.ce_oi_pct is None or self.pe_oi_pct is None):
             return None
-        return _opt_label(self.ce_oi_pct, self.pe_oi_pct, self.opt_dte)
+        return _opt_label(self.ce_oi_pct, self.pe_oi_pct, self.opt_dte, self.opt_scale)
 
     @property
     def flow_score(self) -> Optional[float]:
@@ -646,10 +724,10 @@ class IndexLargeCap:
 
         AGAIN 06 Oct 2026 on the exact live rule (split-adjusted returns and OI,
         options read net of the expiry cycle), 1,178 sessions: next day hit 52.2%
-        against a 52.0% base, IC +0.034; beside close-strength t +0.34 (gap),
-        +1.02 (1d), +1.01 (5d); walk-forward next day +0.8bps at 50.4%. The
-        score's SIGN against the gap reads t +2.45 beside CLR while its value
-        reads +0.34 -- one test, two answers, i.e. noise.
+        against a 52.0% base, IC +0.034; beside close-strength t +0.35 (gap),
+        +1.05 (1d), +1.02 (5d); walk-forward next day +1.1bps at 50.4%. The
+        score's SIGN against the gap reads t +1.97 beside CLR while its value
+        reads +0.35 -- one test, two answers, i.e. noise.
         """
         scored = [r for r in self.rows if r.flow_score is not None]
         if not scored:
@@ -705,8 +783,9 @@ class IndexLargeCap:
 
 
 def _load_cash(symbols: tuple, trade_date: date, lookback: int = 220) -> pd.DataFrame:
+    symbols = _with_old(symbols)
     ph = ", ".join("?" * len(symbols))
-    df = query_dataframe(f"""
+    df = _qdf(f"""
         SELECT trade_date, symbol, close_price, prev_close, deliv_per, turnover_lacs,
                {_R_SQL} AS r, {_F_SQL} AS share_factor
         FROM daily_data
@@ -762,11 +841,12 @@ def _load_futures(symbols: tuple, trade_date: date,
     it drops are only 1.0% of futures OI. The SUM is the only continuous measure:
     while the front bleeds, the next fills, and only their total is flat.
     """
+    symbols = _with_old(symbols)
     ph = ", ".join("?" * len(symbols))
     if include_expiring:
         # SETTLEMENT SESSION ONLY: keep the contract that settles today, on both
         # days. See get_index_largecap for why this basis is continuous there.
-        return query_dataframe(f"""
+        return _qdf(f"""
             SELECT trade_date, symbol, expiry_date, open_interest
             FROM fno_bhavcopy
             WHERE instrument = 'FUTSTK' AND open_interest > 0
@@ -774,7 +854,7 @@ def _load_futures(symbols: tuple, trade_date: date,
               AND trade_date <= ? AND trade_date > (?::date - 20)
               AND expiry_date >= ?
         """, [*symbols, trade_date, trade_date, trade_date])
-    return query_dataframe(f"""
+    return _qdf(f"""
         SELECT trade_date, symbol, expiry_date, open_interest
         FROM fno_bhavcopy
         WHERE instrument = 'FUTSTK' AND open_interest > 0
@@ -814,8 +894,9 @@ def _load_options(symbols: tuple, trade_date: date) -> pd.DataFrame:
     unwind. Strikes are summed too -- this is a SIDE-level flow read, not a
     strike-level one.
     """
+    symbols = _with_old(symbols)
     ph = ", ".join("?" * len(symbols))
-    return query_dataframe(f"""
+    return _qdf(f"""
         SELECT trade_date, symbol, option_type, SUM(open_interest) AS oi
         FROM fno_bhavcopy
         WHERE instrument = 'OPTSTK' AND open_interest > 0
@@ -975,7 +1056,7 @@ def get_index_largecap(trade_date: date, fno_symbol: str = "NIFTY") -> IndexLarg
                     f"latest available is {max(hist['trade_date']):%d %b %Y}.")
         return out
 
-    idx = query_dataframe("""
+    idx = _qdf("""
         SELECT pct_chg FROM index_data WHERE index_name = ? AND trade_date = ?
     """, [meta["index_name"], trade_date])
     if not idx.empty and pd.notna(idx["pct_chg"].iloc[0]):
@@ -1010,7 +1091,7 @@ def get_index_largecap(trade_date: date, fno_symbol: str = "NIFTY") -> IndexLarg
     # fall away faster than the puts (CE -6.2% vs PE -2.0%), and the options read
     # comes out "put side heavier / put writing" on 72-86% of settlement bucket-
     # days against 42-46% ordinarily -- a manufactured bullish read every month.
-    _exp = query_dataframe("""
+    _exp = _qdf("""
         SELECT 1 AS x FROM fno_bhavcopy
         WHERE instrument = 'FUTSTK' AND trade_date = ? AND expiry_date = ? LIMIT 1
     """, [trade_date, trade_date])
@@ -1023,19 +1104,23 @@ def get_index_largecap(trade_date: date, fno_symbol: str = "NIFTY") -> IndexLarg
     opt = (pd.DataFrame(columns=["symbol", "ce_pct", "pe_pct"])
            if out.is_expiry_session
            else _opt_change(_load_options(all_syms, trade_date), trade_date, fac))
+    _dm = {sy for (_d, sy) in _demerger_days(all_syms, trade_date, trade_date)}
+    if _dm:
+        oi = oi[~oi["symbol"].isin(_dm)]
+        opt = opt[~opt["symbol"].isin(_dm)]
     out.rows = [_bucket_row(lbl, mem, hist, today, oi, opt)
                 for lbl, mem in meta["buckets"].items()]
-    _exp = query_dataframe(f"""
+    _exp = _qdf(f"""
         WITH f AS (
             SELECT expiry_date, SUM(open_interest) AS oi
             FROM fno_bhavcopy
             WHERE instrument IN ('FUTSTK','OPTSTK') AND open_interest > 0
-              AND symbol IN ({", ".join("?" * len(all_syms))})
+              AND symbol IN ({", ".join("?" * len(_with_old(all_syms)))})
               AND trade_date = ? AND expiry_date > trade_date
             GROUP BY 1)
         SELECT expiry_date, oi, SUM(oi) OVER () AS tot FROM f ORDER BY expiry_date
-    """, [*all_syms, trade_date])
-    _turn = query_dataframe(f"""
+    """, [*_with_old(all_syms), trade_date])
+    _turn = _qdf(f"""
         SELECT trade_date, SUM(turnover_lacs) AS t
         FROM daily_data
         WHERE series IN ('EQ','SM','ST') AND trade_date <= ?
@@ -1080,6 +1165,7 @@ def get_index_largecap(trade_date: date, fno_symbol: str = "NIFTY") -> IndexLarg
         out.sessions_to_expiry = _sessions_until(trade_date, out.front_expiry)
         for _r in out.rows:
             _r.opt_dte = out.sessions_to_expiry
+            _r.opt_scale = meta.get("opt_cycle_scale", 1.0)
         if _f["tot"]:
             out.near_oi_share = float(_f["oi"] / _f["tot"] * 100)
     return out
@@ -1113,22 +1199,23 @@ def get_concentration_trend(fno_symbol: str = "NIFTY", years: int = 5,
     if meta is None:
         return pd.DataFrame()
     all_syms = tuple(s for b in meta["buckets"].values() for s in b)
-    ph = ", ".join("?" * len(all_syms))
+    q_syms = _with_old(all_syms)
+    ph = ", ".join("?" * len(q_syms))
     # Anchored on the SELECTED date, not today: picking a 2024 session must not
     # render 2026 rows underneath it. The panel is a record as of the date on screen.
     anchor = as_of or date.today()
     start = anchor - timedelta(days=365 * years + 30)
     if meta.get("history_from"):
         start = max(start, meta["history_from"])
-    df = query_dataframe(f"""
+    df = _qdf(f"""
         SELECT trade_date, symbol,
                {_R_SQL} AS r
         FROM daily_data
         WHERE symbol IN ({ph}) AND series IN ('EQ','SM','ST')
           AND close_price > 0 AND prev_close > 0
           AND trade_date >= ? AND trade_date <= ?
-    """, [*all_syms, start, anchor])
-    idx = query_dataframe("""
+    """, [*q_syms, start, anchor])
+    idx = _qdf("""
         SELECT trade_date, pct_chg FROM index_data
         WHERE index_name = ? AND trade_date >= ? AND trade_date <= ?
     """, [meta["index_name"], start, anchor])
@@ -1298,20 +1385,21 @@ def get_state_base_rates(fno_symbol: str = "NIFTY", years: int = 5,
     top10 = tuple(list(buckets.values())[0])
     rest30 = tuple(list(buckets.values())[-1])
     all_syms = tuple(s for b in buckets.values() for s in b)
-    ph = ", ".join("?" * len(all_syms))
+    q_syms = _with_old(all_syms)
+    ph = ", ".join("?" * len(q_syms))
     anchor = as_of or date.today()
     start = anchor - timedelta(days=365 * years + 30)
     if meta.get("history_from"):
         start = max(start, meta["history_from"])
-    df = query_dataframe(f"""
+    df = _qdf(f"""
         SELECT trade_date, symbol,
                {_R_SQL} AS r
         FROM daily_data
         WHERE symbol IN ({ph}) AND series IN ('EQ','SM','ST')
           AND close_price > 0 AND prev_close > 0
           AND trade_date >= ? AND trade_date <= ?
-    """, [*all_syms, start, anchor])
-    idx = query_dataframe("""
+    """, [*q_syms, start, anchor])
+    idx = _qdf("""
         SELECT trade_date, open_val, close_val, pct_chg FROM index_data
         WHERE index_name = ? AND trade_date >= ? AND trade_date <= ?
     """, [meta["index_name"], start, anchor])
@@ -1400,16 +1488,17 @@ def _flow_state_matrix(fno_symbol: str, as_of: date, years: int = 5,
         return _empty()
     buckets = meta["buckets"]
     all_syms = tuple(s for b in buckets.values() for s in b)
-    ph = ", ".join("?" * len(all_syms))
+    q_syms = _with_old(all_syms)
+    ph = ", ".join("?" * len(q_syms))
     start = as_of - timedelta(days=365 * years + 420)
 
-    cash = query_dataframe(f"""
+    cash = _qdf(f"""
         SELECT trade_date, symbol, deliv_per,
                {_R_SQL} AS r
         FROM daily_data WHERE symbol IN ({ph}) AND series IN ('EQ','SM','ST')
           AND close_price > 0 AND prev_close > 0
           AND trade_date >= ? AND trade_date <= ?
-    """, [*all_syms, start, as_of])
+    """, [*q_syms, start, as_of])
     # Day-over-day forward OI in SQL, NOT ~1,100 per-day pandas merges. The merge
     # version cost 19.8s of a 20.2s panel render; this is the same arithmetic in
     # about a second.
@@ -1419,7 +1508,7 @@ def _flow_state_matrix(fno_symbol: str, as_of: date, years: int = 5,
     # into the next nets to zero rather than reading as an unwind. A contract with
     # no prior row (poi NULL) drops out of BOTH sums, which keeps the two days over
     # an identical contract set -- the property the merge version got by joining.
-    oi = query_dataframe(f"""
+    oi = _qdf(f"""
         WITH f AS (
             SELECT trade_date, symbol, expiry_date, instrument, option_type,
                    SUM(open_interest) AS oi
@@ -1437,13 +1526,15 @@ def _flow_state_matrix(fno_symbol: str, as_of: date, years: int = 5,
         SELECT trade_date, symbol, instrument, option_type,
                SUM(oi / COALESCE((SELECT EXP(SUM(LN(ca.share_factor)))
                                   FROM corp_actions ca
-                                  WHERE ca.symbol = l.symbol AND ca.ex_date = l.trade_date
+                                  WHERE ca.symbol = CASE l.symbol WHEN 'ZOMATO' THEN 'ETERNAL'
+                                                    WHEN 'TATAMOTORS' THEN 'TMPV' ELSE l.symbol END
+                                    AND ca.ex_date = l.trade_date
                                     AND ca.share_factor > 0 AND ca.share_factor <> 1), 1)) AS oi,
                SUM(poi) AS poi
         FROM l WHERE poi > 0
         GROUP BY 1,2,3,4
-    """, [*all_syms, start, as_of])
-    idx = query_dataframe("""
+    """, [*q_syms, start, as_of])
+    idx = _qdf("""
         SELECT trade_date, pct_chg FROM index_data
         WHERE index_name = ? AND trade_date >= ? AND trade_date <= ?
     """, [meta["index_name"], start, as_of])
@@ -1456,7 +1547,7 @@ def _flow_state_matrix(fno_symbol: str, as_of: date, years: int = 5,
     R = cash.pivot_table("r", "trade_date", "symbol").sort_index()
     DL = cash.pivot_table("deliv_per", "trade_date", "symbol").sort_index()
 
-    settle = set(pd.to_datetime(query_dataframe(
+    settle = set(pd.to_datetime(_qdf(
         "SELECT DISTINCT trade_date FROM fno_bhavcopy WHERE instrument='FUTSTK'"
         " AND expiry_date = trade_date AND trade_date >= ?",
         [start])["trade_date"]))
@@ -1492,7 +1583,7 @@ def _flow_state_matrix(fno_symbol: str, as_of: date, years: int = 5,
     # the expiry cycle -- otherwise "similar days" are partly just days at the
     # same distance from expiry (see _opt_cycle_norm)
     from src.analytics.fno_stocks import _sessions_until
-    fe = query_dataframe("""
+    fe = _qdf("""
         SELECT trade_date, MIN(expiry_date) AS e FROM fno_bhavcopy
         WHERE instrument = 'FUTSTK' AND expiry_date > trade_date
           AND trade_date >= ? AND trade_date <= ? GROUP BY 1
@@ -1500,7 +1591,8 @@ def _flow_state_matrix(fno_symbol: str, as_of: date, years: int = 5,
     if not fe.empty:
         fe["trade_date"] = pd.to_datetime(fe["trade_date"])
         norm = pd.Series(
-            [_opt_cycle_norm(_sessions_until(t.date(), pd.to_datetime(e).date()))
+            [_opt_cycle_norm(_sessions_until(t.date(), pd.to_datetime(e).date()),
+                             meta.get("opt_cycle_scale", 1.0))
              for t, e in zip(fe["trade_date"], fe["e"])], index=fe["trade_date"])
         for col in [c for c in X.columns if c.endswith(" options")]:
             X[col] = X[col] - norm.reindex(X.index)
@@ -1795,7 +1887,8 @@ def get_stock_flow(trade_date: date, fno_symbol: str = "NIFTY") -> pd.DataFrame:
         return pd.DataFrame(columns=cols)
     all_syms = tuple(s for b in meta["buckets"].values() for s in b)
     bucket_of = {s: lbl for lbl, mem in meta["buckets"].items() for s in mem}
-    ph = ", ".join("?" * len(all_syms))
+    q_syms = _with_old(all_syms)
+    ph = ", ".join("?" * len(q_syms))
 
     cash = _load_cash(all_syms, trade_date, lookback=45)
     if cash.empty or trade_date not in set(cash["trade_date"]):
@@ -1806,7 +1899,7 @@ def get_stock_flow(trade_date: date, fno_symbol: str = "NIFTY") -> pd.DataFrame:
     Tw = cash.pivot_table("turnover_lacs", "trade_date", "symbol").sort_index()
     Dw = cash.pivot_table("deliv_per", "trade_date", "symbol").sort_index()
 
-    settle = sorted(pd.to_datetime(query_dataframe("""
+    settle = sorted(pd.to_datetime(_qdf("""
         SELECT DISTINCT trade_date FROM fno_bhavcopy
         WHERE instrument = 'FUTSTK' AND expiry_date = trade_date
           AND trade_date <= ? AND trade_date > (?::date - 120)
@@ -1815,13 +1908,13 @@ def get_stock_flow(trade_date: date, fno_symbol: str = "NIFTY") -> pd.DataFrame:
     anchor = max([d for d in settle if d < trade_date], default=None)
     start = min(anchor or trade_date, trade_date - timedelta(days=45))
 
-    F = query_dataframe(f"""
+    F = _qdf(f"""
         SELECT trade_date, symbol, expiry_date, SUM(open_interest) AS oi
         FROM fno_bhavcopy
         WHERE instrument = 'FUTSTK' AND symbol IN ({ph})
           AND trade_date >= ? AND trade_date <= ? AND expiry_date >= trade_date
         GROUP BY 1, 2, 3
-    """, [*all_syms, start, trade_date])
+    """, [*q_syms, start, trade_date])
     if not F.empty:
         F["trade_date"] = pd.to_datetime(F["trade_date"]).dt.date
         F["expiry_date"] = pd.to_datetime(F["expiry_date"]).dt.date
@@ -1844,9 +1937,11 @@ def get_stock_flow(trade_date: date, fno_symbol: str = "NIFTY") -> pd.DataFrame:
         j = pd.DataFrame({"a": a, "b": b}).dropna()
         j = j[j["b"] > 0]
         j["a"] = j["a"] / j.index.map(lambda sy: fmap.get((d, sy), 1.0))
+        j = j[[(d, sy) not in dmset for sy in j.index]]
         return (j["a"] - j["b"]) / j["b"] * 100
 
     fac = {sy: f for (dd, sy), f in fmap.items() if dd == trade_date}
+    dmset = _demerger_days(all_syms, start, trade_date)
     today_oi = _total_oi_change(
         _load_futures(all_syms, trade_date, include_expiring=is_exp), trade_date, fac)
     today_oi = today_oi.set_index("symbol") if not today_oi.empty else today_oi
@@ -1875,7 +1970,7 @@ def get_stock_flow(trade_date: date, fno_symbol: str = "NIFTY") -> pd.DataFrame:
         row = dict.fromkeys(cols)
         row.update(bucket=bucket_of[sym], symbol=sym, cyc_from=anchor,
                    price_pct=None if pd.isna(r) else float(r), trail=[])
-        if len(today_oi) and sym in today_oi.index:
+        if len(today_oi) and sym in today_oi.index and (trade_date, sym) not in dmset:
             oi, poi = float(today_oi.at[sym, "oi"]), float(today_oi.at[sym, "prev_oi"])
             pct = (oi - poi) / poi * 100
             row.update(oi_today=oi, oi_prev=poi, oi_pct=pct, oi_chg=oi - poi,
@@ -1899,7 +1994,8 @@ def get_stock_flow(trade_date: date, fno_symbol: str = "NIFTY") -> pd.DataFrame:
             # past 50% is a contract adjustment, not positioning, so the cycle
             # figure is withheld rather than shown as a +100% "build"
             broke = any(sym in cyc_daily[d].index and abs(cyc_daily[d][sym]) > 50
-                        for d in cyc_days)
+                        for d in cyc_days) or any(
+                (d, sym) in dmset for d in cyc_days)
             pr = Rw[sym][(Rw.index > anchor) & (Rw.index <= trade_date)].dropna() \
                 if sym in Rw.columns else pd.Series(dtype=float)
             if not broke and len(pr):
@@ -1913,16 +2009,17 @@ def get_stock_flow(trade_date: date, fno_symbol: str = "NIFTY") -> pd.DataFrame:
                 band = _OI_BAND * float(np.sqrt(max(len(cyc_days), 1)))
                 row.update(cyc_price_pct=cp, cyc_oi_pct=co,
                            cyc_read=_quadrant(cp, co, band))
-        if len(opt) and sym in opt.index:
+        if len(opt) and sym in opt.index and (trade_date, sym) not in dmset:
             ce, pe = float(opt.at[sym, "ce_pct"]), float(opt.at[sym, "pe_pct"])
-            row.update(ce_pct=ce, pe_pct=pe, opt_read=_opt_label(ce, pe, dte))
+            row.update(ce_pct=ce, pe_pct=pe, opt_read=_opt_label(
+                ce, pe, dte, meta.get("opt_cycle_scale", 1.0)))
         rows.append(row)
     return pd.DataFrame(rows, columns=cols)
 
 
 def _index_close(index_name: str, trade_date: date) -> Optional[float]:
     """Closing level, used only to express historical % moves in today's points."""
-    df = query_dataframe(
+    df = _qdf(
         "SELECT close_val FROM index_data WHERE index_name = ? AND trade_date = ?",
         [index_name, trade_date])
     if df.empty or pd.isna(df.iloc[0, 0]):

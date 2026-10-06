@@ -174,7 +174,8 @@ def build(sym):
         # the LIVE label: gap net of its expiry-cycle norm (_opt_cycle_norm)
         _num = {"put writing": 1., "put side heavier": .5, "balanced": 0.,
                 "call side heavier": -.5, "call writing": -1., None: np.nan}
-        oleg = pd.Series([_num[_opt_label(c_, p_, DTE.get(t))]
+        _sc = meta.get("opt_cycle_scale", 1.0)
+        oleg = pd.Series([_num[_opt_label(c_, p_, DTE.get(t), _sc)]
                           for t, c_, p_ in zip(IX, cm, pm)],
                          index=IX).where(both.sum(axis=1) >= nmin)
         L = pd.DataFrame({"deliv": dleg, "fut": fleg, "opt": oleg})
