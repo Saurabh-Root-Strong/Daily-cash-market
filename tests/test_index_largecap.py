@@ -741,7 +741,9 @@ def test_cycle_read_is_anchored_on_the_last_settlement_close():
     row = sf[sf["symbol"] == "NTPC"].iloc[0]
     # NTPC shed OI on every one of the four sessions; the cycle must agree
     assert all(x < 0 for x in row["trail"]) and row["cyc_oi_pct"] < 0
-    assert row["cyc_read"] == ilc._quadrant(row["cyc_price_pct"], row["cyc_oi_pct"])
+    # OI -7.7% but price only -0.5%, inside the widened band 3 sessions in:
+    # positions were closed, the side is not readable
+    assert row["cyc_read"] == "closed, price flat"
     # on an expiry day the anchor is the PREVIOUS expiry, never the day itself
     assert set(ilc.get_stock_flow(_d(2026, 9, 29), "NIFTY")["cyc_from"]) == {_d(2026, 8, 25)}
 
@@ -751,7 +753,9 @@ def test_quadrant_rule():
     assert ilc._quadrant(1.0, -2.0) == "short covering"
     assert ilc._quadrant(-1.0, 2.0) == "short build"
     assert ilc._quadrant(-1.0, -2.0) == "long unwind"
-    assert ilc._quadrant(1.0, 0.4) == "flat" and ilc._quadrant(0.0, 3.0) == "flat"
+    assert ilc._quadrant(1.0, 0.4) == "flat"
+    # price exactly unchanged: positions moved, the side is unreadable; no vote
+    assert ilc._quadrant(0.0, 3.0) == "added, price flat"
     assert ilc._quadrant(None, 3.0) is None
 
 
@@ -761,3 +765,60 @@ def test_missing_label_values_render_as_a_dash_not_a_crash():
     from src.dashboard.views.sector_rotation import _ilc_lab, _ILC_QUAD
     assert _ilc_lab(_ILC_QUAD, float("nan")) == "—" == _ilc_lab(_ILC_QUAD, None)
     assert _ilc_lab(_ILC_QUAD, "long build") == "🟢 long build"
+
+
+# ── audit of 06 Oct 2026: corporate actions and the expiry cycle ────────────
+
+def test_split_and_bonus_days_are_adjusted_not_read_as_crashes():
+    """prev_close in daily_data is raw. TRENT's 1:2 bonus (04 Jun 2026) printed
+    -33.4% -- under the old +-40% guard, so it went into the bucket return, the
+    breadth and the carry spread as a real fall -- and its OI in shares +54%."""
+    from datetime import date as _d
+    sf = ilc.get_stock_flow(_d(2026, 6, 4), "NIFTY")
+    t = sf[sf["symbol"] == "TRENT"].iloc[0]
+    assert abs(t["price_pct"]) < 3, t["price_pct"]
+    assert abs(t["oi_pct"]) < 15, t["oi_pct"]
+    # a 5:1 split used to be DROPPED (|r| >= 40), leaving the bucket one short
+    b = ilc.get_index_largecap(_d(2026, 1, 14), "NIFTY")
+    assert b.n_present == 50, "KOTAKBANK's split day must stay in the basket"
+    k = ilc.get_stock_flow(_d(2026, 1, 14), "NIFTY")
+    assert abs(k[k["symbol"] == "KOTAKBANK"].iloc[0]["price_pct"]) < 5
+
+
+def test_a_real_crash_is_not_mistaken_for_a_corporate_action():
+    """POLICYBZR -36.0% on 24 Sep 2026 with OI +54%: price x OI ~ 1, the exact
+    signature of a re-basing, and a real crash. Only the official table adjusts."""
+    from datetime import date as _d
+    sf = ilc.get_stock_flow(_d(2026, 9, 24), "MIDCPNIFTY")
+    p = sf[sf["symbol"] == "POLICYBZR"].iloc[0]
+    assert p["price_pct"] < -30 and p["oi_pct"] > 40 and p["read"] == "short build"
+
+
+def test_options_read_is_net_of_the_expiry_cycle():
+    """Raw PE-CE runs about -3.6 at 20 sessions to expiry and +3.3 the day
+    before; unadjusted the label was a picture of the calendar."""
+    n = ilc._opt_cycle_norm
+    assert n(1) == pytest.approx(3.3) and n(2) == pytest.approx(1.6)
+    assert n(20) < -2.5 and n(60) == pytest.approx(-3.0)        # floored
+    assert all(n(k) >= n(k + 1) for k in range(1, 30)), "must fall monotonically"
+    assert n(None) == 0.0
+    # same raw numbers, opposite label at the two ends of a cycle
+    assert ilc._opt_label(6.0, 8.0, 1) == "call side heavier"    # +2 vs a +3.3 norm
+    assert ilc._opt_label(6.0, 8.0, 15) == "put side heavier"    # +2 vs a -1.7 norm
+    assert ilc._opt_label(6.0, 8.0) == "put side heavier"        # no cycle info
+    d = ilc.get_index_largecap(__import__("datetime").date(2026, 10, 5), "NIFTY")
+    assert d.sessions_to_expiry == 15 and all(r.opt_dte == 15 for r in d.rows)
+
+
+def test_cycle_read_dead_band_widens_with_the_cycle():
+    assert ilc._quadrant(0.3, 2.0) == "long build"          # one session: OI band only
+    assert ilc._quadrant(0.3, 2.0, band=1.5) == "added, price flat"   # nine sessions in
+    assert ilc._quadrant(0.3, -2.0, band=1.5) == "closed, price flat"
+    assert ilc._quadrant(3.0, 1.0, band=1.5) == "flat"                # OI inside the band
+    assert ilc._quadrant(2.0, 2.0, band=1.5) == "long build"
+
+
+def test_missing_fno_file_is_named_on_screen():
+    from pathlib import Path
+    src = Path("src/dashboard/views/sector_rotation.py").read_text(encoding="utf-8")
+    assert "No F&O data for" in src and "This is a data gap" in src

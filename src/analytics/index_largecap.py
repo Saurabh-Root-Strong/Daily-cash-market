@@ -294,10 +294,70 @@ def _min_valid(n_members: int) -> int:
     return max(2, min(4, -(-n_members * 3 // 5)))
 
 
+# CORPORATE ACTIONS. daily_data.prev_close is the RAW previous close: NSE's file
+# is not re-based here (prev_close differs from yesterday's close on 3 member
+# stock-days in five years). A split or bonus therefore lands as a one-day
+# "return" of -20% to -90%. The old guard dropped anything beyond +-40%, which
+# caught the large ones and let the small ones through as real crashes: HINDPETRO
+# -34.9% (bonus 1:2), TRENT -33.4% (1:2), POWERGRID -27.7% (1:3), RECLTD -23.2%
+# (1:3), PFC -19.9% (1:4) -- into the bucket return, breadth, carry spread and
+# the "top losers" line. corp_actions.share_factor is the official re-basing
+# factor; all 26 split/bonus events on members since 2022 adjust to a sane
+# return with it (largest 5.3%), including compound ones (BAJFINANCE split +
+# bonus = x10). Open interest is quoted in shares, so it is divided by the same
+# factor on the ex-date.
+#
+# NOT inferred from the tape. POLICYBZR fell 36.0% on 24 Sep 2026 with OI +54% --
+# price x OI ~ 1, the exact signature of a re-basing -- and it was a real crash
+# (opened -10%, slid all session on 34x normal volume). Only the official table.
+_F_SQL = ("COALESCE((SELECT EXP(SUM(LN(ca.share_factor))) FROM corp_actions ca "
+          "WHERE ca.symbol = daily_data.symbol AND ca.ex_date = daily_data.trade_date "
+          "AND ca.share_factor > 0 AND ca.share_factor <> 1), 1)")
+_R_SQL = f"(close_price * {_F_SQL} - prev_close) / NULLIF(prev_close, 0) * 100"
+
+
+def _share_factors(symbols: tuple, start: date, end: date) -> dict:
+    """{(ex_date, symbol): factor} for splits and bonuses in [start, end]."""
+    if not symbols:
+        return {}
+    ph = ", ".join("?" * len(symbols))
+    df = query_dataframe(f"""
+        SELECT symbol, ex_date, EXP(SUM(LN(share_factor))) AS f FROM corp_actions
+        WHERE symbol IN ({ph}) AND share_factor > 0 AND share_factor <> 1
+          AND ex_date >= ? AND ex_date <= ?
+        GROUP BY 1, 2
+    """, [*symbols, start, end])
+    return {(pd.to_datetime(r.ex_date).date(), r.symbol): float(r.f)
+            for r in df.itertuples()}
+
+
+# ── options: what the call/put gap normally is at this point in the cycle ────
+def _opt_cycle_norm(sessions_to_expiry: Optional[int]) -> float:
+    """Expected (put OI % - call OI %) for a bucket, by sessions left to expiry.
+
+    The raw gap is a picture of the expiry calendar. Pooled over every bucket of
+    all four indices, 2022-2026 (scripts/ilc_options_cycle_audit.py):
+        sessions left   20     15     10      5      3      2      1
+        mean PE - CE   -3.6   -1.4   -1.2   +0.1   +0.6   +1.6   +3.3
+    Calls are opened faster on a new series and closed faster into expiry, so an
+    unadjusted label read "call side heavier" on 70% of bucket-days in the first
+    week of a cycle and "put side heavier" on 75% the day before expiry (Nifty
+    83%). The same shape holds on each index separately. The label is therefore
+    taken on the gap MINUS this norm.
+    """
+    if sessions_to_expiry is None:
+        return 0.0
+    n = int(sessions_to_expiry)
+    if n <= 1:  return 3.3
+    if n == 2:  return 1.6
+    if n == 3:  return 0.6
+    return max(-3.0, 0.25 - 0.18 * (n - 4))
+
+
 _OI_BAND = 0.5      # % OI change below which a stock casts no vote
 
 
-def _quadrant(price_pct, oi_pct) -> Optional[str]:
+def _quadrant(price_pct, oi_pct, band: float = _OI_BAND) -> Optional[str]:
     """The desk's OI-price matrix for ONE stock. None when either input is missing.
 
         price up   + OI up    long build       (positions ADDED on a rise)
@@ -311,22 +371,31 @@ def _quadrant(price_pct, oi_pct) -> Optional[str]:
     """
     if price_pct is None or oi_pct is None or pd.isna(price_pct) or pd.isna(oi_pct):
         return None
-    if abs(oi_pct) <= _OI_BAND or price_pct == 0:
+    # `band` is the dead zone on BOTH axes for a multi-session read; on a single
+    # session it applies to OI only, as the bucket votes always have
+    px_band = band if band > _OI_BAND else 0.0
+    if abs(oi_pct) <= band:
         return "flat"
+    if abs(price_pct) <= px_band:
+        # OI clearly moved but price did not: the positions are a fact, the side
+        # is not readable. Say so instead of discarding it as "flat".
+        return "added, price flat" if oi_pct > 0 else "closed, price flat"
     if price_pct > 0:
         return "long build" if oi_pct > 0 else "short covering"
     return "short build" if oi_pct > 0 else "long unwind"
 
 
-def _opt_label(ce_pct, pe_pct) -> Optional[str]:
-    """Call-vs-put OI flow in words. Relative, not conditioned on price."""
+def _opt_label(ce_pct, pe_pct, sessions_to_expiry: Optional[int] = None) -> Optional[str]:
+    """Call-vs-put OI flow in words, against the norm for this point in the cycle.
+    Relative, not conditioned on price."""
     if ce_pct is None or pe_pct is None or pd.isna(ce_pct) or pd.isna(pe_pct):
         return None
-    d = pe_pct - ce_pct
+    d = pe_pct - ce_pct - _opt_cycle_norm(sessions_to_expiry)
     if abs(d) < 0.25:
         return "balanced"
-    if pe_pct > 0 and ce_pct <= 0:  return "put writing"
-    if ce_pct > 0 and pe_pct <= 0:  return "call writing"
+    # "writing" = one side rose while the other fell, AND the adjusted gap agrees
+    if d > 0 and pe_pct > 0 and ce_pct <= 0:  return "put writing"
+    if d < 0 and ce_pct > 0 and pe_pct <= 0:  return "call writing"
     return "put side heavier" if d > 0 else "call side heavier"
 
 
@@ -419,6 +488,7 @@ class BucketRow:
     ce_oi_pct:    Optional[float] = None     # total forward CALL OI change %
     pe_oi_pct:    Optional[float] = None     # total forward PUT OI change %
     opt_valid:    int = 0
+    opt_dte:      Optional[int] = None       # trading sessions left to expiry
     movers_up:    list = field(default_factory=list)
     movers_dn:    list = field(default_factory=list)
 
@@ -442,7 +512,7 @@ class BucketRow:
         if (self.opt_valid < _min_valid(self.n_members)
                 or self.ce_oi_pct is None or self.pe_oi_pct is None):
             return None
-        return _opt_label(self.ce_oi_pct, self.pe_oi_pct)
+        return _opt_label(self.ce_oi_pct, self.pe_oi_pct, self.opt_dte)
 
     @property
     def flow_score(self) -> Optional[float]:
@@ -539,6 +609,7 @@ class IndexLargeCap:
     # reader can see WHERE IN THE CYCLE the OI numbers were taken.
     front_expiry:  Optional[date] = None
     days_to_expiry: Optional[int] = None
+    sessions_to_expiry: Optional[int] = None   # trading sessions, holiday-aware
     near_oi_share: Optional[float] = None   # % of forward OI in the front month
     # Set on Budget days, Muhurat and other special sessions. These are REAL
     # sessions and belong in the data, but they are short and thin, so their
@@ -572,6 +643,13 @@ class IndexLargeCap:
             next 5 d   IC +0.011   hit 49.6%   against a 54.3% base rate
         beside close-strength t -0.29, walk-forward 48.0%, top-10-only 44.1% --
         the same verdict. Other indices: scripts/ilc_multi_index_backtest.py.
+
+        AGAIN 06 Oct 2026 on the exact live rule (split-adjusted returns and OI,
+        options read net of the expiry cycle), 1,178 sessions: next day hit 52.2%
+        against a 52.0% base, IC +0.034; beside close-strength t +0.34 (gap),
+        +1.02 (1d), +1.01 (5d); walk-forward next day +0.8bps at 50.4%. The
+        score's SIGN against the gap reads t +2.45 beside CLR while its value
+        reads +0.34 -- one test, two answers, i.e. noise.
         """
         scored = [r for r in self.rows if r.flow_score is not None]
         if not scored:
@@ -630,7 +708,7 @@ def _load_cash(symbols: tuple, trade_date: date, lookback: int = 220) -> pd.Data
     ph = ", ".join("?" * len(symbols))
     df = query_dataframe(f"""
         SELECT trade_date, symbol, close_price, prev_close, deliv_per, turnover_lacs,
-               (close_price - prev_close) / NULLIF(prev_close, 0) * 100 AS r
+               {_R_SQL} AS r, {_F_SQL} AS share_factor
         FROM daily_data
         WHERE symbol IN ({ph}) AND series IN ('EQ', 'SM', 'ST')
           AND close_price > 0 AND prev_close > 0
@@ -706,7 +784,8 @@ def _load_futures(symbols: tuple, trade_date: date,
     """, [*symbols, trade_date, trade_date, trade_date])
 
 
-def _total_oi_change(fut: pd.DataFrame, trade_date: date) -> pd.DataFrame:
+def _total_oi_change(fut: pd.DataFrame, trade_date: date,
+                     factor: Optional[dict] = None) -> pd.DataFrame:
     """symbol -> total forward OI today vs the prior session. Roll-immune."""
     if fut.empty:
         return pd.DataFrame(columns=["symbol", "oi", "prev_oi"])
@@ -721,6 +800,9 @@ def _total_oi_change(fut: pd.DataFrame, trade_date: date) -> pd.DataFrame:
     if trade_date not in tot.columns or prev not in tot.columns:
         return pd.DataFrame(columns=["symbol", "oi", "prev_oi"])
     out = pd.DataFrame({"oi": tot[trade_date], "prev_oi": tot[prev]}).dropna()
+    if factor:
+        # OI is in shares: a split/bonus on trade_date multiplies it overnight
+        out["oi"] = out["oi"] / out.index.map(lambda s: factor.get(s, 1.0))
     return out[out["prev_oi"] > 0].reset_index()
 
 
@@ -745,7 +827,8 @@ def _load_options(symbols: tuple, trade_date: date) -> pd.DataFrame:
     """, [*symbols, trade_date, trade_date, trade_date])
 
 
-def _opt_change(opt: pd.DataFrame, trade_date: date) -> pd.DataFrame:
+def _opt_change(opt: pd.DataFrame, trade_date: date,
+                factor: Optional[dict] = None) -> pd.DataFrame:
     """symbol -> CE and PE total forward OI % change vs the prior session."""
     cols = ["symbol", "ce_pct", "pe_pct"]
     if opt.empty:
@@ -766,6 +849,8 @@ def _opt_change(opt: pd.DataFrame, trade_date: date) -> pd.DataFrame:
         j = j[j["b"] > 0]
         # winsorised for the same reason the futures leg is: one thin series can
         # print a several-hundred-percent change and carry the bucket mean.
+        if factor:
+            j["a"] = j["a"] / j.index.map(lambda s: factor.get(s, 1.0))
         out[key] = ((j["a"] - j["b"]) / j["b"] * 100).clip(-50, 50)
     df = pd.DataFrame(out).dropna()
     return df.reset_index().rename(columns={"index": "symbol"}) if not df.empty         else pd.DataFrame(columns=cols)
@@ -930,12 +1015,14 @@ def get_index_largecap(trade_date: date, fno_symbol: str = "NIFTY") -> IndexLarg
         WHERE instrument = 'FUTSTK' AND trade_date = ? AND expiry_date = ? LIMIT 1
     """, [trade_date, trade_date])
     out.is_expiry_session = not _exp.empty
+    fac = {r.symbol: float(r.share_factor) for r in today.itertuples()
+           if abs(float(r.share_factor) - 1) > 1e-9}
     oi = _total_oi_change(
         _load_futures(all_syms, trade_date, include_expiring=out.is_expiry_session),
-        trade_date)
+        trade_date, fac)
     opt = (pd.DataFrame(columns=["symbol", "ce_pct", "pe_pct"])
            if out.is_expiry_session
-           else _opt_change(_load_options(all_syms, trade_date), trade_date))
+           else _opt_change(_load_options(all_syms, trade_date), trade_date, fac))
     out.rows = [_bucket_row(lbl, mem, hist, today, oi, opt)
                 for lbl, mem in meta["buckets"].items()]
     _exp = query_dataframe(f"""
@@ -989,6 +1076,10 @@ def get_index_largecap(trade_date: date, fno_symbol: str = "NIFTY") -> IndexLarg
         _f = _exp.iloc[0]
         out.front_expiry = pd.to_datetime(_f["expiry_date"]).date()
         out.days_to_expiry = (out.front_expiry - trade_date).days
+        from src.analytics.fno_stocks import _sessions_until
+        out.sessions_to_expiry = _sessions_until(trade_date, out.front_expiry)
+        for _r in out.rows:
+            _r.opt_dte = out.sessions_to_expiry
         if _f["tot"]:
             out.near_oi_share = float(_f["oi"] / _f["tot"] * 100)
     return out
@@ -1031,7 +1122,7 @@ def get_concentration_trend(fno_symbol: str = "NIFTY", years: int = 5,
         start = max(start, meta["history_from"])
     df = query_dataframe(f"""
         SELECT trade_date, symbol,
-               (close_price - prev_close) / NULLIF(prev_close, 0) * 100 AS r
+               {_R_SQL} AS r
         FROM daily_data
         WHERE symbol IN ({ph}) AND series IN ('EQ','SM','ST')
           AND close_price > 0 AND prev_close > 0
@@ -1176,6 +1267,13 @@ def get_state_base_rates(fno_symbol: str = "NIFTY", years: int = 5,
         as large out of sample, t=+3.54 beside CLR and 1/5/20d momentum. Not
         significant across the F&O family, and at ~0.11 sd per disjoint week a
         fresh-data confirmation needs ~340 weeks. Recorded, not shipped.
+        CAVEAT FOUND 06 Oct 2026 (scripts/ilc_options_cycle_audit.py): both the
+        signal and the outcome move with the expiry calendar -- the raw PE-CE gap
+        runs -3.6 at 20 sessions out to +3.3 the day before, and Nifty's next 5
+        sessions average +57bps from 1-2 sessions before expiry against -8bps
+        early in a cycle. Net of the cycle norm the lead is +31bps (58% up) vs
+        -9bps (51%); with cycle-phase dummies t=+3.46; positive in all five
+        phases but uneven (+3 to +77bps). Still a lead, still unconfirmed.
 
     Survivorship applies here as it does to the concentration trend: the basket
     is TODAY's 50 applied to history.
@@ -1207,7 +1305,7 @@ def get_state_base_rates(fno_symbol: str = "NIFTY", years: int = 5,
         start = max(start, meta["history_from"])
     df = query_dataframe(f"""
         SELECT trade_date, symbol,
-               (close_price - prev_close) / NULLIF(prev_close, 0) * 100 AS r
+               {_R_SQL} AS r
         FROM daily_data
         WHERE symbol IN ({ph}) AND series IN ('EQ','SM','ST')
           AND close_price > 0 AND prev_close > 0
@@ -1307,7 +1405,7 @@ def _flow_state_matrix(fno_symbol: str, as_of: date, years: int = 5,
 
     cash = query_dataframe(f"""
         SELECT trade_date, symbol, deliv_per,
-               (close_price - prev_close) / NULLIF(prev_close, 0) * 100 AS r
+               {_R_SQL} AS r
         FROM daily_data WHERE symbol IN ({ph}) AND series IN ('EQ','SM','ST')
           AND close_price > 0 AND prev_close > 0
           AND trade_date >= ? AND trade_date <= ?
@@ -1337,7 +1435,11 @@ def _flow_state_matrix(fno_symbol: str, as_of: date, years: int = 5,
             FROM f
         )
         SELECT trade_date, symbol, instrument, option_type,
-               SUM(oi) AS oi, SUM(poi) AS poi
+               SUM(oi / COALESCE((SELECT EXP(SUM(LN(ca.share_factor)))
+                                  FROM corp_actions ca
+                                  WHERE ca.symbol = l.symbol AND ca.ex_date = l.trade_date
+                                    AND ca.share_factor > 0 AND ca.share_factor <> 1), 1)) AS oi,
+               SUM(poi) AS poi
         FROM l WHERE poi > 0
         GROUP BY 1,2,3,4
     """, [*all_syms, start, as_of])
@@ -1386,6 +1488,22 @@ def _flow_state_matrix(fno_symbol: str, as_of: date, years: int = 5,
             PE[[s for s in cols if s in PE.columns]].reindex(sub.index)
             - CE[[s for s in cols if s in CE.columns]].reindex(sub.index)).mean(axis=1)
     X = pd.DataFrame(raw).sort_index()
+    # the options dims net of what the call/put gap normally is at that point in
+    # the expiry cycle -- otherwise "similar days" are partly just days at the
+    # same distance from expiry (see _opt_cycle_norm)
+    from src.analytics.fno_stocks import _sessions_until
+    fe = query_dataframe("""
+        SELECT trade_date, MIN(expiry_date) AS e FROM fno_bhavcopy
+        WHERE instrument = 'FUTSTK' AND expiry_date > trade_date
+          AND trade_date >= ? AND trade_date <= ? GROUP BY 1
+    """, [start, as_of])
+    if not fe.empty:
+        fe["trade_date"] = pd.to_datetime(fe["trade_date"])
+        norm = pd.Series(
+            [_opt_cycle_norm(_sessions_until(t.date(), pd.to_datetime(e).date()))
+             for t, e in zip(fe["trade_date"], fe["e"])], index=fe["trade_date"])
+        for col in [c for c in X.columns if c.endswith(" options")]:
+            X[col] = X[col] - norm.reindex(X.index)
     if meta.get("history_from"):
         # cut BEFORE standardising, so no pre-cutoff session leaks into the
         # 250-session mean/sd that today's z is measured against
@@ -1683,6 +1801,8 @@ def get_stock_flow(trade_date: date, fno_symbol: str = "NIFTY") -> pd.DataFrame:
     if cash.empty or trade_date not in set(cash["trade_date"]):
         return pd.DataFrame(columns=cols)
     Rw = cash.pivot_table("r", "trade_date", "symbol").sort_index()
+    fmap = {(r.trade_date, r.symbol): float(r.share_factor) for r in cash.itertuples()
+            if abs(float(r.share_factor) - 1) > 1e-9}
     Tw = cash.pivot_table("turnover_lacs", "trade_date", "symbol").sort_index()
     Dw = cash.pivot_table("deliv_per", "trade_date", "symbol").sort_index()
 
@@ -1723,14 +1843,20 @@ def get_stock_flow(trade_date: date, fno_symbol: str = "NIFTY") -> pd.DataFrame:
         a, b = total(d, d, strict), total(days[i - 1], d, strict)
         j = pd.DataFrame({"a": a, "b": b}).dropna()
         j = j[j["b"] > 0]
+        j["a"] = j["a"] / j.index.map(lambda sy: fmap.get((d, sy), 1.0))
         return (j["a"] - j["b"]) / j["b"] * 100
 
+    fac = {sy: f for (dd, sy), f in fmap.items() if dd == trade_date}
     today_oi = _total_oi_change(
-        _load_futures(all_syms, trade_date, include_expiring=is_exp), trade_date)
+        _load_futures(all_syms, trade_date, include_expiring=is_exp), trade_date, fac)
     today_oi = today_oi.set_index("symbol") if not today_oi.empty else today_oi
     opt = (pd.DataFrame(columns=["ce_pct", "pe_pct"]) if is_exp else
-           _opt_change(_load_options(all_syms, trade_date), trade_date))
+           _opt_change(_load_options(all_syms, trade_date), trade_date, fac))
     opt = opt.set_index("symbol") if "symbol" in opt.columns else opt
+    from src.analytics.fno_stocks import _sessions_until
+    fe = sorted(F.loc[(F["trade_date"] == trade_date) & (F["expiry_date"] > trade_date),
+                      "expiry_date"].unique()) if not F.empty else []
+    dte = _sessions_until(trade_date, fe[0]) if fe else None
 
     recent = [d for d in days if d <= trade_date][-4:][::-1]        # newest first
     trail = {d: daily_pct(d) for d in recent} if trade_date in days else {}
@@ -1777,12 +1903,19 @@ def get_stock_flow(trade_date: date, fno_symbol: str = "NIFTY") -> pd.DataFrame:
             pr = Rw[sym][(Rw.index > anchor) & (Rw.index <= trade_date)].dropna() \
                 if sym in Rw.columns else pd.Series(dtype=float)
             if not broke and len(pr):
+                cyc_f = float(np.prod([f for (dd, sy), f in fmap.items()
+                                       if sy == sym and anchor < dd <= trade_date] or [1.0]))
                 cp = float((np.prod(1 + pr / 100) - 1) * 100)
-                co = float((now[sym] - base[sym]) / base[sym] * 100)
-                row.update(cyc_price_pct=cp, cyc_oi_pct=co, cyc_read=_quadrant(cp, co))
+                co = float((now[sym] / cyc_f - base[sym]) / base[sym] * 100)
+                # both axes wander ~ sqrt(time): a 0.5% dead band is a real gate on
+                # day 1 and none by day 20, so it widens with the cycle (the same
+                # rule the F&O overlay uses, fno_stocks._px_band)
+                band = _OI_BAND * float(np.sqrt(max(len(cyc_days), 1)))
+                row.update(cyc_price_pct=cp, cyc_oi_pct=co,
+                           cyc_read=_quadrant(cp, co, band))
         if len(opt) and sym in opt.index:
             ce, pe = float(opt.at[sym, "ce_pct"]), float(opt.at[sym, "pe_pct"])
-            row.update(ce_pct=ce, pe_pct=pe, opt_read=_opt_label(ce, pe))
+            row.update(ce_pct=ce, pe_pct=pe, opt_read=_opt_label(ce, pe, dte))
         rows.append(row)
     return pd.DataFrame(rows, columns=cols)
 

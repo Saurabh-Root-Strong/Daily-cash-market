@@ -6423,51 +6423,51 @@ _ILC_VERDICT = {
     "BANKNIFTY": (
         "**A decomposition, not a forecast — re-measured on Bank Nifty's own 14 "
         "names, not borrowed from Nifty.** `scripts/ilc_multi_index_backtest.py`, "
-        "1,174 sessions 2022-2026.\n\n"
+        "1,178 sessions 2022-2026.\n\n"
         "- **Same answer as Nifty: every signal is close-strength in disguise.** "
         "Over the 51-candidate family the strongest are Top-2 breadth → next gap "
-        "(|t| 3.74) and the Top-2 futures read (|t| 3.48), family p=0.002 — but "
+        "(|t| 3.76) and the Top-2 futures read (|t| 3.48), family p=0.010 — but "
         "both correlate +0.44 to +0.57 with the index's own close-strength, and "
-        "beside it they fall to **t=+1.35 and +1.72**. The futures read's sign "
+        "beside it they fall to **t=+1.36 and +1.71**. The futures read's sign "
         "comes from the PRICE move (long build and short cover both need price "
         "up), so it is partly a price signal with an OI label. The rest fall to "
-        "-0.07 .. +1.08.\n"
+        "-0.06 .. +1.08.\n"
         "- **The index got less top-heavy in 2026, and history mixes both.** "
         "Regressing the index on its three bucket returns, the Top 2 carried "
         "**~0.55** of the moves every quarter from 2022 to 2025, then **0.47** "
         "(Mar-2026) and **0.39** (Jun-2026) — the SEBI concentration cap (top "
-        "name ≤20%, top three ≤45%) biting. HDFCBANK is 17.0% today.\n\n"
+        "name ≤20%, top three ≤45%) biting.\n\n"
         "So no arrow. The state table is a **base rate** from a more top-heavy "
         "index than the one on screen."),
     "FINNIFTY": (
         "**A decomposition, not a forecast — re-measured on Fin Nifty's own 20 "
-        "names.** `scripts/ilc_multi_index_backtest.py`, 1,174 sessions "
+        "names.** `scripts/ilc_multi_index_backtest.py`, 1,178 sessions "
         "2022-2026.\n\n"
-        "- **Its top 6 are banks plus Bajaj Finance (70.7% of the index).** "
+        "- **Its top 6 are banks plus Bajaj Finance (about 70% of the index).** "
         "Top 2 (HDFCBANK, ICICIBANK) is the same pair as Bank Nifty's, so on "
         "most days the two tabs read the same heavyweights.\n"
-        "- **Every signal dies beside close-strength.** Family p<0.001, led by "
-        "Rest-14 breadth → gap (|t| 3.90) and the Top-2 futures read (|t| 3.68); "
-        "beside the index's own close-strength they fall to **t=+1.86 and "
-        "+1.75**.\n"
+        "- **Every signal dies beside close-strength.** Family p=0.004, led by "
+        "Top-2 and Rest-14 breadth → gap (|t| 3.91 each) and the Top-2 futures "
+        "read (|t| 3.68); beside the index's own close-strength they fall to "
+        "**t=+1.37, +1.87 and +1.73**.\n"
         "- **One lead that did not survive.** The carry spread → next day reads "
-        "t=+2.23 and holds beside close-strength (+2.26), with the same sign on "
-        "Nifty (+1.72) and Bank Nifty (+1.50). But it is one of 51 tests, the "
-        "family's null 95th percentile is 3.19, and the three indices share "
+        "t=+2.21 and holds beside close-strength (+2.24), with the same sign on "
+        "Nifty (+1.71) and Bank Nifty (+1.51). But it is one of 51 tests, the "
+        "family's null 95th percentile is 3.18, and the three indices share "
         "their biggest stocks, so they are not three independent confirmations.\n"
         "- **Same weight cap as Bank Nifty:** Top 2 carried ~0.55-0.63 of the "
         "moves through 2025, **0.33** by Jun-2026.\n\n"
         "So no arrow. The state table is a **base rate**, not a call."),
     "MIDCPNIFTY": (
         "**A decomposition, not a forecast — and the weakest-evidenced of the "
-        "four.** `scripts/ilc_multi_index_backtest.py`, **453 sessions only**: "
-        "most of this basket's heavyweights (BSE, PAYTM, POLICYBZR) had no stock "
-        "F&O before 29 Nov 2024, and Midcap Select only holds F&O stocks, so "
-        "earlier history is a basket the index could not have owned. It is cut "
-        "there.\n\n"
-        "- **Nothing survives.** Family p=0.056 on 51 candidates; the best "
-        "(Rest-15 futures → gap, |t| 3.30) falls to t=+1.34 beside close-strength.\n"
-        "- **The composite flips sign out of sample:** next-day −10.0 bps, 47.1% "
+        "four.** `scripts/ilc_multi_index_backtest.py --asof 2026-09-29`, **457 "
+        "sessions only**: most of this basket's heavyweights (BSE, PAYTM, "
+        "POLICYBZR) had no stock F&O before 29 Nov 2024, and Midcap Select only "
+        "holds F&O stocks, so earlier history is a basket the index could not "
+        "have owned. It is cut there.\n\n"
+        "- **Nothing survives.** Family p=0.042 on 51 candidates; the best "
+        "(Rest-15 futures → gap, |t| 3.26) falls to t=+1.31 beside close-strength.\n"
+        "- **The composite flips sign out of sample:** next-day −9.7 bps, 47.6% "
         "hit after Oct-2025.\n"
         "- **The bucket boundary is arbitrary.** BSE is 9.6%; ranks 2-10 all sit "
         "between 5.2% and 4.1%, and rank 5 vs rank 6 is 4.63% vs 4.61%.\n"
@@ -6478,60 +6478,60 @@ _ILC_VERDICT = {
     "MIDCPNIFTY_2609": (
         "**A decomposition, not a forecast — on a basket that barely has "
         "heavyweights.** From 30 Sep 2026 BSE (9.6%) moves to Nifty 50, and the "
-        "largest names left are ~6%. `scripts/ilc_multi_index_backtest.py "
-        "`, today's 25 applied to **457 sessions** (Nov-2024+), buckets per "
-        "NSE's 30 Sep 2026 factsheet.\n\n"
+        "largest names left are ~6%. `scripts/ilc_multi_index_backtest.py`, "
+        "today's 25 applied to **457 sessions** (Nov-2024+), buckets per NSE's "
+        "30 Sep 2026 factsheet.\n\n"
         "- **The Top 2 barely move the index:** regressed on the three bucket "
         "returns they carry **0.03-0.14** of its moves; the Rest 18 carries "
-        "0.62-0.85. \"Heavyweights carried it\" means little here.\n"
+        "0.62-0.84. \"Heavyweights carried it\" means little here.\n"
         "- **Nothing survives.** Family p=0.038, led by Rest-18 breadth → gap "
         "(|t| 3.25), which falls to **t=+1.15** beside close-strength.\n"
         "- **Out of sample the composite is worse than a coin:** next day "
-        "−13.5 bps at 47.2% after Oct-2025.\n\n"
+        "−17.5 bps at 46.3% after Oct-2025.\n\n"
         "So no arrow."),
 }
 
 _ILC_SCORE_VERDICT = {
     "BANKNIFTY": (
-        "**This score does not forecast Bank Nifty — measured, 1,174 sessions "
+        "**This score does not forecast Bank Nifty — measured, 1,178 sessions "
         "2022-2026.**\n\n"
         "| | next open (gap) | next day | next 5 sessions |\n|---|---|---|---|\n"
-        "| **net score hit rate** | 54.0% | **49.7%** | **49.8%** |\n"
-        "| base rate (up days) | 57.2% | 52.8% | 55.0% |\n"
-        "| information coefficient | +0.079 | −0.002 | +0.014 |\n\n"
-        "The gap IC is close-strength again (net score t=+0.51 beside it). Out "
-        "of sample after May-2024 the next-day read runs **−5.2 bps at 46.5%**, "
-        "below a coin flip. On disjoint weeks the five weekday offsets span −18.0 "
-        "to +23.0 bps. Read it as **what positioning is doing**."),
+        "| **net score hit rate** | 55.1% | **50.2%** | **49.4%** |\n"
+        "| base rate (up days) | 57.0% | 52.8% | 54.9% |\n"
+        "| information coefficient | +0.081 | −0.001 | −0.004 |\n\n"
+        "The gap IC is close-strength again (net score t=+0.42 beside it). Out "
+        "of sample after May-2024 the next-day read runs **−5.9 bps at 46.0%**, "
+        "below a coin flip. On disjoint weeks the five weekday offsets span −18.9 "
+        "to +26.4 bps. Read it as **what positioning is doing**."),
     "FINNIFTY": (
-        "**This score does not forecast Fin Nifty — measured, 1,174 sessions "
+        "**This score does not forecast Fin Nifty — measured, 1,178 sessions "
         "2022-2026.**\n\n"
         "| | next open (gap) | next day | next 5 sessions |\n|---|---|---|---|\n"
-        "| **net score hit rate** | 53.9% | **51.3%** | **50.9%** |\n"
-        "| base rate (up days) | 56.8% | 53.1% | 53.8% |\n"
-        "| information coefficient | +0.113 | +0.032 | +0.034 |\n\n"
-        "Beside close-strength the score is t=+1.61 at the gap and +1.80 next "
+        "| **net score hit rate** | 54.5% | **51.7%** | **51.6%** |\n"
+        "| base rate (up days) | 56.7% | 53.0% | 53.6% |\n"
+        "| information coefficient | +0.105 | +0.032 | +0.026 |\n\n"
+        "Beside close-strength the score is t=+1.30 at the gap and +1.82 next "
         "day — not significant. Out of sample after May-2024 next day runs "
-        "**−2.3 bps at 49.1%**. Read it as **what positioning is doing**."),
+        "**−0.9 bps at 49.7%**. Read it as **what positioning is doing**."),
     "MIDCPNIFTY": (
-        "**This score does not forecast Midcap Select — measured, 453 sessions "
+        "**This score does not forecast Midcap Select — measured, 457 sessions "
         "(Nov-2024+).**\n\n"
         "| | next open (gap) | next day | next 5 sessions |\n|---|---|---|---|\n"
-        "| **net score hit rate** | 52.0% | **49.1%** | **51.6%** |\n"
-        "| base rate (up days) | 70.0% | 53.9% | 52.6% |\n"
-        "| information coefficient | +0.124 | −0.027 | −0.008 |\n\n"
-        "Beside close-strength: t=+0.36 at the gap, −0.87 next day. Out of "
-        "sample after Oct-2025 next day runs **−10.0 bps at 47.1%**. Read it as "
+        "| **net score hit rate** | 54.6% | **50.2%** | **50.9%** |\n"
+        "| base rate (up days) | 69.8% | 53.8% | 52.1% |\n"
+        "| information coefficient | +0.125 | −0.019 | −0.022 |\n\n"
+        "Beside close-strength: t=+0.25 at the gap, −0.67 next day. Out of "
+        "sample after Oct-2025 next day runs **−9.7 bps at 47.6%**. Read it as "
         "**what positioning is doing**."),
     "MIDCPNIFTY_2609": (
         "**This score does not forecast Midcap Select — measured on the "
         "30-Sep-2026 basket, 457 sessions (Nov-2024+).**\n\n"
         "| | next open (gap) | next day | next 5 sessions |\n|---|---|---|---|\n"
-        "| **net score hit rate** | 55.3% | **48.9%** | **51.8%** |\n"
+        "| **net score hit rate** | 57.3% | **49.2%** | **51.0%** |\n"
         "| base rate (up days) | 69.8% | 53.8% | 52.1% |\n"
-        "| information coefficient | +0.135 | −0.022 | +0.009 |\n\n"
-        "Beside close-strength: t=+0.11 at the gap, −0.76 next day. Out of "
-        "sample after Oct-2025 next day runs **−13.5 bps at 47.2%**. Read it as "
+        "| information coefficient | +0.138 | −0.028 | −0.005 |\n\n"
+        "Beside close-strength: t=−0.08 at the gap, −0.88 next day. Out of "
+        "sample after Oct-2025 next day runs **−17.5 bps at 46.3%**. Read it as "
         "**what positioning is doing**."),
 }
 
@@ -6633,6 +6633,8 @@ _ILC_QUAD = {
     "long build": "🟢 long build", "short covering": "🟢 short covering",
     "short build": "🔴 short build", "long unwind": "🔴 long unwind",
     "flat": "⚪ flat", None: "—",
+    "added, price flat": "⚪ positions added · price flat",
+    "closed, price flat": "⚪ positions closed · price flat",
 }
 _ILC_OPT = {
     "put writing": "🟢 put writing", "put side heavier": "🟢 put side heavier",
@@ -6719,8 +6721,10 @@ def _render_ilc_stock_flow(d, sym: str, _name: str, selected_date: date) -> None
                 "Stock", help="NSE symbol. Every index member is listed."),
             "Price %": st.column_config.TextColumn(
                 "Price %",
-                help="The stock's cash-market close against its previous close. "
-                     "The futures price is not used: it breaks across a roll."),
+                help="The stock's cash-market close against its previous close, "
+                     "adjusted for splits and bonuses on the ex-date (a 1:2 "
+                     "bonus is not a 33% fall). The futures price is not used: "
+                     "it breaks across a roll."),
             "OI % today": st.column_config.TextColumn(
                 "OI % today",
                 help="Change in the stock's total futures open interest - all "
@@ -6770,8 +6774,14 @@ def _render_ilc_stock_flow(d, sym: str, _name: str, selected_date: date) -> None
                 help=f"The same four-way read on the whole cycle {since}, "
                      "instead of on one day. A stock can read 'short covering' "
                      "today and 'short build' for the cycle: shorts built over "
-                     "several sessions and some were bought back today. Early "
-                     "in a cycle this is only a few sessions old."),
+                     "several sessions and some were bought back today. The "
+                     "'positions added / closed · price flat' means OI clearly "
+                     "moved but price did not, so the side cannot be read. The "
+                     "'flat' zone widens as the cycle ages (0.5% x the square "
+                     "root of the sessions elapsed, on both price and OI), "
+                     "because after three weeks almost everything has moved "
+                     "more than half a percent. Splits and bonuses are adjusted "
+                     "out using the exchange's own factors."),
             "Activity %": st.column_config.TextColumn(
                 "Activity %",
                 help="The volume leg: the stock's CASH turnover against its own "
@@ -6795,9 +6805,12 @@ def _render_ilc_stock_flow(d, sym: str, _name: str, selected_date: date) -> None
                      "and expiry added, against the previous session."),
             "Options": st.column_config.TextColumn(
                 "Options",
-                help="Which side grew faster for this stock. 'Put side "
-                     "heavier' reads bullish ONLY if the new puts were sold "
-                     "rather than bought - open interest cannot tell which."),
+                help="Which side grew faster for this stock, judged against "
+                     "what is normal for this point in the expiry cycle (calls "
+                     "build faster early in a cycle and close faster into "
+                     "expiry). 'Put side heavier' reads bullish ONLY if the new "
+                     "puts were sold rather than bought - open interest cannot "
+                     "tell which."),
         })
 
 
@@ -6967,12 +6980,17 @@ def _render_ilc_nifty_verdict() -> None:
         "list it read +57.5 - a result that halves when three stocks change "
         "bucket is not structure.\n"
         "- **One lead, not shipped.** When the Top 10's put OI grows faster than "
-        "call OI, NIFTY's next 5 sessions averaged **+34 bps (59% up)** against "
-        "**-7 bps (50% up)** for the reverse, positive in every year 2022-2026 "
-        "and as large out of sample, and it survives close-strength and 1/5/20-"
-        "day momentum (t=+3.54). But across the whole F&O family it is not "
-        "significant, and at ~0.11 sd per week, confirming it on fresh data "
-        "would take **~6.5 years** of weeks. It stays a lead.\n\n"
+        "call OI - measured against what is normal for that point in the expiry "
+        "cycle - NIFTY's next 5 sessions averaged **+31 bps (58% up)** against "
+        "**-9 bps (51% up)** for the reverse, positive in every year 2022-2026, "
+        "and it survives close-strength, momentum and expiry-cycle phase "
+        "(t=+3.46). Two cautions. The outcome is itself calendar-driven: the 5 "
+        "sessions starting 1-2 days before expiry averaged +57 bps against -8 "
+        "bps early in a cycle, and the raw put/call gap swings with the same "
+        "calendar, so this lead is only as good as that adjustment. And across "
+        "the whole F&O family it is not significant (|t| 3.19 against a null "
+        "95th percentile of 3.28); at ~0.11 sd per week, confirming it on fresh "
+        "data would take **~6.5 years**. It stays a lead.\n\n"
         "So no arrow is shown. The state table below is a **base rate**, not a "
         "call.")
 
@@ -7140,6 +7158,13 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
             "2023 ran the other way at 64% delivery against ~53% on its "
             "neighbours. The numbers are correct; read them with that in mind.")
     st.markdown("##### Flow read — delivery, futures OI, options OI")
+    if not d.is_expiry_session and d.rows and all(b.fut_valid == 0 for b in d.rows):
+        st.info(
+            f"**No F&O data for {selected_date:%d %b %Y} yet.** The cash-market "
+            "file is loaded but the futures and options file for this session "
+            "(or the one before it) is not, so the futures and options columns "
+            "are empty and the score runs on delivery alone. This is a data gap, "
+            "not a quiet day - NSE publishes the F&O file later in the evening.")
     if d.is_expiry_session:
         st.info(
             "**Monthly expiry day.** Futures OI counts every contract **including "
@@ -7272,7 +7297,16 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
                               "them. Example: calls +4.3% and puts +2.0% = 'call "
                               "side heavier'. Within 0.25pp = 'balanced'. 'Put "
                               "writing' / 'call writing' only when one side rose "
-                              "and the other fell. Price is not used. The bullish "
+                              "and the other fell. Price is not used. "
+                              "The gap is judged against what is NORMAL for this point "
+                              "in the expiry cycle, not against zero: calls are "
+                              "opened faster on a new series and closed faster "
+                              "into expiry, so the raw gap runs about -3.6 points "
+                              "twenty sessions out and +3.3 the day before expiry. "
+                              "Unadjusted, this column said 'call side heavier' on "
+                              "70% of days in a cycle's first week and 'put side "
+                              "heavier' on 75% the day before expiry. "
+                              "The bullish "
                               "reading of 'put side heavier' ASSUMES the new puts "
                               "were sold, not bought - OI cannot tell which."),
                      "Bucket score": st.column_config.NumberColumn(
@@ -7300,17 +7334,22 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
     else:
       st.error(
         "**This score does not forecast the index, and that is measured on the "
-        "full four years.** `scripts/nifty_bucket_composite.py`, 1,170 sessions "
-        "2022-2026, on NSE's own Top-10 / Top-20 buckets:\n\n"
-        "| | next day | next 5 sessions |\n|---|---|---|\n"
-        "| **net score hit rate** | **49.3%** | **49.6%** |\n"
-        "| base rate (all sessions) | 52.1% | 54.3% |\n"
-        "| information coefficient | -0.016 | +0.011 |\n\n"
-        "It loses to the index's own close-strength (t +1.96 vs +0.27), adds "
-        "nothing beside that control (t -0.29), its quintiles are not monotone, "
-        "and out of sample after Sep-2024 the next-day hit rate is **48.0%**. "
-        "The top-10-only variant hits **44.1%**, *below a coin flip*. Read this "
-        "block as **what positioning is doing**, never as where the index is going.")
+        "full four years.** `scripts/ilc_multi_index_backtest.py`, 1,178 sessions "
+        "2022-2026, on the exact rule this table uses (NSE's Top-10 / Top-20 "
+        "buckets, split-adjusted, options read net of the expiry cycle):\n\n"
+        "| | next open (gap) | next day | next 5 sessions |\n|---|---|---|---|\n"
+        "| **net score hit rate** | 54.7% | **52.2%** | **52.0%** |\n"
+        "| base rate (up days) | 61.0% | 52.0% | 54.1% |\n"
+        "| information coefficient | +0.091 | +0.034 | +0.029 |\n\n"
+        "Beside the index's own close-strength the score is t=+0.34 at the gap, "
+        "+1.02 next day and +1.01 over 5 sessions - nothing. Out of sample after "
+        "May-2024 the next-day read runs **+0.8 bps at 50.4%**, a coin flip. One "
+        "fragile spot, stated rather than hidden: the score's *sign* against the "
+        "next gap reads t=+2.45 beside close-strength while its *value* reads "
+        "+0.34 - two versions of one test disagreeing is noise, not an edge. An "
+        "earlier build of this score, on mis-drawn buckets, hit 49.3% next day "
+        "(`scripts/nifty_bucket_composite.py`). Read this block as **what "
+        "positioning is doing**, never as where the index is going.")
 
     # ── historical match: the actual sessions, and what NIFTY did next ──────
     st.markdown(f"##### When these numbers occurred before — what {_name} did next")

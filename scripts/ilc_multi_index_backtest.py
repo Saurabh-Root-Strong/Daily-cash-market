@@ -33,7 +33,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import duckdb, numpy as np, pandas as pd
 
 from src.analytics.index_largecap import (INDEX_BUCKETS, index_meta,
-                                          _DELIV_BASE, _DELIV_MINP)
+                                          _DELIV_BASE, _DELIV_MINP, _R_SQL,
+                                          _opt_label)
+from src.analytics.fno_stocks import _sessions_until
 
 pd.set_option("display.width", 250)
 ap = argparse.ArgumentParser()
@@ -92,7 +94,7 @@ def build(sym):
     warm = (start - pd.Timedelta(days=420)).date()
 
     cash = c.execute(f"""SELECT trade_date, symbol, deliv_per,
-            (close_price-prev_close)/NULLIF(prev_close,0)*100 r
+            {_R_SQL} r
         FROM daily_data WHERE symbol IN ({ph}) AND series IN ('EQ','SM','ST')
           AND close_price>0 AND prev_close>0 AND trade_date>=?""", [*ALL, warm]).df()
     cash["trade_date"] = pd.to_datetime(cash["trade_date"])
@@ -108,7 +110,11 @@ def build(sym):
                    GROUP BY 1,2,3,4,5),
         l AS (SELECT *, LAG(oi) OVER (PARTITION BY symbol, expiry_date, instrument,
                                       option_type ORDER BY trade_date) poi FROM f)
-        SELECT trade_date, symbol, instrument, option_type, SUM(oi) oi, SUM(poi) poi
+        SELECT trade_date, symbol, instrument, option_type,
+               SUM(oi / COALESCE((SELECT EXP(SUM(LN(ca.share_factor))) FROM corp_actions ca
+                    WHERE ca.symbol = l.symbol AND ca.ex_date = l.trade_date
+                      AND ca.share_factor > 0 AND ca.share_factor <> 1), 1)) oi,
+               SUM(poi) poi
         FROM l WHERE poi>0 GROUP BY 1,2,3,4""", [*ALL, warm]).df()
     oi["trade_date"] = pd.to_datetime(oi["trade_date"])
     oi = oi[~oi["trade_date"].isin(SETTLE)].copy()
@@ -134,6 +140,11 @@ def build(sym):
     clr = ((ix["close_val"] - ix["low_val"]) /
            (ix["high_val"] - ix["low_val"]).replace(0, np.nan)).reindex(IX) - 0.5
 
+    fe = c.execute("""SELECT trade_date, MIN(expiry_date) e FROM fno_bhavcopy
+        WHERE instrument='FUTSTK' AND expiry_date>trade_date AND trade_date>=? GROUP BY 1""",
+                   [warm]).df()
+    DTE = {pd.Timestamp(t): _sessions_until(pd.Timestamp(t).date(), pd.Timestamp(e).date())
+           for t, e in zip(fe["trade_date"], fe["e"])}
     legs, feats = {}, {}
     for i, (bn, mem) in enumerate(B.items()):
         cols = [s for s in mem if s in R.columns]
@@ -160,10 +171,12 @@ def build(sym):
         pe = PE.reindex(columns=cols).reindex(IX)
         both = ce.notna() & pe.notna()
         cm, pm = ce.where(both).mean(axis=1), pe.where(both).mean(axis=1)
-        dd = pm - cm
-        oleg = pd.Series(np.select(
-            [dd.abs() < .25, (pm > 0) & (cm <= 0), (cm > 0) & (pm <= 0), dd > 0],
-            [0., 1., -1., .5], -.5), index=IX).where(both.sum(axis=1) >= nmin)
+        # the LIVE label: gap net of its expiry-cycle norm (_opt_cycle_norm)
+        _num = {"put writing": 1., "put side heavier": .5, "balanced": 0.,
+                "call side heavier": -.5, "call writing": -1., None: np.nan}
+        oleg = pd.Series([_num[_opt_label(c_, p_, DTE.get(t))]
+                          for t, c_, p_ in zip(IX, cm, pm)],
+                         index=IX).where(both.sum(axis=1) >= nmin)
         L = pd.DataFrame({"deliv": dleg, "fut": fleg, "opt": oleg})
         L["score"] = L.mean(axis=1)            # only the legs that exist, as live
         legs[bn] = L
