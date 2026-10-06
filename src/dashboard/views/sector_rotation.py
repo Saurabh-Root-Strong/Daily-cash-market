@@ -6556,8 +6556,9 @@ def _render_ilc_index_notes(sym: str, selected_date: date) -> None:
     """Which basket is in force on the date, and how its buckets were drawn."""
     from src.analytics.index_largecap import index_meta
     meta = index_meta(sym, selected_date)
+    box = st.expander("How the buckets are drawn", expanded=False)
     if meta["effective"] is not None:
-        st.caption(
+        box.caption(
             f"**Basket in force from {meta['effective']:%d %b %Y}** — "
             f"{meta['source']}. Dates before that use the previous basket.")
     if meta["provisional"]:
@@ -6569,7 +6570,7 @@ def _render_ilc_index_notes(sym: str, selected_date: date) -> None:
             "ahead of PAYTM 5.2%. INDHOTEL (top 10 per NSE, rank unknown) and "
             "GVT&D sit in the last bucket until the factsheet confirms.")
     if sym == "NIFTY":
-        st.caption(
+        box.caption(
             "**Buckets are NSE's own ranking:** Top 10 = the members of NSE's "
             "*Nifty Top 10 Equal Weight* index, Next 10 = *Top 20* minus *Top 10*. "
             "NSE picks them by 6-month average free-float cap every March and "
@@ -6595,7 +6596,7 @@ def _render_ilc_index_notes(sym: str, selected_date: date) -> None:
                        "5.2% to 4.1%, so Top 5 / Next 5 is a layout choice, "
                        "not structure."),
     }[sym]
-    st.caption(
+    box.caption(
         f"**Buckets**: {parts}. {why} "
         "Only the top 10 weights are published, so every cut sits inside the top "
         "10 and the last bucket is simply everyone else. A cut on a wide gap "
@@ -6699,6 +6700,10 @@ def _render_ilc_cycle_flow(d, sym: str, _name: str, selected_date: date) -> None
     st.markdown(f"##### Since the expiry cycle started — {a:%d %b %Y}, "
                 f"session {k} of the cycle")
     st.caption(
+        f"Today against the **{a:%d %b} expiry close**, not against yesterday. "
+        "Cumulative OI is only meaningful beside its **usual** level for this "
+        "day of a cycle, so each cell shows both.")
+    st.expander("How to read this table", expanded=False).caption(
         "The table above compares today with **the previous session**. This one "
         f"compares today with **the close of the last monthly expiry ({a:%d %b})**: "
         "has the bucket added positions over the cycle, or shed them? "
@@ -6807,6 +6812,9 @@ def _render_ilc_stock_flow(d, sym: str, _name: str, selected_date: date) -> None
     since = f"since {anchor:%d %b}" if anchor else "this cycle"
     st.markdown("##### Stock by stock — how each vote was cast")
     st.caption(
+        "Every stock's vote: **today**, the **last 4 sessions**, and the "
+        f"**cycle {since}**. OI up = positions added; OI down = positions closed.")
+    st.expander("How each vote is measured", expanded=False).caption(
         "**Which contracts:** every live expiry month **added together** — "
         "current + next + far — with each contract compared against itself on "
         "the earlier day, so a position rolled into next month nets to zero. "
@@ -7069,10 +7077,18 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
         return
 
     _render_ilc_index_notes(sym, selected_date)
-    if sym != "NIFTY":
-        st.warning(_ILC_VERDICT[_ilc_verdict_key(sym, meta)])
-    else:
-        _render_ilc_nifty_verdict()
+    # The verdict is the honesty rail of this tab, so its CONCLUSION stays on
+    # screen; only the evidence folds away. Hiding the whole box would let the
+    # tables below read as signals.
+    st.markdown(
+        f"🧭 **No arrow on this tab.** Nothing here forecasts {_name} once the "
+        "day's own close-strength is accounted for — measured, not caution. "
+        "Read every table as *what happened*.")
+    with st.expander("Why there is no forecast — the evidence", expanded=False):
+        if sym != "NIFTY":
+            st.warning(_ILC_VERDICT[_ilc_verdict_key(sym, meta)])
+        else:
+            _render_ilc_nifty_verdict()
 
     _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
                      cached_concentration_trend, cached_state_base_rates,
@@ -7164,7 +7180,8 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
 
     # ── bucket table ─────────────────────────────────────────────────────────
     st.markdown("##### Weight buckets")
-    st.caption(
+    st.expander("Why these are membership buckets, not index weights",
+                expanded=False).caption(
         "Buckets are **membership by published index weight**, not the weights "
         "themselves - the DB holds no free-float data and weights are *not* "
         "recoverable from the index series (a returns fit reproduces Nifty at "
@@ -7309,7 +7326,8 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
         _dte = d.days_to_expiry
         _when = ("settles today" if _dte == 0 else
                  "settles tomorrow" if _dte == 1 else f"{_dte} days away")
-        st.caption(
+        st.expander("Which expiry months these OI numbers use",
+                    expanded=False).caption(
             f"**Which expiry these OI numbers use: all of them.** Front month is "
             f"**{d.front_expiry:%d %b %Y}** ({_when}), holding "
             f"{d.near_oi_share:.0f}% of forward open interest. Every live expiry "
@@ -7461,10 +7479,14 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
     if d.is_expiry_session:
         st.caption("Expiry day — the options leg is off (see above), so the score "
                    "runs on delivery and futures only.")
+    st.caption("**The score summarises positioning; it does not forecast the "
+               "index.** Its measured hit rate is below.")
+    _sc = st.expander("Does this score forecast the index? — measured hit rates",
+                      expanded=False)
     if sym != "NIFTY":
-        st.error(_ILC_SCORE_VERDICT[_ilc_verdict_key(sym, meta)])
+        _sc.error(_ILC_SCORE_VERDICT[_ilc_verdict_key(sym, meta)])
     else:
-      st.error(
+      _sc.error(
         "**This score does not forecast the index, and that is measured on the "
         "full four years.** `scripts/ilc_multi_index_backtest.py`, 1,178 sessions "
         "2022-2026, on the exact rule this table uses (NSE's Top-10 / Top-20 "
@@ -7614,15 +7636,19 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
             f"(a neighbour from last week shares most of its forward window with "
             f"this one). The 25th match sits at distance {_mq['kth']:.2f} against "
             f"{_mq['median_random']:.2f} for a typical day.")
+        st.caption("**These matches are a record, not a forecast** — similar "
+                   "past days did not predict the next move.")
+        _an = st.expander("Do similar past days predict the next move? — the evidence",
+                          expanded=False)
         if sym != "NIFTY":
-            st.caption(
+            _an.caption(
                 f"**The analogue engine was audited on Nifty, not re-audited on "
                 f"{_name}.** On Nifty the 25 nearest days forecast no better "
                 "than the 25 FARTHEST (1.444% vs 1.462% error), and the flow "
                 f"score it matches on is measured null on {_name} too (above). "
                 "Read the rows as what happened, not as what will.")
         else:
-          st.error(
+          _an.error(
             "**Read the spread, not the average.** Measured walk-forward on 968 "
             "sessions: |mean(25 NEAREST) - actual| = **1.389%** against "
             "|mean(25 FARTHEST) - actual| = **1.470%** - the most similar days "

@@ -912,3 +912,20 @@ def test_cycle_cell_shows_the_usual_level_and_the_rank():
     assert _ilc_cycle_cell({"now": 5.6, "usual": None, "pct": None, "n": 1}) == "+5.6% · no usual yet"
     assert _ilc_cycle_cell({"now": None}) == "—"
     assert _ilc_cycle_cell({"now": 1.0}, off=True) == "off · expiry day"
+
+
+def test_verdict_conclusion_stays_visible_and_only_the_evidence_folds():
+    """The verdict is the tab's honesty rail. Its evidence is long and goes in a
+    dropdown; its CONCLUSION must stay on screen, or the tables read as signals."""
+    from pathlib import Path
+    src = Path("src/dashboard/views/sector_rotation.py").read_text(encoding="utf-8")
+    i = src.index("def _render_index_largecap")
+    body = src[i:src.index("def _render_ilc_nifty_verdict")]
+    line = body.index("No arrow on this tab")
+    fold = body.index('st.expander("Why there is no forecast')
+    assert line < fold, "the one-line conclusion must render before the dropdown"
+    assert body.index("st.warning(_ILC_VERDICT", fold) > fold
+    # day-specific alerts are never folded away
+    for alert in ("Monthly expiry day", "Heavy, basket-wide session", "No F&O data for"):
+        k = src.index(alert)
+        assert "expander" not in src[k - 400:k], f"{alert!r} must stay visible"
