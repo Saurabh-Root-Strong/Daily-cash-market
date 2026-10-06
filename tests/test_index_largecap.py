@@ -860,3 +860,55 @@ def test_options_cycle_strength_is_per_index():
     assert ilc._opt_cycle_norm(1, 0.62) == pytest.approx(3.3 * 0.62)
     d = ilc.get_index_largecap(__import__("datetime").date(2026, 10, 5), "MIDCPNIFTY")
     assert all(r.opt_scale == 0.62 for r in d.rows)
+
+
+# ── cumulative OI since the expiry cycle started ────────────────────────────
+
+def test_cycle_flow_is_anchored_on_the_last_expiry_and_counts_sessions():
+    from datetime import date as _d
+    c = ilc.get_cycle_flow(_d(2026, 10, 5), "NIFTY")
+    assert c["anchor"] == _d(2026, 9, 29) and c["day"] == 3 and not c["is_expiry"]
+    assert list(c["buckets"]) == ["Top 10", "Next 10", "Rest 30"]
+    assert c["n_cycles"] >= 6
+
+
+def test_cumulative_options_oi_is_read_against_its_usual_level_not_zero():
+    """A new series fills from near empty: call OI is up ~+56% by session 3 in a
+    TYPICAL cycle. '+41% since expiry' is BELOW normal, not heavy call building."""
+    from datetime import date as _d
+    t = ilc.get_cycle_flow(_d(2026, 10, 5), "NIFTY")["buckets"]["Top 10"]
+    for leg in ("CE", "PE"):
+        assert t[leg]["now"] > 15, "options OI always rises early in a cycle"
+        assert t[leg]["usual"] > 25, "and its usual level is far above zero"
+        assert 0 <= t[leg]["pct"] <= 100
+    assert t["CE"]["now"] < t["CE"]["usual"], "05 Oct 2026: calls behind their usual pace"
+    assert abs(t["FUT"]["usual"]) < 5, "futures drift only a little over 3 sessions"
+    assert "A CUMULATIVE OI FIGURE MEANS NOTHING ON ITS OWN" in ilc.get_cycle_flow.__doc__
+
+
+def test_cycle_flow_on_an_expiry_day_keeps_futures_and_withholds_options():
+    from datetime import date as _d
+    c = ilc.get_cycle_flow(_d(2026, 9, 29), "BANKNIFTY")
+    assert c["is_expiry"] and c["anchor"] == _d(2026, 8, 25)
+    for r in c["buckets"].values():
+        assert r["FUT"]["now"] is not None
+        assert r["CE"]["now"] is None and r["PE"]["now"] is None
+
+
+@pytest.mark.parametrize("sym", ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"])
+def test_cycle_flow_runs_for_every_index(sym):
+    from datetime import date as _d
+    c = ilc.get_cycle_flow(_d(2026, 10, 5), sym)
+    assert c and len(c["buckets"]) == 3
+    assert all(r["FUT"]["now"] is not None for r in c["buckets"].values())
+
+
+def test_cycle_cell_shows_the_usual_level_and_the_rank():
+    from src.dashboard.views.sector_rotation import _ilc_cycle_cell
+    assert _ilc_cycle_cell({"now": 40.7, "usual": 56.2, "pct": 8.3, "n": 12}) == \
+        "+40.7% · usual +56.2% · ▼ below 11 of 12"
+    assert _ilc_cycle_cell({"now": 3.2, "usual": 1.7, "pct": 83.3, "n": 12}).endswith("▲ above 10 of 12")
+    assert _ilc_cycle_cell({"now": 1.0, "usual": 1.1, "pct": 50.0, "n": 12}).endswith("in line")
+    assert _ilc_cycle_cell({"now": 5.6, "usual": None, "pct": None, "n": 1}) == "+5.6% · no usual yet"
+    assert _ilc_cycle_cell({"now": None}) == "—"
+    assert _ilc_cycle_cell({"now": 1.0}, off=True) == "off · expiry day"

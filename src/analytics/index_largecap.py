@@ -76,7 +76,7 @@ __all__ = [
     "get_index_largecap", "IndexLargeCap", "BucketRow",
     "INDEX_BUCKETS", "get_concentration_trend",
     "get_state_base_rates", "get_flow_analogues", "get_bucket_analogues",
-    "index_meta", "get_stock_flow",
+    "index_meta", "get_stock_flow", "get_cycle_flow",
 ]
 
 # ── Bucket membership ─────────────────────────────────────────────────────────
@@ -2000,6 +2000,156 @@ def get_stock_flow(trade_date: date, fno_symbol: str = "NIFTY") -> pd.DataFrame:
                 ce, pe, dte, meta.get("opt_cycle_scale", 1.0)))
         rows.append(row)
     return pd.DataFrame(rows, columns=cols)
+
+
+def get_cycle_flow(trade_date: date, fno_symbol: str = "NIFTY") -> dict:
+    """Open interest SINCE THE EXPIRY CYCLE STARTED, per bucket, against what is
+    usual on that day of a cycle.
+
+    The Flow read compares today with the previous session. This answers the
+    other question: since the last monthly expiry, has the bucket added positions
+    or shed them?
+
+    A CUMULATIVE OI FIGURE MEANS NOTHING ON ITS OWN. A new options series starts
+    almost empty and fills through the month, so call and put OI are up sharply
+    in EVERY cycle. Nifty Top 10, bucket median across 45 cycles (2023-2026):
+        day of cycle      1      3      5     10     15
+        futures OI     +0.5   +1.3   +2.1   +3.4   +4.7 %
+        call OI         +23    +56    +81   +126   +154 %
+        put OI          +20    +44    +61    +88   +112 %
+    "Call OI +41% since expiry" on day 3 reads like heavy call building and is in
+    fact BELOW the usual +56%. So every figure is returned with the bucket's own
+    median at the same day of the previous cycles (`usual`) and its rank among
+    them (`pct`, 0-100).
+
+    HOW IT IS MEASURED
+      anchor   the close of the last monthly expiry session, counting only the
+               contracts that survived it -- the post-roll book
+      today    every live contract; for futures that includes one settling
+               today (continuous through the roll), options are withheld on a
+               settlement session exactly as in the daily read
+      bucket   MEDIAN across its stocks, so one thin series cannot carry it
+      splits   OI is in shares: divided by the factors with an ex-date in the
+               cycle; a stock with a demerger in the cycle is left out of it
+      history  the same stocks, same day-of-cycle, in up to 12 earlier cycles;
+               `usual` needs at least 6
+
+    Returns {} when there is no earlier settlement to anchor on.
+    """
+    meta = index_meta(fno_symbol, trade_date)
+    if meta is None:
+        return {}
+    all_syms = tuple(s_ for b in meta["buckets"].values() for s_ in b)
+    q_syms = _with_old(all_syms)
+    ph = ", ".join("?" * len(q_syms))
+    start = trade_date - timedelta(days=430)
+    T = _qdf(f"""
+        SELECT trade_date, symbol,
+               CASE WHEN instrument = 'FUTSTK' THEN 'FUT' ELSE option_type END AS leg,
+               SUM(CASE WHEN expiry_date > trade_date THEN open_interest END) AS fwd,
+               SUM(open_interest) AS live
+        FROM fno_bhavcopy
+        WHERE instrument IN ('FUTSTK', 'OPTSTK') AND symbol IN ({ph})
+          AND (instrument = 'FUTSTK' OR option_type IN ('CE', 'PE'))
+          AND open_interest > 0 AND expiry_date >= trade_date
+          AND trade_date >= ? AND trade_date <= ?
+        GROUP BY 1, 2, 3
+    """, [*q_syms, start, trade_date])
+    if T.empty:
+        return {}
+    T["trade_date"] = pd.to_datetime(T["trade_date"]).dt.date
+    # a renamed ticker's two rows on the change day collapse to one
+    T = T.groupby(["trade_date", "symbol", "leg"], as_index=False)[["fwd", "live"]].sum()
+    days = sorted(T["trade_date"].unique())
+    if trade_date not in days:
+        return {}
+    settle = sorted(pd.to_datetime(_qdf("""
+        SELECT DISTINCT trade_date FROM fno_bhavcopy
+        WHERE instrument = 'FUTSTK' AND expiry_date = trade_date
+          AND trade_date >= ? AND trade_date <= ?
+    """, [start, trade_date])["trade_date"]).dt.date)
+    anchors = [d for d in settle if d < trade_date and d in days]
+    if not anchors:
+        return {}
+    pos = {d: i for i, d in enumerate(days)}
+    anchor = anchors[-1]
+    k = pos[trade_date] - pos[anchor]
+    is_exp = trade_date in settle
+
+    fwd = T.pivot_table("fwd", ["trade_date", "symbol"], "leg")
+    live = T.pivot_table("live", ["trade_date", "symbol"], "leg")
+    fmap = _share_factors(all_syms, start, trade_date)
+    dmer = _demerger_days(all_syms, start, trade_date)
+
+    def cum(a: date, d: date, leg: str) -> pd.Series:
+        """symbol -> % change in OI from anchor a (post-roll book) to day d."""
+        if a not in fwd.index.get_level_values(0):
+            return pd.Series(dtype=float)
+        num = (live if leg == "FUT" else fwd)
+        if d not in num.index.get_level_values(0) or leg not in num.columns:
+            return pd.Series(dtype=float)
+        j = pd.DataFrame({"n": num.loc[d][leg], "b": fwd.loc[a][leg]}).dropna()
+        j = j[j["b"] > 0]
+        if j.empty:
+            return pd.Series(dtype=float)
+        f = pd.Series({sy: float(np.prod([v for (dd, s2), v in fmap.items()
+                                          if s2 == sy and a < dd <= d] or [1.0]))
+                       for sy in j.index})
+        out = (j["n"] / f - j["b"]) / j["b"] * 100
+        drop = {s2 for (dd, s2) in dmer if a < dd <= d}
+        return out[~out.index.isin(drop)]
+
+    # this cycle and every earlier one, at the same day-of-cycle
+    cycles = []
+    for a in anchors[-13:]:
+        i = pos[a] + k
+        if i < len(days):
+            d = days[i]
+            nxt = [x for x in settle if x > a]
+            if a != anchor and nxt and d > nxt[0]:
+                continue                      # that cycle was shorter than k sessions
+            cycles.append((a, d))
+    cash = _load_cash(all_syms, trade_date, lookback=45)
+    Rw = cash.pivot_table("r", "trade_date", "symbol").sort_index() if not cash.empty \
+        else pd.DataFrame()
+
+    out = {"anchor": anchor, "day": k, "n_cycles": 0, "is_expiry": is_exp, "buckets": {}}
+    for label, mem in meta["buckets"].items():
+        row = {}
+        for leg in ("FUT", "CE", "PE"):
+            cur_ok = not (is_exp and leg != "FUT")
+            hist = []
+            now = None
+            for a, d in cycles:
+                if leg != "FUT" and d in settle:
+                    continue
+                c = cum(a, d, leg)
+                c = c[c.index.isin(mem)]
+                if len(c) < _min_valid(len(mem)):
+                    continue
+                v = float(c.median())
+                if a == anchor:
+                    now = v if cur_ok else None
+                else:
+                    hist.append(v)
+            usual = float(np.median(hist)) if len(hist) >= 6 else None
+            pct = (float(np.mean([h < now for h in hist]) * 100)
+                   if now is not None and len(hist) >= 6 else None)
+            row[leg] = dict(now=now, usual=usual, pct=pct, n=len(hist))
+            out["n_cycles"] = max(out["n_cycles"], len(hist))
+        # price over the same span, adjusted, bucket median
+        px = None
+        if len(Rw):
+            w = Rw[(Rw.index > anchor) & (Rw.index <= trade_date)]
+            cols = [c_ for c_ in mem if c_ in w.columns]
+            if len(w) and cols:
+                px = float(((1 + w[cols] / 100).prod(min_count=1) - 1).mul(100).median())
+        row["price"] = px
+        f = row["FUT"]["now"]
+        band = _OI_BAND * float(np.sqrt(max(k, 1)))
+        row["fut_read"] = _quadrant(px, f, band) if f is not None and px is not None else None
+        out["buckets"][label] = row
+    return out
 
 
 def _index_close(index_name: str, trade_date: date) -> Optional[float]:

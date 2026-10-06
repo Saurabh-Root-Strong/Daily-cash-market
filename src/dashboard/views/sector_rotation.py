@@ -6657,6 +6657,127 @@ def _cached_stock_flow(trade_date: date, fno_symbol: str) -> pd.DataFrame:
     return get_stock_flow(trade_date, fno_symbol)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_cycle_flow(trade_date: date, fno_symbol: str) -> dict:
+    from src.analytics.index_largecap import get_cycle_flow
+    return get_cycle_flow(trade_date, fno_symbol)
+
+
+def _ilc_cycle_cell(x: dict, off: bool = False) -> str:
+    """'+41% · usual +56% · below 11 of 12' -- a cumulative OI figure is only
+    readable next to what is normal on that day of a cycle."""
+    if off:
+        return "off · expiry day"
+    if not x or x.get("now") is None:
+        return "—"
+    out = f"{x['now']:+.1f}%"
+    if x.get("usual") is None:
+        return out + " · no usual yet"
+    out += f" · usual {x['usual']:+.1f}%"
+    n, pct = int(x.get("n") or 0), x.get("pct")
+    if pct is not None and n:
+        below = int(round(pct / 100 * n))          # past cycles this one exceeds
+        if pct >= 75:
+            out += f" · ▲ above {below} of {n}"
+        elif pct <= 25:
+            out += f" · ▼ below {n - below} of {n}"
+        else:
+            out += " · in line"
+    return out
+
+
+def _render_ilc_cycle_flow(d, sym: str, _name: str, selected_date: date) -> None:
+    """Bucket OI since the expiry cycle started, against the usual for that day."""
+    try:
+        c = _cached_cycle_flow(selected_date, sym)
+    except Exception as exc:                                   # noqa: BLE001
+        st.caption(f"Cycle view unavailable: {exc}")
+        return
+    if not c or not c.get("buckets"):
+        return
+    a, k = c["anchor"], c["day"]
+    st.markdown(f"##### Since the expiry cycle started — {a:%d %b %Y}, "
+                f"session {k} of the cycle")
+    st.caption(
+        "The table above compares today with **the previous session**. This one "
+        f"compares today with **the close of the last monthly expiry ({a:%d %b})**: "
+        "has the bucket added positions over the cycle, or shed them? "
+        "**A cumulative OI figure means nothing on its own** — a new options "
+        "series starts almost empty and fills through the month, so call and put "
+        "OI are up sharply in *every* cycle (Nifty Top 10, typical: +56% calls and "
+        "+44% puts by session 3, +154% and +112% by session 15; futures only "
+        "+1.3% and +4.7%). So each figure is shown beside the bucket's **usual** "
+        f"level on session {k} of its last {c['n_cycles']} cycles, and where "
+        "today ranks among them. Descriptive: not tested as a signal.")
+    rows = []
+    for lab, r in c["buckets"].items():
+        ce, pe = r["CE"], r["PE"]
+        pace = "—"
+        if not c["is_expiry"] and None not in (ce.get("now"), ce.get("usual"),
+                                               pe.get("now"), pe.get("usual")):
+            pace = (f"calls {ce['now'] - ce['usual']:+.0f} · "
+                    f"puts {pe['now'] - pe['usual']:+.0f}")
+        rows.append({
+            "Bucket": lab,
+            "Price %": _ilc_num(r.get("price")),
+            "Futures OI": _ilc_cycle_cell(r["FUT"]),
+            "Futures read": _ilc_lab(_ILC_QUAD, r.get("fut_read")),
+            "Call OI": _ilc_cycle_cell(ce, c["is_expiry"]),
+            "Put OI": _ilc_cycle_cell(pe, c["is_expiry"]),
+            "Pace vs usual (pts)": "off · expiry day" if c["is_expiry"] else pace,
+        })
+    st.dataframe(
+        pd.DataFrame(rows), hide_index=True, use_container_width=True,
+        column_config={
+            "Bucket": st.column_config.TextColumn(
+                "Bucket", help="The same weight buckets as above."),
+            "Price %": st.column_config.TextColumn(
+                "Price %",
+                help=f"The bucket's median stock move since the {a:%d %b} expiry "
+                     "close, adjusted for splits, bonuses and demergers."),
+            "Futures OI": st.column_config.TextColumn(
+                "Futures OI",
+                help="Total futures open interest now, across every live expiry "
+                     f"month, against the book that survived the {a:%d %b} expiry. "
+                     "Bucket MEDIAN of its stocks. Positive = the cycle has added "
+                     "positions on balance; negative = it has shed them. 'usual' "
+                     "is the same bucket's median on the same session of its "
+                     "earlier cycles; '▲ above 10 of 12' means only 2 of the last "
+                     "12 cycles had built more by this session."),
+            "Futures read": st.column_config.TextColumn(
+                "Futures read",
+                help="The four-way read on the whole cycle: price up + OI up = "
+                     "long build, price up + OI down = short covering, price down "
+                     "+ OI up = short build, price down + OI down = long unwind. "
+                     "'positions added / closed · price flat' = OI clearly moved "
+                     "but the price did not. The flat zone widens as the cycle "
+                     "ages (0.5% x the square root of sessions elapsed)."),
+            "Call OI": st.column_config.TextColumn(
+                "Call OI",
+                help="Call open interest, every strike and expiry, against the "
+                     f"{a:%d %b} post-expiry book. It is ALWAYS up strongly - the "
+                     "new series is filling - so read it against 'usual', never "
+                     "against zero. Switched off on an expiry day."),
+            "Put OI": st.column_config.TextColumn(
+                "Put OI",
+                help="The same for puts. Below 'usual' means puts are being "
+                     "opened more slowly than in a typical cycle, not that puts "
+                     "are being closed."),
+            "Pace vs usual (pts)": st.column_config.TextColumn(
+                "Pace vs usual (pts)",
+                help="Each side's cumulative OI minus its usual level, in "
+                     "percentage points. 'calls -15 · puts -17' = both building "
+                     "more slowly than usual, by about the same amount. A wide "
+                     "gap between the two says one side is running ahead of the "
+                     "other for this point in the cycle."),
+        })
+    if c["n_cycles"] < 6:
+        st.caption(
+            f"Only {c['n_cycles']} earlier cycle(s) ran to session {k}, so there is "
+            "no 'usual' to compare with — this cycle is unusually long. The "
+            "cumulative figures stand alone.")
+
+
 def _ilc_lab(table: dict, v) -> str:
     """Label lookup that treats any missing value (None or NaN) as a dash: pandas
     turns a None in a mostly-string column into NaN, which is not a dict key."""
@@ -7328,6 +7449,7 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
                               "positioning; it does not predict the index - the "
                               "measured hit rate is right below this table."),
                  })
+    _render_ilc_cycle_flow(d, sym, _name, selected_date)
     _render_ilc_stock_flow(d, sym, _name, selected_date)
     _ns = d.net_score
     if _ns is not None:
