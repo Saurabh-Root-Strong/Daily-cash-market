@@ -702,3 +702,62 @@ def test_both_tables_use_one_futures_vocabulary():
     src = Path("src/dashboard/views/sector_rotation.py").read_text(encoding="utf-8")
     assert "net long build" not in src and "net short build" not in src
     assert src.count("_ILC_FUT_READ[b.fut_read]") == 2
+
+
+# ── stock-by-stock flow ─────────────────────────────────────────────────────
+
+@pytest.mark.parametrize("sym", ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"])
+@pytest.mark.parametrize("day", [(2026, 10, 5), (2026, 9, 29), (2026, 9, 30)])
+def test_stock_reads_reproduce_the_bucket_votes(sym, day):
+    """The per-stock table and the bucket label are the same arithmetic. Checked
+    on an ordinary day, a monthly expiry day and the session after it."""
+    from datetime import date as _d
+    d = _d(*day)
+    sf, b = ilc.get_stock_flow(d, sym), ilc.get_index_largecap(d, sym)
+    assert len(sf) == sum(r.n_members for r in b.rows)
+    for r in b.rows:
+        c = sf[sf["bucket"] == r.label]["read"].value_counts()
+        got = tuple(int(c.get(k, 0)) for k in
+                    ("long build", "short covering", "short build", "long unwind"))
+        assert got == (r.fut_long, r.fut_cover, r.fut_short, r.fut_unwind), r.label
+
+
+def test_stock_flow_adds_every_expiry_month_and_shows_the_split():
+    """Current month alone flips the sign on 11.3% of stock-days; the months are
+    summed, and the split is reported so the reader can see it."""
+    from datetime import date as _d
+    sf = ilc.get_stock_flow(_d(2026, 10, 5), "NIFTY").dropna(subset=["cur_share"])
+    tot = sf["cur_share"] + sf["next_share"] + sf["far_share"]
+    assert len(sf) == 50 and (tot.round(6) == 100).all()
+    assert (sf["cur_share"] > 50).all(), "22 days from expiry the front month leads"
+    doc = ilc.get_stock_flow.__doc__
+    assert "83.8%" in doc and "11.3%" in doc and "+204%" in doc
+
+
+def test_cycle_read_is_anchored_on_the_last_settlement_close():
+    from datetime import date as _d
+    sf = ilc.get_stock_flow(_d(2026, 10, 5), "NIFTY")
+    assert set(sf["cyc_from"]) == {_d(2026, 9, 29)}
+    row = sf[sf["symbol"] == "NTPC"].iloc[0]
+    # NTPC shed OI on every one of the four sessions; the cycle must agree
+    assert all(x < 0 for x in row["trail"]) and row["cyc_oi_pct"] < 0
+    assert row["cyc_read"] == ilc._quadrant(row["cyc_price_pct"], row["cyc_oi_pct"])
+    # on an expiry day the anchor is the PREVIOUS expiry, never the day itself
+    assert set(ilc.get_stock_flow(_d(2026, 9, 29), "NIFTY")["cyc_from"]) == {_d(2026, 8, 25)}
+
+
+def test_quadrant_rule():
+    assert ilc._quadrant(1.0, 2.0) == "long build"
+    assert ilc._quadrant(1.0, -2.0) == "short covering"
+    assert ilc._quadrant(-1.0, 2.0) == "short build"
+    assert ilc._quadrant(-1.0, -2.0) == "long unwind"
+    assert ilc._quadrant(1.0, 0.4) == "flat" and ilc._quadrant(0.0, 3.0) == "flat"
+    assert ilc._quadrant(None, 3.0) is None
+
+
+def test_missing_label_values_render_as_a_dash_not_a_crash():
+    """pandas turns None into NaN in a mostly-string column; NaN is not a dict
+    key, and Midcap Select on an expiry day crashed the whole panel on it."""
+    from src.dashboard.views.sector_rotation import _ilc_lab, _ILC_QUAD
+    assert _ilc_lab(_ILC_QUAD, float("nan")) == "—" == _ilc_lab(_ILC_QUAD, None)
+    assert _ilc_lab(_ILC_QUAD, "long build") == "🟢 long build"

@@ -75,7 +75,7 @@ __all__ = [
     "get_index_largecap", "IndexLargeCap", "BucketRow",
     "INDEX_BUCKETS", "get_concentration_trend",
     "get_state_base_rates", "get_flow_analogues", "get_bucket_analogues",
-    "index_meta",
+    "index_meta", "get_stock_flow",
 ]
 
 # ── Bucket membership ─────────────────────────────────────────────────────────
@@ -294,6 +294,42 @@ def _min_valid(n_members: int) -> int:
     return max(2, min(4, -(-n_members * 3 // 5)))
 
 
+_OI_BAND = 0.5      # % OI change below which a stock casts no vote
+
+
+def _quadrant(price_pct, oi_pct) -> Optional[str]:
+    """The desk's OI-price matrix for ONE stock. None when either input is missing.
+
+        price up   + OI up    long build       (positions ADDED on a rise)
+        price up   + OI down  short covering   (positions CLOSED on a rise)
+        price down + OI up    short build      (positions ADDED on a fall)
+        price down + OI down  long unwind      (positions CLOSED on a fall)
+
+    OI rising means positions were added and falling means they were closed --
+    that half is arithmetic. WHICH side added them is inferred from price, and is
+    a convention: every contract has a buyer and a seller.
+    """
+    if price_pct is None or oi_pct is None or pd.isna(price_pct) or pd.isna(oi_pct):
+        return None
+    if abs(oi_pct) <= _OI_BAND or price_pct == 0:
+        return "flat"
+    if price_pct > 0:
+        return "long build" if oi_pct > 0 else "short covering"
+    return "short build" if oi_pct > 0 else "long unwind"
+
+
+def _opt_label(ce_pct, pe_pct) -> Optional[str]:
+    """Call-vs-put OI flow in words. Relative, not conditioned on price."""
+    if ce_pct is None or pe_pct is None or pd.isna(ce_pct) or pd.isna(pe_pct):
+        return None
+    d = pe_pct - ce_pct
+    if abs(d) < 0.25:
+        return "balanced"
+    if pe_pct > 0 and ce_pct <= 0:  return "put writing"
+    if ce_pct > 0 and pe_pct <= 0:  return "call writing"
+    return "put side heavier" if d > 0 else "call side heavier"
+
+
 _HEAVY_Z, _HEAVY_ACT = 0.62, 41.0    # ordinary-day p95s, see get_index_largecap
 
 
@@ -406,12 +442,7 @@ class BucketRow:
         if (self.opt_valid < _min_valid(self.n_members)
                 or self.ce_oi_pct is None or self.pe_oi_pct is None):
             return None
-        d = self.pe_oi_pct - self.ce_oi_pct
-        if abs(d) < 0.25:
-            return "balanced"
-        if self.pe_oi_pct > 0 and self.ce_oi_pct <= 0:  return "put writing"
-        if self.ce_oi_pct > 0 and self.pe_oi_pct <= 0:  return "call writing"
-        return "put side heavier" if d > 0 else "call side heavier"
+        return _opt_label(self.ce_oi_pct, self.pe_oi_pct)
 
     @property
     def flow_score(self) -> Optional[float]:
@@ -811,10 +842,11 @@ def _bucket_row(label: str, members: tuple, hist: pd.DataFrame,
             # does not, and the direction is the same question.
             row.fut_valid += 1
             pcts.append(oi_chg)
-            if   r > 0 and oi_chg >  0.5: row.fut_long   += 1
-            elif r < 0 and oi_chg >  0.5: row.fut_short  += 1
-            elif r > 0 and oi_chg < -0.5: row.fut_cover  += 1
-            elif r < 0 and oi_chg < -0.5: row.fut_unwind += 1
+            q = _quadrant(r, oi_chg)
+            if   q == "long build":     row.fut_long   += 1
+            elif q == "short build":    row.fut_short  += 1
+            elif q == "short covering": row.fut_cover  += 1
+            elif q == "long unwind":    row.fut_unwind += 1
         if pcts:
             # winsorised: raw means differ from the +-50% clipped mean by up to
             # 84.5pp on the worst Top-10 day and by >2pp on ~5% of sessions, because
@@ -1601,6 +1633,158 @@ def get_bucket_analogues(trade_date: date, fno_symbol: str = "NIFTY",
     if not out["ok"] and not out["note"]:
         out["note"] = "Fewer than 60 prior sessions carry a flow state."
     return out
+
+
+def get_stock_flow(trade_date: date, fno_symbol: str = "NIFTY") -> pd.DataFrame:
+    """One row per constituent: how its futures vote was cast, and the cycle so far.
+
+    WHICH CONTRACTS. Every live expiry month ADDED TOGETHER -- current, next and
+    far -- each compared with itself on the earlier day, so a position rolled from
+    one month to the next nets to zero. Measured on 89,103 stock-days (2022-2026):
+    the current month holds 83.8% of stock-futures OI, the next 15.1%, the far
+    1.1%. Reading the CURRENT MONTH ALONE gives a different up/flat/down label on
+    26.8% of stock-days and the OPPOSITE sign on 11.3% (correlation 0.46 with the
+    total), because it bleeds into the next contract through the roll. Current +
+    next agrees with all three on 97.3% (opposite 0.25%); the far month is kept
+    because those positions are real.
+
+    THREE HORIZONS, because one session is one session:
+      today        OI and price vs the previous session        -> `read`
+      last 4       the daily OI % for the last four sessions   -> `trail`
+      this cycle   OI and price since the last settlement close -> `cyc_read`
+    The cycle anchor is the close of the last monthly expiry session, counting
+    there only the contracts that survived it, so the cumulative figure starts
+    from the post-roll book and is not polluted by the roll itself.
+
+    VOLUME IS THE CASH MARKET'S, NOT THE FUTURES'. Stock-futures volume against
+    its own recent norm is a picture of the roll calendar and nothing else:
+    measured 2023-2026 on the Nifty top 20, the median reads +204% three sessions
+    before expiry (every roll trades two contracts) and about -60% for the eight
+    sessions after it. Cash turnover has no such cycle (-22% to +14% across the
+    same window), so `activity_pct` is cash turnover against the stock's own
+    21-session norm, shown beside its delivery share.
+
+    The `read` column reproduces the bucket votes exactly (pinned by a test): it
+    is built from the same OI change and the same quadrant rule.
+    """
+    cols = ["bucket", "symbol", "price_pct", "oi_today", "oi_prev", "oi_pct",
+            "oi_chg", "read", "cur_share", "next_share", "far_share", "trail",
+            "activity_pct", "deliv_pct", "cyc_from", "cyc_price_pct", "cyc_oi_pct",
+            "cyc_read",
+            "ce_pct", "pe_pct", "opt_read"]
+    meta = index_meta(fno_symbol, trade_date)
+    if meta is None:
+        return pd.DataFrame(columns=cols)
+    all_syms = tuple(s for b in meta["buckets"].values() for s in b)
+    bucket_of = {s: lbl for lbl, mem in meta["buckets"].items() for s in mem}
+    ph = ", ".join("?" * len(all_syms))
+
+    cash = _load_cash(all_syms, trade_date, lookback=45)
+    if cash.empty or trade_date not in set(cash["trade_date"]):
+        return pd.DataFrame(columns=cols)
+    Rw = cash.pivot_table("r", "trade_date", "symbol").sort_index()
+    Tw = cash.pivot_table("turnover_lacs", "trade_date", "symbol").sort_index()
+    Dw = cash.pivot_table("deliv_per", "trade_date", "symbol").sort_index()
+
+    settle = sorted(pd.to_datetime(query_dataframe("""
+        SELECT DISTINCT trade_date FROM fno_bhavcopy
+        WHERE instrument = 'FUTSTK' AND expiry_date = trade_date
+          AND trade_date <= ? AND trade_date > (?::date - 120)
+    """, [trade_date, trade_date])["trade_date"]).dt.date)
+    is_exp = trade_date in settle
+    anchor = max([d for d in settle if d < trade_date], default=None)
+    start = min(anchor or trade_date, trade_date - timedelta(days=45))
+
+    F = query_dataframe(f"""
+        SELECT trade_date, symbol, expiry_date, SUM(open_interest) AS oi
+        FROM fno_bhavcopy
+        WHERE instrument = 'FUTSTK' AND symbol IN ({ph})
+          AND trade_date >= ? AND trade_date <= ? AND expiry_date >= trade_date
+        GROUP BY 1, 2, 3
+    """, [*all_syms, start, trade_date])
+    if not F.empty:
+        F["trade_date"] = pd.to_datetime(F["trade_date"]).dt.date
+        F["expiry_date"] = pd.to_datetime(F["expiry_date"]).dt.date
+    days = sorted(F["trade_date"].unique()) if not F.empty else []
+
+    def total(d, floor, strict):
+        """symbol -> OI on day d over contracts expiring after (or on) `floor`."""
+        g = F[F["trade_date"] == d]
+        g = g[g["expiry_date"] > floor] if strict else g[g["expiry_date"] >= floor]
+        return g[g["oi"] > 0].groupby("symbol")["oi"].sum()
+
+    def daily_pct(d):
+        """Same basis as the live bucket read: forward set of day d on both days,
+        including the settling contract when d is a settlement session."""
+        i = days.index(d)
+        if i == 0:
+            return pd.Series(dtype=float)
+        strict = d not in settle
+        a, b = total(d, d, strict), total(days[i - 1], d, strict)
+        j = pd.DataFrame({"a": a, "b": b}).dropna()
+        j = j[j["b"] > 0]
+        return (j["a"] - j["b"]) / j["b"] * 100
+
+    today_oi = _total_oi_change(
+        _load_futures(all_syms, trade_date, include_expiring=is_exp), trade_date)
+    today_oi = today_oi.set_index("symbol") if not today_oi.empty else today_oi
+    opt = (pd.DataFrame(columns=["ce_pct", "pe_pct"]) if is_exp else
+           _opt_change(_load_options(all_syms, trade_date), trade_date))
+    opt = opt.set_index("symbol") if "symbol" in opt.columns else opt
+
+    recent = [d for d in days if d <= trade_date][-4:][::-1]        # newest first
+    trail = {d: daily_pct(d) for d in recent} if trade_date in days else {}
+    cyc_days = [d for d in days if anchor and anchor < d <= trade_date]
+    cyc_daily = {d: (trail[d] if d in trail else daily_pct(d)) for d in cyc_days}
+    base = total(anchor, anchor, True) if anchor in days else pd.Series(dtype=float)
+    now = total(trade_date, trade_date, not is_exp) if trade_date in days else \
+        pd.Series(dtype=float)
+    g_today = F[(F["trade_date"] == trade_date) & (F["oi"] > 0)] if not F.empty else F
+    if not is_exp and not g_today.empty:
+        g_today = g_today[g_today["expiry_date"] > trade_date]
+
+    rows = []
+    for sym in all_syms:
+        r = Rw.at[trade_date, sym] if sym in Rw.columns else np.nan
+        row = dict.fromkeys(cols)
+        row.update(bucket=bucket_of[sym], symbol=sym, cyc_from=anchor,
+                   price_pct=None if pd.isna(r) else float(r), trail=[])
+        if len(today_oi) and sym in today_oi.index:
+            oi, poi = float(today_oi.at[sym, "oi"]), float(today_oi.at[sym, "prev_oi"])
+            pct = (oi - poi) / poi * 100
+            row.update(oi_today=oi, oi_prev=poi, oi_pct=pct, oi_chg=oi - poi,
+                       read=_quadrant(row["price_pct"], pct))
+        e = g_today[g_today["symbol"] == sym].sort_values("expiry_date")
+        if len(e) and e["oi"].sum() > 0:
+            sh = (e["oi"] / e["oi"].sum() * 100).tolist()
+            row.update(cur_share=sh[0], next_share=sh[1] if len(sh) > 1 else 0.0,
+                       far_share=float(sum(sh[2:])))
+        row["trail"] = [round(float(trail[d][sym]), 1) for d in recent
+                        if sym in trail[d].index]
+        if sym in Tw.columns and trade_date in Tw.index:
+            prior = Tw[sym][Tw.index < trade_date].dropna().tail(_DELIV_BASE)
+            cur = Tw.at[trade_date, sym]
+            if len(prior) >= _DELIV_MINP and prior.mean() > 0 and pd.notna(cur):
+                row["activity_pct"] = float(cur / prior.mean() * 100 - 100)
+            dv = Dw.at[trade_date, sym] if sym in Dw.columns else np.nan
+            row["deliv_pct"] = None if pd.isna(dv) else float(dv)
+        if anchor and sym in base.index and sym in now.index and base[sym] > 0:
+            # a split or bonus re-bases OI in shares overnight; a single-day move
+            # past 50% is a contract adjustment, not positioning, so the cycle
+            # figure is withheld rather than shown as a +100% "build"
+            broke = any(sym in cyc_daily[d].index and abs(cyc_daily[d][sym]) > 50
+                        for d in cyc_days)
+            pr = Rw[sym][(Rw.index > anchor) & (Rw.index <= trade_date)].dropna() \
+                if sym in Rw.columns else pd.Series(dtype=float)
+            if not broke and len(pr):
+                cp = float((np.prod(1 + pr / 100) - 1) * 100)
+                co = float((now[sym] - base[sym]) / base[sym] * 100)
+                row.update(cyc_price_pct=cp, cyc_oi_pct=co, cyc_read=_quadrant(cp, co))
+        if len(opt) and sym in opt.index:
+            ce, pe = float(opt.at[sym, "ce_pct"]), float(opt.at[sym, "pe_pct"])
+            row.update(ce_pct=ce, pe_pct=pe, opt_read=_opt_label(ce, pe))
+        rows.append(row)
+    return pd.DataFrame(rows, columns=cols)
 
 
 def _index_close(index_name: str, trade_date: date) -> Optional[float]:

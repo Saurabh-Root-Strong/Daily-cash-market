@@ -6629,6 +6629,178 @@ def _ilc_num(v, fmt: str = "{:+.2f}") -> str:
     return "—" if v is None or pd.isna(v) else fmt.format(v)
 
 
+_ILC_QUAD = {
+    "long build": "🟢 long build", "short covering": "🟢 short covering",
+    "short build": "🔴 short build", "long unwind": "🔴 long unwind",
+    "flat": "⚪ flat", None: "—",
+}
+_ILC_OPT = {
+    "put writing": "🟢 put writing", "put side heavier": "🟢 put side heavier",
+    "balanced": "⚪ balanced", "call side heavier": "🔴 call side heavier",
+    "call writing": "🔴 call writing", None: "—",
+}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_stock_flow(trade_date: date, fno_symbol: str) -> pd.DataFrame:
+    from src.analytics.index_largecap import get_stock_flow
+    return get_stock_flow(trade_date, fno_symbol)
+
+
+def _ilc_lab(table: dict, v) -> str:
+    """Label lookup that treats any missing value (None or NaN) as a dash: pandas
+    turns a None in a mostly-string column into NaN, which is not a dict key."""
+    return table[None] if v is None or (isinstance(v, float) and pd.isna(v)) else table[v]
+
+
+def _ilc_shares(v: float) -> str:
+    """OI change in shares, in lakh/crore so a 28-million figure is readable."""
+    if v is None or pd.isna(v):
+        return "—"
+    a = abs(v)
+    if a >= 1e7:
+        return f"{v / 1e7:+.2f} Cr"
+    return f"{v / 1e5:+.1f} L"
+
+
+def _render_ilc_stock_flow(d, sym: str, _name: str, selected_date: date) -> None:
+    """Stock by stock: how each vote was cast, the last 4 sessions, the cycle."""
+    try:
+        sf = _cached_stock_flow(selected_date, sym)
+    except Exception as exc:                                   # noqa: BLE001
+        st.caption(f"Stock-by-stock view unavailable: {exc}")
+        return
+    if sf.empty:
+        return
+    anchor = sf["cyc_from"].iloc[0]
+    since = f"since {anchor:%d %b}" if anchor else "this cycle"
+    st.markdown("##### Stock by stock — how each vote was cast")
+    st.caption(
+        "**Which contracts:** every live expiry month **added together** — "
+        "current + next + far — with each contract compared against itself on "
+        "the earlier day, so a position rolled into next month nets to zero. "
+        "Measured on 89,103 stock-days: the current month holds 83.8% of the OI, "
+        "the next 15.1%, the far 1.1%; the **current month alone** gives a "
+        "different label on 27% of stock-days and the *opposite* one on 11%, "
+        "because it bleeds into the next contract through the roll. "
+        "**OI up = positions were added; OI down = positions were closed** — "
+        "that part is arithmetic. *Which side* added them is read from price. "
+        f"Three horizons: **today**, the **last 4 sessions**, and **{since}** "
+        "(the close of the last monthly expiry).")
+    out = pd.DataFrame({
+        "Bucket": sf["bucket"],
+        "Stock": sf["symbol"],
+        "Price %": [_ilc_num(v) for v in sf["price_pct"]],
+        "OI % today": [_ilc_num(v) for v in sf["oi_pct"]],
+        "OI change": [_ilc_shares(v) for v in sf["oi_chg"]],
+        "Today": [_ilc_lab(_ILC_QUAD, v) for v in sf["read"]],
+        "Cur · Next · Far %": [
+            "—" if pd.isna(c) else f"{c:.0f} · {n:.0f} · {f:.0f}"
+            for c, n, f in zip(sf["cur_share"], sf["next_share"], sf["far_share"])],
+        "OI % last 4": [", ".join(f"{x:+.1f}" for x in t) if t else "—"
+                        for t in sf["trail"]],
+        "Cycle price %": [_ilc_num(v) for v in sf["cyc_price_pct"]],
+        "Cycle OI %": [_ilc_num(v) for v in sf["cyc_oi_pct"]],
+        "Cycle": [_ilc_lab(_ILC_QUAD, v) for v in sf["cyc_read"]],
+        "Activity %": [_ilc_num(v, "{:+.0f}") for v in sf["activity_pct"]],
+        "Delivery %": [_ilc_num(v, "{:.1f}") for v in sf["deliv_pct"]],
+        "Call OI %": [_ilc_oi_cell(v, d.is_expiry_session) for v in sf["ce_pct"]],
+        "Put OI %": [_ilc_oi_cell(v, d.is_expiry_session) for v in sf["pe_pct"]],
+        "Options": [("off · expiry day" if d.is_expiry_session
+                     else _ilc_lab(_ILC_OPT, v)) for v in sf["opt_read"]],
+    })
+    st.dataframe(
+        out, hide_index=True, use_container_width=True,
+        height=min(38 * (len(out) + 1) + 4, 560),
+        column_config={
+            "Bucket": st.column_config.TextColumn(
+                "Bucket", help="Which weight bucket the stock sits in."),
+            "Stock": st.column_config.TextColumn(
+                "Stock", help="NSE symbol. Every index member is listed."),
+            "Price %": st.column_config.TextColumn(
+                "Price %",
+                help="The stock's cash-market close against its previous close. "
+                     "The futures price is not used: it breaks across a roll."),
+            "OI % today": st.column_config.TextColumn(
+                "OI % today",
+                help="Change in the stock's total futures open interest - all "
+                     "expiry months added - against the previous session. "
+                     "Positive = positions were ADDED today. Negative = "
+                     "positions were CLOSED. Under 0.5% either way casts no "
+                     "vote ('flat')."),
+            "OI change": st.column_config.TextColumn(
+                "OI change",
+                help="The same change in shares (L = lakh, Cr = crore). A big "
+                     "percentage on a thin stock can be a small number of "
+                     "shares; this shows the size."),
+            "Today": st.column_config.TextColumn(
+                "Today",
+                help="One session. Price up + OI up = long build (positions "
+                     "added on a rise). Price up + OI down = short covering "
+                     "(positions closed on a rise). Price down + OI up = short "
+                     "build. Price down + OI down = long unwind. These are the "
+                     "exact votes counted in the 'Stock votes' column above."),
+            "Cur · Next · Far %": st.column_config.TextColumn(
+                "Cur · Next · Far %",
+                help="How today's open interest is split across the current, "
+                     "next and far expiry months. '96 · 4 · 0' = almost all in "
+                     "the current month. As expiry nears, the first number "
+                     "falls and the second rises - that is the roll, and it is "
+                     "why the three are added before measuring any change."),
+            "OI % last 4": st.column_config.TextColumn(
+                "OI % last 4",
+                help="The daily OI change for the last four sessions, TODAY "
+                     "FIRST. '+2.0, -0.4, +0.2, +13.9' = +2.0% today, -0.4% the "
+                     "session before. Shows whether today continues a run or "
+                     "reverses it. An entry that falls on a monthly expiry day "
+                     "counts the settling contract too."),
+            "Cycle price %": st.column_config.TextColumn(
+                "Cycle price %",
+                help=f"The stock's price move {since}, the close of the last "
+                     "monthly expiry."),
+            "Cycle OI %": st.column_config.TextColumn(
+                "Cycle OI %",
+                help=f"Total futures open interest now against the book that "
+                     f"survived the last expiry ({since}). Positive = the "
+                     "cycle has ADDED positions on balance. Withheld ('—') if "
+                     "a single day moved more than 50%: that is a split or "
+                     "bonus re-basing the contract, not positioning."),
+            "Cycle": st.column_config.TextColumn(
+                "Cycle",
+                help=f"The same four-way read on the whole cycle {since}, "
+                     "instead of on one day. A stock can read 'short covering' "
+                     "today and 'short build' for the cycle: shorts built over "
+                     "several sessions and some were bought back today. Early "
+                     "in a cycle this is only a few sessions old."),
+            "Activity %": st.column_config.TextColumn(
+                "Activity %",
+                help="The volume leg: the stock's CASH turnover against its own "
+                     "21-session norm. Futures volume is deliberately not used "
+                     "- measured, it reads +204% three sessions before every "
+                     "expiry (each roll trades two contracts) and about -60% "
+                     "for eight sessions after, so it shows the calendar, not "
+                     "conviction. A lean on heavy activity carries more "
+                     "weight than the same lean on a quiet day."),
+            "Delivery %": st.column_config.TextColumn(
+                "Delivery %",
+                help="Share of today's cash volume that was taken to delivery "
+                     "rather than squared off intraday."),
+            "Call OI %": st.column_config.TextColumn(
+                "Call OI %",
+                help="Change in the stock's call open interest, every strike "
+                     "and expiry added, against the previous session."),
+            "Put OI %": st.column_config.TextColumn(
+                "Put OI %",
+                help="Change in the stock's put open interest, every strike "
+                     "and expiry added, against the previous session."),
+            "Options": st.column_config.TextColumn(
+                "Options",
+                help="Which side grew faster for this stock. 'Put side "
+                     "heavier' reads bullish ONLY if the new puts were sold "
+                     "rather than bought - open interest cannot tell which."),
+        })
+
+
 def _ilc_chip(text: str, colour: str) -> str:
     return (f"<span style='background:{colour}22;border:1px solid {colour}55;"
             f"color:{colour};padding:2px 8px;border-radius:10px;"
@@ -7112,6 +7284,7 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
                               "positioning; it does not predict the index - the "
                               "measured hit rate is right below this table."),
                  })
+    _render_ilc_stock_flow(d, sym, _name, selected_date)
     _ns = d.net_score
     if _ns is not None:
         _lbl = ("flow leans long" if _ns > 0.25 else
