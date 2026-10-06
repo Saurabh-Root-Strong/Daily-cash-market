@@ -6,6 +6,7 @@ from src.analytics.delivery_signals import get_stock_metrics
 from src.analytics.base import get_weighting_method, get_min_turnover_filter, get_thresholds
 from src.data.repository import query_dataframe
 from src.logging_setup import get_logger
+from src.analytics.adjusted_returns import ret_sql, up_sql
 
 log = get_logger(__name__)
 
@@ -199,15 +200,16 @@ def get_sector_history(sector_name: str, days: int = 60) -> pd.DataFrame:
       - on a listing day bhavcopy `prev_close` is the IPO ISSUE PRICE, so day one
         books the listing gain as a return (WINSOL 75 -> 383 = +411%). LAG() is
         NULL on a symbol's first session, so `w_lag IS NOT NULL` removes those.
-    Returns are winsorized at +/-25% for unadjusted splits/bonuses.
+    Returns are split / bonus / demerger adjusted (adjusted_returns.ret_sql) and
+    then winsorized at +/-25% for whatever NSE's corporate-action table lacks.
     """
     min_turnover_lacs = get_min_turnover_filter()
-    sql = """
+    sql = f"""
         WITH base AS (
             SELECT b.trade_date, b.symbol, b.turnover_lacs, b.deliv_per,
                    CASE WHEN b.prev_close > 0
                         THEN GREATEST(LEAST(
-                                 (b.close_price - b.prev_close) / b.prev_close * 100,
+                                 {ret_sql('b')},
                                  25), -25)
                    END AS r,
                    LAG(b.turnover_lacs) OVER (PARTITION BY b.symbol
@@ -628,7 +630,7 @@ def search_stocks_performance(
 
     pattern = f"%{query.upper()}%"
 
-    today_sql = """
+    today_sql = f"""
         WITH base AS (
             SELECT b.symbol,
                    b.trade_date,
@@ -639,7 +641,7 @@ def search_stocks_performance(
                    b.close_price, b.turnover_lacs, b.deliv_per,
                    b.ttl_trd_qnty,
                    CASE WHEN b.prev_close > 0
-                   THEN (b.close_price - b.prev_close) / b.prev_close * 100
+                   THEN {ret_sql('b')}
                    ELSE NULL END AS price_change_pct,
                    AVG(b.deliv_per) OVER (
                        PARTITION BY b.symbol, b.series

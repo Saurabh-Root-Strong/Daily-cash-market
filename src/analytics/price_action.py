@@ -223,6 +223,11 @@ def get_price_action(
         ])
 
     P["trade_date"] = pd.to_datetime(P["trade_date"]).dt.date
+    # Bases, breakouts and gaps compare price LEVELS across weeks, so a split or
+    # bonus inside the window must be taken out of every earlier bar -- otherwise
+    # last month's high sits at twice today's price and the ex-day is a -50% gap.
+    from src.analytics.adjusted_returns import back_adjust
+    P = back_adjust(P)
 
     rows = []
     with warnings.catch_warnings():

@@ -736,8 +736,12 @@ several ways, which is exactly how false positives are manufactured.
   three of those revert on their own — an index benchmark would credit that
   reversion to the deal. A placebo drawn from the same control pool prints
   **−0.00% (t = −0.16)**.
-- **Corporate actions** cannot fake a move: returns compound `close / prev_close`
-  (NSE's prev_close is ex-adjusted), never `close_t+n / close_t`.
+- **Corporate actions:** returns compound `close / prev_close`, never
+  `close_t+n / close_t`. NSE's prev_close is **not** ex-adjusted (this note said
+  the opposite until Oct-2026). Large splits were caught by a ratio guard; small
+  bonuses (1:2, 1:3, 1:4) were not and entered as real falls - 232 such days
+  2018-2026. The builder now adjusts them; **the numbers on this page change only
+  after the outcomes table is rebuilt** (`python scripts/build_deal_outcomes.py`).
 - **t-statistics are Newey-West** (lag = horizon). The forward windows overlap
   heavily; a plain t would be inflated several-fold.
 - **Multiple testing:** the 44 candidates searched here were run against 400

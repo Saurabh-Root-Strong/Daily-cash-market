@@ -33,9 +33,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import duckdb, numpy as np, pandas as pd
 
 from src.analytics.index_largecap import (INDEX_BUCKETS, index_meta,
-                                          _DELIV_BASE, _DELIV_MINP, _R_SQL,
+                                          _DELIV_BASE, _DELIV_MINP,
                                           _opt_label)
 from src.analytics.fno_stocks import _sessions_until
+from src.analytics.adjusted_returns import ret_sql, factor_sql
+_R_SQL = ret_sql('daily_data')
 
 pd.set_option("display.width", 250)
 ap = argparse.ArgumentParser()

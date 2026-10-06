@@ -5,6 +5,7 @@ import pandas as pd
 from src.data.repository import query_dataframe
 from src.analytics.base import get_min_turnover_filter, get_delivery_window, get_volume_window
 from src.logging_setup import get_logger
+from src.analytics.adjusted_returns import ret_sql, up_sql
 
 log = get_logger(__name__)
 
@@ -29,7 +30,7 @@ def get_stock_metrics(trade_date: date, min_turnover_lacs: Optional[float] = Non
                 b.prev_close,
                 CASE
                     WHEN b.prev_close > 0
-                    THEN (b.close_price - b.prev_close) / b.prev_close * 100
+                    THEN {ret_sql('b')}
                     ELSE NULL
                 END AS price_change_pct,
                 b.ttl_trd_qnty,
@@ -79,14 +80,14 @@ def get_stock_metrics(trade_date: date, min_turnover_lacs: Optional[float] = Non
 
 
 def get_stock_history(symbol: str, days: int = 60) -> pd.DataFrame:
-    sql = """
+    sql = f"""
         SELECT
             b.trade_date,
             b.close_price,
             b.prev_close,
             CASE
                 WHEN b.prev_close > 0
-                THEN (b.close_price - b.prev_close) / b.prev_close * 100
+                THEN {ret_sql('b')}
                 ELSE NULL
             END AS price_change_pct,
             b.ttl_trd_qnty,

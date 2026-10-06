@@ -70,6 +70,7 @@ import numpy as np
 import pandas as pd
 
 from src.data.repository import query_dataframe
+from src.analytics.adjusted_returns import factor_sql, ret_sql
 
 __all__ = [
     "get_index_largecap", "IndexLargeCap", "BucketRow",
@@ -331,24 +332,13 @@ def _min_valid(n_members: int) -> int:
 _ALIAS = {"ZOMATO": "ETERNAL", "TATAMOTORS": "TMPV"}          # old -> current
 
 
-def _sym_sql(tbl: str) -> str:
-    """SQL for the CURRENT ticker of a row in `tbl`."""
-    w = " ".join(f"WHEN '{o}' THEN '{n}'" for o, n in _ALIAS.items())
-    return f"CASE {tbl}.symbol {w} ELSE {tbl}.symbol END"
+def _r_sql() -> str:
+    """Adjusted daily % return for a daily_data row (shared definition)."""
+    return ret_sql("daily_data")
 
 
-def _factor_sql(tbl: str) -> str:
-    return ("COALESCE((SELECT EXP(SUM(LN(ca.share_factor))) FROM corp_actions ca "
-            f"WHERE ca.symbol = {_sym_sql(tbl)} AND ca.ex_date = {tbl}.trade_date "
-            "AND ca.share_factor > 0 AND ca.share_factor <> 1), 1)")
-
-
-_F_SQL = _factor_sql("daily_data")
-_R_SQL = ("CASE WHEN open_price > 0 AND EXISTS (SELECT 1 FROM corp_actions cd "
-          f"WHERE cd.symbol = {_sym_sql('daily_data')} "
-          "AND cd.ex_date = daily_data.trade_date AND cd.kind IN ('DEMERGER', 'SCHEME')) "
-          "THEN (close_price / open_price - 1) * 100 "
-          f"ELSE (close_price * {_F_SQL} - prev_close) / NULLIF(prev_close, 0) * 100 END")
+def _f_sql() -> str:
+    return factor_sql("daily_data")
 
 
 def _demerger_days(symbols, start: date, end: date) -> set:
@@ -787,7 +777,7 @@ def _load_cash(symbols: tuple, trade_date: date, lookback: int = 220) -> pd.Data
     ph = ", ".join("?" * len(symbols))
     df = _qdf(f"""
         SELECT trade_date, symbol, close_price, prev_close, deliv_per, turnover_lacs,
-               {_R_SQL} AS r, {_F_SQL} AS share_factor
+               {_r_sql()} AS r, {_f_sql()} AS share_factor
         FROM daily_data
         WHERE symbol IN ({ph}) AND series IN ('EQ', 'SM', 'ST')
           AND close_price > 0 AND prev_close > 0
@@ -1209,7 +1199,7 @@ def get_concentration_trend(fno_symbol: str = "NIFTY", years: int = 5,
         start = max(start, meta["history_from"])
     df = _qdf(f"""
         SELECT trade_date, symbol,
-               {_R_SQL} AS r
+               {_r_sql()} AS r
         FROM daily_data
         WHERE symbol IN ({ph}) AND series IN ('EQ','SM','ST')
           AND close_price > 0 AND prev_close > 0
@@ -1393,7 +1383,7 @@ def get_state_base_rates(fno_symbol: str = "NIFTY", years: int = 5,
         start = max(start, meta["history_from"])
     df = _qdf(f"""
         SELECT trade_date, symbol,
-               {_R_SQL} AS r
+               {_r_sql()} AS r
         FROM daily_data
         WHERE symbol IN ({ph}) AND series IN ('EQ','SM','ST')
           AND close_price > 0 AND prev_close > 0
@@ -1494,7 +1484,7 @@ def _flow_state_matrix(fno_symbol: str, as_of: date, years: int = 5,
 
     cash = _qdf(f"""
         SELECT trade_date, symbol, deliv_per,
-               {_R_SQL} AS r
+               {_r_sql()} AS r
         FROM daily_data WHERE symbol IN ({ph}) AND series IN ('EQ','SM','ST')
           AND close_price > 0 AND prev_close > 0
           AND trade_date >= ? AND trade_date <= ?
@@ -1524,12 +1514,7 @@ def _flow_state_matrix(fno_symbol: str, as_of: date, years: int = 5,
             FROM f
         )
         SELECT trade_date, symbol, instrument, option_type,
-               SUM(oi / COALESCE((SELECT EXP(SUM(LN(ca.share_factor)))
-                                  FROM corp_actions ca
-                                  WHERE ca.symbol = CASE l.symbol WHEN 'ZOMATO' THEN 'ETERNAL'
-                                                    WHEN 'TATAMOTORS' THEN 'TMPV' ELSE l.symbol END
-                                    AND ca.ex_date = l.trade_date
-                                    AND ca.share_factor > 0 AND ca.share_factor <> 1), 1)) AS oi,
+               SUM(oi / {factor_sql('l')}) AS oi,
                SUM(poi) AS poi
         FROM l WHERE poi > 0
         GROUP BY 1,2,3,4

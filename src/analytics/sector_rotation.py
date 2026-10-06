@@ -96,6 +96,8 @@ def _slope(series: pd.Series) -> float:
 # Shared normalizers live in analytics.base (deduped — were copied here and in
 # the Sector Performance view). Aliased to keep existing call sites unchanged.
 from src.analytics.base import minmax01 as _normalize, rank01 as _rank01  # noqa: E402
+from src.analytics.adjusted_returns import (bridge_sql, prev_close_sql, ret_sql,
+                                            symbol_sql, up_sql)
 
 
 def _sector_liquidity_stats(as_of_date: date, min_turnover_lacs: float) -> pd.DataFrame:
@@ -283,7 +285,7 @@ def get_sector_rotation(
 
     # ── 100-day daily delivery % series — for trend slope only ────────────────
     start = _session_cutoff(as_of_date, lookback_days)
-    hist_sql = """
+    hist_sql = f"""
         SELECT
             s.sector,
             b.trade_date,
@@ -291,7 +293,7 @@ def get_sector_rotation(
                 / NULLIF(SUM(b.turnover_lacs), 0)             AS wtd_deliv_per,
             SUM(b.deliv_per / 100.0 * b.turnover_lacs) / 100 AS deliv_value_cr,
             MEDIAN(CASE WHEN b.prev_close > 0
-                        THEN (b.close_price - b.prev_close) / b.prev_close * 100 END)
+                        THEN {ret_sql('b')} END)
                                                               AS wtd_daily_ret_pct
         FROM daily_data b
         INNER JOIN v_sector_master s ON b.symbol = s.symbol
@@ -970,9 +972,9 @@ def get_market_regime(as_of_date: date) -> dict:
     # Low breadth in a rising market = narrow leadership = fragile rally.
     # High breadth in a falling market = broad-based genuine selling.
     try:
-        breadth_df = query_dataframe("""
+        breadth_df = query_dataframe(f"""
             SELECT
-                SUM(CASE WHEN close_price > prev_close THEN 1 ELSE 0 END) * 1.0
+                SUM(CASE WHEN {up_sql('daily_data')} THEN 1 ELSE 0 END) * 1.0
                 / NULLIF(COUNT(*), 0) AS breadth_frac
             FROM daily_data
             WHERE trade_date = (
@@ -1251,7 +1253,7 @@ def get_sector_stocks_rotation(
         else as_of_date - timedelta(days=200)
     )
 
-    sql = """
+    sql = f"""
         WITH recent AS (
             SELECT
                 b.symbol,
@@ -1264,7 +1266,7 @@ def get_sector_stocks_rotation(
                 SUM(b.turnover_lacs) / 100                         AS turnover_cr,
                 SUM(
                     CASE WHEN b.prev_close > 0
-                    THEN (b.close_price - b.prev_close) / b.prev_close * 100
+                    THEN {ret_sql('b')}
                          * b.turnover_lacs END
                 ) / NULLIF(SUM(CASE WHEN b.prev_close > 0 THEN b.turnover_lacs END), 0)
                     AS price_chg_pct
@@ -1387,10 +1389,22 @@ def get_clock_stock_detail(
     #   ltp        last close on/before as_of
     #   chg_1d_pct last close vs the session before it
     #   ret_win_pct last close vs the close just before the window opened
+    # Last close against an earlier close, with every split / bonus / demerger
+    # between the two taken out: a 1:1 bonus inside the window otherwise reads as
+    # the window's return (-50%). `k` is 1 on every row without a corporate action
+    # since the previous row, so with none in the window this is the plain price
+    # ratio it always was (see adjusted_returns.bridge_sql). Deliberately NOT a
+    # compounding of daily returns: a stock that spends sessions in another series
+    # (trade-to-trade) has no rows here on those days, and compounding would
+    # silently drop their moves.
     px = query_dataframe(
-        """
-        WITH px AS (
+        f"""
+        WITH px0 AS (
             SELECT b.symbol, b.trade_date, b.close_price,
+                   ({prev_close_sql('b')})   AS adj_pc,
+                   {symbol_sql('b')}         AS ca_sym,
+                   LAG(b.close_price) OVER w AS lag_close,
+                   LAG(b.trade_date)  OVER w AS lag_date,
                    ROW_NUMBER() OVER (PARTITION BY b.symbol
                                       ORDER BY b.trade_date DESC) AS rn_desc
             FROM daily_data b
@@ -1398,23 +1412,43 @@ def get_clock_stock_detail(
             WHERE b.series IN ('EQ', 'SM', 'ST')
               AND s.sector = ?
               AND b.trade_date <= ?
+            WINDOW w AS (PARTITION BY b.symbol ORDER BY b.trade_date)
+        ),
+        px AS (
+            SELECT symbol, trade_date, close_price, rn_desc,
+                   {bridge_sql('px0.ca_sym', 'px0.lag_date', 'px0.trade_date',
+                               'px0.lag_close', 'px0.adj_pc')} AS k
+            FROM px0
         ),
         last2 AS (
             SELECT symbol,
                    MAX(CASE WHEN rn_desc = 1 THEN close_price END) AS ltp,
+                   MAX(CASE WHEN rn_desc = 1 THEN k END)           AS k1,
                    MAX(CASE WHEN rn_desc = 2 THEN close_price END) AS prev_close
             FROM px WHERE rn_desc <= 2 GROUP BY symbol
         ),
         start_px AS (
-            SELECT symbol, ARGMAX(close_price, trade_date) AS start_close
+            SELECT symbol, ARGMAX(close_price, trade_date) AS start_close,
+                   MAX(trade_date) AS start_date
             FROM px WHERE trade_date <= ? GROUP BY symbol
+        ),
+        kwin AS (
+            SELECT p.symbol,
+                   EXP(SUM(LN(GREATEST(COALESCE(p.k, 1), 1e-9)))) AS kw
+            FROM px p INNER JOIN start_px sp ON p.symbol = sp.symbol
+            WHERE p.trade_date > sp.start_date
+            GROUP BY p.symbol
         )
         SELECT l.symbol, l.ltp,
                CASE WHEN l.prev_close > 0
-                    THEN (l.ltp - l.prev_close) / l.prev_close * 100 END AS chg_1d_pct,
+                    THEN (l.ltp * COALESCE(l.k1, 1) - l.prev_close)
+                         / l.prev_close * 100 END AS chg_1d_pct,
                CASE WHEN s.start_close > 0
-                    THEN (l.ltp - s.start_close) / s.start_close * 100 END AS ret_win_pct
-        FROM last2 l LEFT JOIN start_px s ON l.symbol = s.symbol
+                    THEN (l.ltp * COALESCE(kw.kw, 1) - s.start_close)
+                         / s.start_close * 100 END AS ret_win_pct
+        FROM last2 l
+        LEFT JOIN start_px s ON l.symbol = s.symbol
+        LEFT JOIN kwin kw    ON l.symbol = kw.symbol
         """,
         [sector, as_of_date, _session_cutoff(as_of_date, lookback_days)],
     )
@@ -1502,7 +1536,7 @@ def get_sector_rotation_history(
         min_turnover_lacs = get_min_turnover_filter()
 
     start = _session_cutoff(as_of_date, lookback_days)
-    sql = """
+    sql = f"""
         SELECT
             b.trade_date,
             SUM(b.deliv_per * b.turnover_lacs)
@@ -1511,7 +1545,7 @@ def get_sector_rotation_history(
             SUM(b.turnover_lacs) / 100                        AS turnover_cr,
             AVG(
                 CASE WHEN b.prev_close > 0
-                THEN (b.close_price - b.prev_close) / b.prev_close * 100
+                THEN {ret_sql('b')}
                 END
             )                                                 AS avg_price_chg
         FROM daily_data b
@@ -1532,7 +1566,7 @@ def get_sector_rotation_history(
 # backtest cannot drift from the clock it claims to be validating. Bounds are
 # (start, end] — the lower bound is STRICT, and any caller slicing this panel in
 # pandas has to reproduce that.
-_ROTATION_PANEL_SQL = """
+_ROTATION_PANEL_SQL = f"""
         SELECT
             s.sector,
             b.trade_date,
@@ -1546,7 +1580,7 @@ _ROTATION_PANEL_SQL = """
             -- almost every sector look "above market" (Improving/Lagging empty).
             -- Median is unbiased and immune to penny-stock / corporate-action spikes.
             MEDIAN(CASE WHEN b.prev_close > 0
-                        THEN (b.close_price - b.prev_close) / b.prev_close * 100 END)
+                        THEN {ret_sql('b')} END)
                                                                AS wtd_daily_ret_pct
         FROM daily_data b
         INNER JOIN v_sector_master s ON b.symbol = s.symbol
@@ -1806,12 +1840,12 @@ def get_rotation_clock_backtest(
         return pd.DataFrame()
 
     # Actual forward returns: signal_date → as_of_date
-    fwd_sql = """
+    fwd_sql = f"""
         SELECT
             s.sector,
             b.trade_date,
             MEDIAN(CASE WHEN b.prev_close > 0
-                        THEN (b.close_price - b.prev_close) / b.prev_close * 100 END)
+                        THEN {ret_sql('b')} END)
                                                         AS wtd_daily_ret_pct
         FROM daily_data b
         INNER JOIN v_sector_master s ON b.symbol = s.symbol
@@ -1914,10 +1948,10 @@ def get_rotation_clock_accuracy(
 
     # Forward-return panel (robust median) spanning the whole backtest, one query.
     span_start = all_dates[min(sig_idx)]
-    panel = query_dataframe("""
+    panel = query_dataframe(f"""
         SELECT s.sector, b.trade_date,
                MEDIAN(CASE WHEN b.prev_close > 0
-                           THEN (b.close_price - b.prev_close) / b.prev_close * 100 END) AS ret
+                           THEN {ret_sql('b')} END) AS ret
         FROM daily_data b JOIN v_sector_master s ON b.symbol = s.symbol
         WHERE s.sector NOT IN ('ETF', 'Others') AND b.series IN ('EQ','SM','ST')
           AND b.turnover_lacs >= ? AND b.trade_date >= ? AND b.trade_date <= ?
@@ -2037,7 +2071,7 @@ def get_sector_rotation_custom_range(
     period_days = max((to_date - from_date).days, 1)
     prior_from  = from_date - timedelta(days=period_days)
 
-    hist_sql = """
+    hist_sql = f"""
         SELECT
             s.sector,
             b.trade_date,
@@ -2046,7 +2080,7 @@ def get_sector_rotation_custom_range(
             SUM(b.deliv_per / 100.0 * b.turnover_lacs) / 100  AS deliv_value_cr,
             SUM(b.turnover_lacs) / 100                         AS turnover_cr,
             MEDIAN(CASE WHEN b.prev_close > 0
-                        THEN (b.close_price - b.prev_close) / b.prev_close * 100 END)
+                        THEN {ret_sql('b')} END)
                                                                AS wtd_daily_ret_pct
         FROM daily_data b
         INNER JOIN v_sector_master s ON b.symbol = s.symbol
@@ -2249,16 +2283,51 @@ def get_sector_stocks_custom_range(
     if min_turnover_lacs is None:
         min_turnover_lacs = get_min_turnover_filter()
 
-    sql = """
+    # price_start is put on the END date's share basis: divided by every split,
+    # bonus and demerger between it and the end. Otherwise a 1:1 bonus in the range
+    # shows a start price twice the end price and a -50% period return. The first
+    # row's own factor is its raw prev_close over the adjusted one; every later
+    # row bridges from the row before it (adjusted_returns.bridge_sql), which also
+    # covers an action that fell inside a trading suspension.
+    sql = f"""
+        WITH b0 AS (
+            SELECT b.symbol, b.trade_date, b.prev_close,
+                   ({prev_close_sql('b')})   AS adj_pc,
+                   {symbol_sql('b')}         AS ca_sym,
+                   LAG(b.close_price) OVER w AS lag_close,
+                   LAG(b.trade_date)  OVER w AS lag_date
+            FROM daily_data b
+            INNER JOIN v_sector_master s ON b.symbol = s.symbol
+            WHERE b.series IN ('EQ', 'SM', 'ST')
+              AND s.sector = ?
+              AND b.trade_date >= (?::date - 45) AND b.trade_date <= ?
+            WINDOW w AS (PARTITION BY b.symbol ORDER BY b.trade_date)
+        ),
+        b1 AS (
+            SELECT symbol,
+                   CASE WHEN ROW_NUMBER() OVER (PARTITION BY symbol
+                                                ORDER BY trade_date) = 1
+                        THEN CASE WHEN prev_close > 0 AND adj_pc > 0
+                                  THEN prev_close / adj_pc ELSE 1 END
+                        ELSE {bridge_sql('b0.ca_sym', 'b0.lag_date', 'b0.trade_date',
+                                         'b0.lag_close', 'b0.adj_pc')} END AS k
+            FROM b0 WHERE trade_date >= ?
+        ),
+        fac AS (
+            SELECT symbol, EXP(SUM(LN(GREATEST(COALESCE(k, 1), 1e-9)))) AS f
+            FROM b1 GROUP BY symbol
+        )
         SELECT
             b.symbol,
             s.company_name,
             s.industry,
-            ARGMIN(b.prev_close,   b.trade_date)                AS price_start,
+            ARGMIN(b.prev_close,   b.trade_date) / COALESCE(MAX(fac.f), 1)
+                                                                AS price_start,
             ARGMAX(b.close_price,  b.trade_date)                AS price_end,
             (ARGMAX(b.close_price, b.trade_date)
-                - ARGMIN(b.prev_close, b.trade_date))
-                / NULLIF(ARGMIN(b.prev_close, b.trade_date), 0) * 100
+                - ARGMIN(b.prev_close, b.trade_date) / COALESCE(MAX(fac.f), 1))
+                / NULLIF(ARGMIN(b.prev_close, b.trade_date)
+                         / COALESCE(MAX(fac.f), 1), 0) * 100
                                                                 AS period_ret_pct,
             SUM(b.deliv_per * b.turnover_lacs)
                 / NULLIF(SUM(b.turnover_lacs), 0)               AS wtd_deliv_per,
@@ -2267,6 +2336,7 @@ def get_sector_stocks_custom_range(
             COUNT(DISTINCT b.trade_date)                        AS trading_days
         FROM daily_data b
         INNER JOIN v_sector_master s ON b.symbol = s.symbol
+        LEFT JOIN fac ON fac.symbol = b.symbol
         WHERE b.series IN ('EQ', 'SM', 'ST')
           AND s.sector = ?
           AND b.trade_date >= ?
@@ -2276,7 +2346,8 @@ def get_sector_stocks_custom_range(
         HAVING COUNT(DISTINCT b.trade_date) >= 2
         ORDER BY deliv_value_cr DESC
     """
-    return query_dataframe(sql, [sector, from_date, to_date, min_turnover_lacs])
+    return query_dataframe(sql, [sector, from_date, to_date, from_date,
+                                 sector, from_date, to_date, min_turnover_lacs])
 
 
 # ── replay: "what did the Rotation Clock say on date X, and what happened?" ───
@@ -2366,11 +2437,11 @@ def get_clock_replay(as_of_date: date, window_trading_days: int = 5,
     # `ret_eq` is the equal-weight mean of the same stocks -- what an actual
     # basket would have earned -- reported alongside for investability.
     panel = query_dataframe(
-        """
+        f"""
         WITH base AS (
             SELECT b.trade_date, s.sector, b.turnover_lacs,
                    CASE WHEN b.prev_close > 0
-                        THEN (b.close_price - b.prev_close) / b.prev_close * 100 END AS r_raw,
+                        THEN {ret_sql('b')} END AS r_raw,
                    LAG(b.turnover_lacs) OVER (PARTITION BY b.symbol
                                               ORDER BY b.trade_date) AS w_lag
             FROM daily_data b

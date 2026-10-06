@@ -26,6 +26,7 @@ from datetime import date, timedelta
 import pandas as pd
 
 from src.data.repository import query_dataframe
+from src.analytics.adjusted_returns import ret_sql, up_sql
 
 __all__ = ["get_sector_signal_log", "get_sector_accuracy_summary"]
 
@@ -38,14 +39,14 @@ _FWD_DAYS     = 5    # evaluate next-5-trading-day cumulative return
 def _load_sector_daily(
     from_date: date, to_date: date, min_turnover_lacs: float
 ) -> pd.DataFrame:
-    return query_dataframe("""
+    return query_dataframe(f"""
         SELECT
             d.trade_date,
             sm.sector,
             SUM(d.turnover_lacs * d.deliv_per / 10000.0)  AS daily_dv_cr,
             SUM(
                 CASE WHEN d.prev_close > 0
-                THEN ((d.close_price - d.prev_close) / d.prev_close * 100.0)
+                THEN {ret_sql('d')}
                      * d.turnover_lacs
                 ELSE 0.0 END
             ) / NULLIF(

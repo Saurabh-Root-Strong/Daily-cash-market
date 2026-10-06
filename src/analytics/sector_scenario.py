@@ -23,6 +23,7 @@ from typing import Optional
 import pandas as pd
 
 from src.data.repository import query_dataframe
+from src.analytics.adjusted_returns import ret_sql, up_sql
 
 __all__ = ["classify_scenario", "get_sector_fno_buildup", "SCENARIO_FACTOR"]
 
@@ -92,9 +93,9 @@ def _nifty_trend(as_of_date: date) -> dict:
 
 
 def _breadth_trend(as_of_date: date) -> dict:
-    df = query_dataframe("""
+    df = query_dataframe(f"""
         SELECT trade_date,
-               SUM(CASE WHEN close_price > prev_close THEN 1 ELSE 0 END) * 1.0
+               SUM(CASE WHEN {up_sql('daily_data')} THEN 1 ELSE 0 END) * 1.0
                / NULLIF(COUNT(*), 0) AS breadth
         FROM daily_data
         WHERE series = 'EQ' AND prev_close > 0 AND turnover_lacs >= 100

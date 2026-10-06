@@ -73,6 +73,7 @@ from src.analytics.sector_signal_v2 import (get_accum_breadth_history,
                                             get_robust_delivery_signals)
 from src.data.repository import query_dataframe
 from src.logging_setup import get_logger
+from src.analytics.adjusted_returns import ret_sql, up_sql
 
 log = get_logger(__name__)
 
@@ -203,7 +204,7 @@ def _panel_lookback_cal(h: int) -> int:
 def _load_sector_panel(as_of_date: date, min_turnover_lacs: float,
                        lookback_cal: int = 275) -> pd.DataFrame:
     return query_dataframe(
-        """
+        f"""
         WITH base AS (
             SELECT s.sector, b.trade_date, b.turnover_lacs, b.deliv_per,
                    -- raw move, kept so a corporate action can be DROPPED rather than
@@ -213,12 +214,10 @@ def _load_sector_panel(as_of_date: date, min_turnover_lacs: float,
                    -- stock-days at |raw| >= 40%, of which 444 are split/bonus-shaped.
                    -- NSE price bands make a genuine >40% cash move impossible, so the
                    -- cut is a corporate-action filter, not a return filter.
-                   (b.close_price - b.prev_close)
-                       / NULLIF(b.prev_close, 0) * 100                        AS raw_r,
+                   {ret_sql('b')}                        AS raw_r,
                    -- winsorize what remains: one uncapped print (illiquid spike)
                    -- otherwise distorts the whole sector's momentum
-                   LEAST(GREATEST((b.close_price - b.prev_close)
-                                  / NULLIF(b.prev_close, 0) * 100, -25), 25)  AS r,
+                   LEAST(GREATEST({ret_sql('b')}, -25), 25)  AS r,
                    -- LAGGED weight: a stock's SAME-DAY turnover explodes on the day it jumps,
                    -- so weighting by it correlates the weight with the return being weighted
                    -- (+0.717%/day of fake drift vs +0.025% lagged, measured 2026-07-31). The
@@ -495,13 +494,11 @@ def _sector_persistence(as_of_date: date, min_turnover_lacs: float,
     empty = pd.DataFrame(columns=["sector", "persistence", "pers_n"])
     _none = (empty, pd.DataFrame()) if with_history else empty
     panel = query_dataframe(
-        """
+        f"""
         WITH base AS (
             SELECT s.sector, b.trade_date, b.turnover_lacs,
-                   (b.close_price - b.prev_close)
-                       / NULLIF(b.prev_close, 0) * 100                        AS raw_r,
-                   LEAST(GREATEST((b.close_price - b.prev_close)
-                                  / NULLIF(b.prev_close, 0) * 100, -25), 25)  AS r,
+                   {ret_sql('b')}                        AS raw_r,
+                   LEAST(GREATEST({ret_sql('b')}, -25), 25)  AS r,
                    LAG(b.turnover_lacs) OVER (PARTITION BY b.symbol
                                               ORDER BY b.trade_date)          AS w_lag
             FROM daily_data b
@@ -1384,10 +1381,8 @@ def get_tilt_replay(as_of_date: date, horizon_days: int = 10,
         f"""
         WITH base AS (
             SELECT b.trade_date, s.sector,
-                   (b.close_price - b.prev_close)
-                       / NULLIF(b.prev_close,0) * 100 AS raw_r,
-                   GREATEST(LEAST((b.close_price - b.prev_close)
-                            / NULLIF(b.prev_close,0) * 100, 25), -25) AS r,
+                   {ret_sql('b')} AS raw_r,
+                   GREATEST(LEAST({ret_sql('b')}, 25), -25) AS r,
                    LAG(b.turnover_lacs) OVER (PARTITION BY b.symbol
                                               ORDER BY b.trade_date) AS w_lag,
                    b.turnover_lacs

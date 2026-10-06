@@ -38,6 +38,7 @@ import pandas as pd
 
 from src.analytics.base import get_min_turnover_filter, rank01 as _rank01
 from src.data.repository import query_dataframe
+from src.analytics.adjusted_returns import ret_sql, up_sql
 
 __all__ = ["get_sector_defensive_metrics", "DEFENSE_WEIGHTS"]
 
@@ -71,9 +72,9 @@ def get_sector_defensive_metrics(
 
     # Robust sector daily return = median of constituent stock returns (canonical
     # sectors via v_sector_master). Point-in-time: trade_date <= as_of_date.
-    sec = query_dataframe("""
+    sec = query_dataframe(f"""
         SELECT sm.sector, b.trade_date,
-               MEDIAN((b.close_price - b.prev_close) / b.prev_close * 100) AS ret
+               MEDIAN({ret_sql('b')}) AS ret
         FROM daily_data b
         JOIN v_sector_master sm ON b.symbol = sm.symbol
         WHERE b.series = 'EQ'

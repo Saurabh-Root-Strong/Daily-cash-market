@@ -772,7 +772,8 @@ def _compute_constituent_stats(symbols: tuple, trade_date: date) -> _Constituent
     # bonus used to count the stock as a 50% decliner in the turnover-weighted
     # breadth (HDFCBANK 26 Aug 2025, RELIANCE 28 Oct 2024). Same expression the
     # Index & Large Cap panel uses -- see index_largecap._R_SQL.
-    from src.analytics.index_largecap import _R_SQL
+    from src.analytics.adjusted_returns import ret_sql
+    _R_SQL = ret_sql("daily_data")
     _stocks = query_dataframe(f"""
         SELECT
             symbol,

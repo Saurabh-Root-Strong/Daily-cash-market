@@ -15,8 +15,16 @@ WHY A MATCHED CONTROL, NOT AN INDEX BENCHMARK
     (t = -0.16), so the machinery itself is unbiased.
 
 CORPORATE ACTIONS
-    Forward returns compound close/prev_close, never close_t+n / close_t.
-    NSE's prev_close is ex-adjusted, so a 1:2 split is a 0% day, not a -50% day.
+    Forward returns compound close / ADJUSTED prev_close, never close_t+n / close_t.
+    NSE's prev_close is NOT ex-adjusted (this docstring said the opposite until
+    Oct-2026). The 0.5-2.0 guard below caught the large re-basings by accident --
+    a 5:1 split is a 0.2 ratio, so it fell through to close/open -- and missed
+    every small one: a 1:2 bonus is 0.67, inside the band, and went into the
+    return series as a real -33% day. Measured 2018-2026: 571 split / bonus /
+    demerger days on EQ, 339 caught by the guard, 232 leaked. prev_close is now
+    put on the day's share basis first (src/analytics/adjusted_returns.py).
+    THE STORED TABLE MUST BE REBUILT for this to take effect:
+        python scripts/build_deal_outcomes.py
 
 ENTRY
     Deals are disclosed after the close, so entry is the NEXT session's OPEN.
@@ -37,6 +45,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from src.data.repository import get_repository
 from src.analytics.deal_signals import classify_client
+from src.analytics.adjusted_returns import prev_close_sql
 
 UNIVERSE_SQL = """
 CREATE OR REPLACE TEMP TABLE px AS
@@ -46,11 +55,13 @@ SELECT trade_date, symbol, open_price, close_price, prev_close, ttl_trd_qnty, tu
 -- 439 such rows across 2018-2026). Compounding that raw ratio injects a fake +38,000%
 -- into the stock's return series. Where prev_close is contradicted by the day's own
 -- open, use close/open; otherwise clamp. A real circuit-limit move stays inside 0.5-2.0.
-       CASE WHEN close_price / prev_close BETWEEN 0.5 AND 2.0 THEN close_price / prev_close
-            WHEN open_price / prev_close NOT BETWEEN 0.5 AND 2.0
+-- __APC__ is prev_close on the day's own share basis (split / bonus / demerger
+-- adjusted). The guard stays for the corrupted-prev_close rows it was written for.
+       CASE WHEN close_price / (__APC__) BETWEEN 0.5 AND 2.0 THEN close_price / (__APC__)
+            WHEN open_price / (__APC__) NOT BETWEEN 0.5 AND 2.0
                  AND close_price / open_price BETWEEN 0.5 AND 2.0
               THEN close_price / open_price
-            ELSE greatest(least(close_price / prev_close, 2.0), 0.5) END AS ratio_clean
+            ELSE greatest(least(close_price / (__APC__), 2.0), 0.5) END AS ratio_clean
 FROM daily_data
 WHERE series = 'EQ' AND close_price > 0 AND open_price > 0 AND prev_close > 0
   AND trade_date >= DATE '2017-11-01';
@@ -114,7 +125,7 @@ SELECT u.trade_date, u.liq_q, u.spike_d, u.r0_d,
 FROM u LEFT JOIN ev e ON e.symbol = u.symbol AND e.trade_date = u.trade_date
 WHERE e.symbol IS NULL
 GROUP BY 1, 2, 3, 4;
-"""
+""".replace("__APC__", prev_close_sql("daily_data"))
 
 OUTCOME_SQL = """
 CREATE OR REPLACE TABLE deal_event_outcomes AS
