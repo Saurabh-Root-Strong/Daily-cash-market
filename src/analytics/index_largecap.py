@@ -1557,9 +1557,32 @@ def _flow_state_matrix(fno_symbol: str, as_of: date, years: int = 5,
         sd = DL[cols].rolling(_DELIV_BASE, min_periods=_DELIV_MINP).std().shift(1)
         raw[f"{bn} delivery"] = (((DL[cols] - mu) / sd.where(sd > 1e-9))
                                  .replace([np.inf, -np.inf], np.nan).mean(axis=1))
-        raw[f"{bn} futures"] = (np.sign(sub) *
-                                FOI[[s for s in cols if s in FOI.columns]]
-                                .reindex(sub.index)).mean(axis=1)
+        # FUTURES = THE VOTE SHARE, the same lean the Flow read prints:
+        # (long build + short covering) minus (short build + long unwind), over
+        # the names with a futures row. +1 = every name bullish, -1 = every name
+        # bearish.
+        #
+        # This dimension used to be sign(price) x OI change, described as
+        # "futures pressure, negative = bearish". It was not that. It measures
+        # whether OI moved WITH price or AGAINST it, so short covering (price
+        # up, OI down) and short build (price down, OI up) -- the Flow read's
+        # green label and its red one -- both came out NEGATIVE: on 69% of the
+        # days Top 10 leaned bullish and 81% of the days it leaned bearish. The
+        # matches inherited that. Walk-forward over 664 sessions (Dec-2023 to
+        # Oct-2026), share of a day's 25 matches whose Top-10 futures lean was
+        # the OPPOSITE of the day being matched:
+        #     signed OI (old)   23.3%   same side 42.4%   (chance: 37% / 34%)
+        #     vote share        4.7%    same side 65.0%
+        # and the same on Next 10 (23.2 -> 4.9) and Rest 30 (17.8 -> 3.4). Plain
+        # OI change (23.0%) and vote share + plain OI at half weight each (9.8%)
+        # were both worse. See get_flow_analogues for what this did -- and did
+        # not -- do to the forecast question.
+        foi = FOI.reindex(columns=cols).reindex(sub.index)
+        ok = foi.notna() & sub.notna()
+        bull = (ok & (sub > 0) & (foi.abs() > _OI_BAND)).sum(axis=1)
+        bear = (ok & (sub < 0) & (foi.abs() > _OI_BAND)).sum(axis=1)
+        n_ok = ok.sum(axis=1)
+        raw[f"{bn} futures"] = (bull - bear) / n_ok.where(n_ok >= _min_valid(len(mem)))
         raw[f"{bn} options"] = (
             PE[[s for s in cols if s in PE.columns]].reindex(sub.index)
             - CE[[s for s in cols if s in CE.columns]].reindex(sub.index)).mean(axis=1)
@@ -1636,6 +1659,32 @@ def get_flow_analogues(trade_date: date, fno_symbol: str = "NIFTY",
     RE-MEASURED 29 Sep 2026 on NSE's own Top-10 / Top-20 buckets, 968 sessions:
     nearest 1.389% vs farthest 1.470%; 25 nearest 49.1% vs 25 random 51.2% at 1d;
     beside CLR t -0.11 (1d) and +0.27 (5d). Same verdict.
+
+    10 Oct 2026 -- THE FUTURES DIMENSION CHANGED, AND SO DID ONE NUMBER. Every
+    figure above was measured with futures = sign(price) x OI change, which could
+    not tell short covering from short build (see _flow_state_matrix). With the
+    vote share in its place, walk-forward on 664 sessions (Dec-2023 to Oct-2026,
+    k=25, purge 5):
+        Nifty 50   match average vs next day  IC +0.156, hit 55.1% (random 51.8%)
+                   t +3.63 beside close-strength AND the day's own return
+                   positive every year (2024 +0.14, 2025 +0.12, 2026 +0.21)
+                   top fifth of the average +0.19% next day (62% up), bottom
+                   fifth -0.19% (40% up)
+                   error |mean(nearest) - actual| 0.598% vs farthest 0.621%
+    That is the first non-null this engine has printed, and it is NOT shipped as
+    a forecast, for three measured reasons:
+      * it does not replicate: Bank Nifty IC +0.009 (t +0.91), Fin Nifty +0.019
+        (t +0.95), same code, same window;
+      * it is not stable in k: Nifty IC +0.073 at k=10, +0.156 at 25, +0.135 at
+        50, +0.037 at 100 -- an effect that is there should not peak at the one
+        k the panel happens to use;
+      * the tradable part is thin: the bhavcopy arrives after the close, so only
+        next open -> close can be acted on, and there it is IC +0.086, t +1.99.
+    What DOES repeat on all three indices is plainer than the matching: the
+    bucket-average options side and futures lean, used linearly beside
+    close-strength and the day's return, read t +2.9 to +3.1 and +2.4 to +2.9.
+    The three indices share their heaviest names and their targets move
+    together, so that is one observation seen three times, not three.
     """
     out = {"ok": False, "note": "", "k": k, "purge": purge, "spot": None,
            "matches": pd.DataFrame(), "summary": {}}
@@ -2160,3 +2209,118 @@ def _index_close(index_name: str, trade_date: date) -> Optional[float]:
     if df.empty or pd.isna(df.iloc[0, 0]):
         return None
     return float(df.iloc[0, 0])
+
+
+# ── date replay: looking at a past session ───────────────────────────────────
+#
+# Every function above is causal on its date argument, so a past session can be
+# re-read as it stood at that close. What is NOT point-in-time is the basket:
+# INDEX_BUCKETS is the 31 Aug 2026 factsheet and _VERSIONS only knows the changes
+# from 30 Sep 2026 on. A date before the March 2026 review is read through a
+# membership list the index did not have then, and the helpers below exist so
+# the panel can say that instead of leaving it to be found out.
+
+BASKET_AS_OF = date(2026, 8, 31)        # the factsheets INDEX_BUCKETS was read from
+
+
+def get_session_calendar() -> dict:
+    """Every cash session on file (ascending) and the stock-F&O sessions.
+
+    `sessions` is what the panel's date picker may land on. `fno` is a set, used
+    to tell apart the three reasons a date has no futures columns: before F&O
+    history starts, not published yet, or a hole in the middle.
+    """
+    cash = query_dataframe(
+        "SELECT trade_date FROM daily_data WHERE series IN ('EQ','SM','ST') "
+        "GROUP BY trade_date ORDER BY trade_date")
+    fno = query_dataframe(
+        "SELECT trade_date FROM fno_bhavcopy WHERE instrument = 'FUTSTK' "
+        "GROUP BY trade_date ORDER BY trade_date")
+    sessions = [d.date() for d in pd.to_datetime(cash["trade_date"])]
+    fno_days = [d.date() for d in pd.to_datetime(fno["trade_date"])]
+    return dict(sessions=sessions, fno=set(fno_days),
+                fno_from=fno_days[0] if fno_days else None,
+                fno_to=fno_days[-1] if fno_days else None)
+
+
+def resolve_session(sessions: list, pick: date) -> Optional[date]:
+    """The session a picked calendar date shows: itself, else the last one BEFORE.
+
+    Backwards, never forwards -- a Saturday shows Friday, which is what was known
+    on that Saturday. Snapping forward would show a close that had not happened.
+    A pick before the first session on file gets the first session.
+    """
+    if not sessions:
+        return None
+    from bisect import bisect_right
+    i = bisect_right(sessions, pick)
+    return sessions[i - 1] if i else sessions[0]
+
+
+def reviews_since(on: date, basket_as_of: date = BASKET_AS_OF) -> int:
+    """How many NSE semi-annual index reviews separate `on` from the basket.
+
+    NSE reconstitutes at the end of every March and September, so each boundary
+    crossed is one occasion on which members and bucket ranks may have changed.
+    0 means the base basket is the list that was in force on `on`.
+    """
+    n, y = 0, on.year
+    while y <= basket_as_of.year:
+        for b in (date(y, 3, 31), date(y, 9, 30)):
+            if on < b <= basket_as_of:
+                n += 1
+        y += 1
+    return n
+
+
+def get_realised_forward(trade_date: date, fno_symbol: str = "NIFTY") -> dict:
+    """What the index actually did AFTER `trade_date`. HINDSIGHT, for replay only.
+
+    Same definitions as get_state_base_rates: gap = next open against this close,
+    d1 = next close, d5 = the close five sessions on. A horizon that has not
+    happened yet is None. Nothing else in this module may call this.
+
+    index_data has holes before 2022, so each horizon is checked against the cash
+    calendar: if the index row five sessions on is missing, d5 is None rather
+    than a four- or six-session move wearing a five-session label.
+    """
+    out = dict(gap=None, d1=None, d5=None, d1_date=None, d5_date=None)
+    meta = INDEX_BUCKETS.get(fno_symbol)
+    if meta is None:
+        return out
+    cal = query_dataframe(
+        "SELECT trade_date FROM daily_data WHERE series IN ('EQ','SM','ST') "
+        "AND trade_date > ? GROUP BY trade_date ORDER BY trade_date LIMIT 5",
+        [trade_date])
+    nxt = [d.date() for d in pd.to_datetime(cal["trade_date"])]
+    if not nxt:
+        return out
+    ix = query_dataframe(
+        "SELECT trade_date, open_val, close_val FROM index_data "
+        "WHERE index_name = ? AND trade_date >= ? AND trade_date <= ?",
+        [meta["index_name"], trade_date, nxt[-1]])
+    if ix.empty:
+        return out
+    ix["trade_date"] = pd.to_datetime(ix["trade_date"]).dt.date
+    ix = ix.set_index("trade_date").astype(float)
+    if trade_date not in ix.index or not ix.loc[trade_date, "close_val"] > 0:
+        return out
+    c0 = float(ix.loc[trade_date, "close_val"])
+
+    def _at(d: date, col: str) -> Optional[float]:
+        if d in ix.index and pd.notna(ix.loc[d, col]) and ix.loc[d, col] > 0:
+            return float(ix.loc[d, col])
+        return None
+
+    o1, c1 = _at(nxt[0], "open_val"), _at(nxt[0], "close_val")
+    out["d1_date"] = nxt[0]
+    if o1 is not None:
+        out["gap"] = (o1 / c0 - 1) * 100
+    if c1 is not None:
+        out["d1"] = (c1 / c0 - 1) * 100
+    if len(nxt) == 5:
+        c5 = _at(nxt[4], "close_val")
+        out["d5_date"] = nxt[4]
+        if c5 is not None:
+            out["d5"] = (c5 / c0 - 1) * 100
+    return out

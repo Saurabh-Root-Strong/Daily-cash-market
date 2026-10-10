@@ -793,6 +793,21 @@ def cached_bucket_analogues(trade_date: date, fno_symbol: str = "NIFTY",
     return get_bucket_analogues(trade_date, fno_symbol, k)
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_ilc_calendar() -> dict:
+    """Every session the Index & Large Cap date picker may land on."""
+    from src.analytics.index_largecap import get_session_calendar
+    return get_session_calendar()
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def cached_realised_forward(trade_date: date, fno_symbol: str = "NIFTY") -> dict:
+    """Hindsight: what the index did after `trade_date`. Short TTL on purpose --
+    the answer for a recent session changes as the next sessions arrive."""
+    from src.analytics.index_largecap import get_realised_forward
+    return get_realised_forward(trade_date, fno_symbol)
+
+
 # ── Commodity vs Index ────────────────────────────────────────────────────────
 @st.cache_data(ttl=_TTL, show_spinner=False)
 def cached_commodity_state(trade_date: date, commodity: str, index: str):

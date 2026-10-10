@@ -7040,6 +7040,192 @@ def _ilc_pair_help(rows: list, when: date) -> str:
     # paragraphs get a blank line between them; bullet lines stay tight
     return "\n\n".join(parts).replace("\n\n- ", "\n- ")
 
+def _ilc_set_date(sessions: list, pick: date | None = None) -> None:
+    """Callback: move the tab to `pick` (or to what the date box now holds)."""
+    from src.analytics.index_largecap import resolve_session
+    ss = st.session_state
+    raw = ss.get("ilc_date") if pick is None else pick
+    got = resolve_session(sessions, raw) if raw else None
+    if got is None:
+        return
+    ss["ilc_date_keep"] = got
+    # remembered only so the tab can say WHY the box shows a different day
+    ss["ilc_snapped_from"] = raw if raw != got else None
+
+
+def _ilc_pick_date(sidebar_date: date) -> tuple[date, dict]:
+    """The session this tab shows, and the session calendar it was picked from.
+
+    The sidebar's Trading Date only lists the last 90 sessions; this tab has
+    cash history back to 2018 and stock F&O back to 2022, so it carries its own
+    picker over every session on file.
+
+    Two rules. (1) The sidebar still drives the tab: changing it moves this
+    picker with it, so the two never disagree by accident. (2) The tab's own
+    choice lives in a plain session key, not the widget's -- Streamlit drops a
+    widget's state when its panel is not on screen, and the date would silently
+    reset every time another panel was opened.
+    """
+    from src.dashboard.cache.queries import cached_ilc_calendar
+    try:
+        cal = cached_ilc_calendar()
+    except Exception:                                          # noqa: BLE001
+        cal = {}
+    sessions = cal.get("sessions") or []
+    if not sessions:
+        return sidebar_date, cal
+    from src.analytics.index_largecap import resolve_session
+    ss = st.session_state
+    if ss.get("ilc_sidebar_seen") != sidebar_date:
+        ss["ilc_sidebar_seen"] = sidebar_date
+        ss["ilc_date_keep"] = sidebar_date
+        ss["ilc_snapped_from"] = None
+    view = resolve_session(sessions, ss.get("ilc_date_keep", sidebar_date))
+    ss["ilc_date_keep"] = view
+    ss["ilc_date"] = view          # before the widget is built, so it shows `view`
+    i = sessions.index(view)
+
+    with st.container(horizontal=True, vertical_alignment="bottom"):
+        st.date_input(
+            "Session date", key="ilc_date", format="DD/MM/YYYY",
+            min_value=sessions[0], max_value=sessions[-1], width=190,
+            on_change=_ilc_set_date, args=(sessions,),
+            help="Read this tab as it stood at the close of any session on "
+                 f"file ({sessions[0]:%d %b %Y} to {sessions[-1]:%d %b %Y}). "
+                 "Pick a weekend or a holiday and it shows the last session "
+                 "before it — never the one after, which had not happened yet. "
+                 "Changing the sidebar Trading Date moves this with it.")
+        st.button("Previous session", icon=":material/chevron_left:",
+                  key="ilc_prev", disabled=i == 0, on_click=_ilc_set_date,
+                  args=(sessions, sessions[max(i - 1, 0)]))
+        st.button("Next session", icon=":material/chevron_right:",
+                  icon_position="right", key="ilc_next",
+                  disabled=i == len(sessions) - 1, on_click=_ilc_set_date,
+                  args=(sessions, sessions[min(i + 1, len(sessions) - 1)]))
+        st.button("Latest", icon=":material/last_page:", key="ilc_latest",
+                  disabled=view == sessions[-1], on_click=_ilc_set_date,
+                  args=(sessions, sessions[-1]))
+        if view != sidebar_date:
+            st.button(f"Sidebar date ({sidebar_date:%d %b %Y})",
+                      icon=":material/undo:", key="ilc_to_sidebar",
+                      on_click=_ilc_set_date, args=(sessions, sidebar_date))
+
+    snapped = ss.get("ilc_snapped_from")
+    if snapped and snapped != view:
+        st.caption(
+            f"{snapped:%d %b %Y (%a)} was not a trading session — showing the "
+            f"last one before it, **{view:%d %b %Y (%a)}**.")
+    if view != sessions[-1]:
+        behind = len(sessions) - 1 - i
+        st.caption(
+            f"🕰️ **Past session: {view:%d %b %Y (%a)}** — {behind} "
+            f"session{'s' if behind != 1 else ''} before the latest "
+            f"({sessions[-1]:%d %b %Y}). Every table below is computed only "
+            "from data up to that close. Where the text says *today* it means "
+            "this session.")
+    return view, cal
+
+
+def _render_ilc_replay_notes(sym: str, d, meta: dict, cal: dict,
+                             view: date, n_all: int, name: str) -> None:
+    """What a PAST date can and cannot be trusted for on this tab."""
+    from src.analytics.index_largecap import BASKET_AS_OF, reviews_since
+    notes = []
+    n_rev = reviews_since(view)
+    if meta.get("effective") is None and n_rev:
+        missing = n_all - d.n_present
+        notes.append(
+            f"**The basket is not the one {name} held that day.** Members and "
+            f"bucket ranks are NSE's {BASKET_AS_OF:%d %b %Y} list, and this "
+            f"session is about **{n_rev} index review"
+            f"{'s' if n_rev != 1 else ''}** earlier (NSE reconstitutes every "
+            "March and September; this project holds no dated membership "
+            "before 2026). The index return is the real index of that day; "
+            "the equal-weight basket, breadth and buckets are the later list. "
+            "So the carry spread is **not** an exact identity here, and names "
+            "that were promoted later *because* they outperformed flatter the "
+            "breadth."
+            + (f" {missing} of the {n_all} have no price row on this date at "
+               "all (not yet listed, or suspended)." if missing > 0 else ""))
+        if view < date(2026, 3, 1):
+            notes.append(
+                f"**The ±{d.carry_band:.2f} pp top-heavy / broad band is "
+                "today's.** It is calibrated on sessions since March 2026; "
+                "earlier spreads ran wider on Bank and Fin Nifty, so the chip "
+                "under the carry spread under-calls old top-heavy days there.")
+    fno_from = cal.get("fno_from")
+    if fno_from and view < fno_from:
+        notes.append(
+            f"**Cash market only.** Stock futures and options history starts "
+            f"{fno_from:%d %b %Y}, so futures OI, options OI, the cycle table, "
+            "the stock votes and the historical matches are empty for this "
+            "date. Return, breadth, carry spread and delivery are real.")
+    if notes:
+        st.warning("\n\n".join(notes))
+
+
+def _render_ilc_hindsight(sym: str, name: str, view: date, cal: dict) -> None:
+    """What the index did next -- folded away, so the tab is read blind first."""
+    sessions = cal.get("sessions") or []
+    if not sessions or view >= sessions[-1]:
+        return
+    from src.dashboard.cache.queries import cached_realised_forward
+    try:
+        rz = cached_realised_forward(view, sym)
+    except Exception:                                          # noqa: BLE001
+        return
+    if rz.get("gap") is None and rz.get("d1") is None:
+        return
+    with st.expander(f"🔎 Hindsight — what {name} did after this close",
+                     expanded=False):
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Next open (gap)",
+                  "-" if rz["gap"] is None else f"{rz['gap']:+.2f}%",
+                  help="Next session's open against this session's close.")
+        c2.metric("Next session",
+                  "-" if rz["d1"] is None else f"{rz['d1']:+.2f}%",
+                  help=(f"Close of {rz['d1_date']:%d %b %Y} against this close."
+                        if rz.get("d1_date") else None))
+        c3.metric("Next 5 sessions",
+                  "not yet" if rz["d5"] is None else f"{rz['d5']:+.2f}%",
+                  help=(f"Close of {rz['d5_date']:%d %b %Y} against this close."
+                        if rz.get("d5_date") else
+                        "Five sessions have not passed since this date."))
+        st.caption(
+            "Not known at that close, and nothing below uses it. It is here so "
+            "a past read can be checked against what followed — one session is "
+            "an anecdote, the measured hit rates further down are the record.")
+
+
+def _ilc_no_fno_note(view: date) -> str:
+    """Why a date has no futures / options columns -- three different reasons."""
+    from src.dashboard.cache.queries import cached_ilc_calendar
+    try:
+        cal = cached_ilc_calendar()
+    except Exception:                                          # noqa: BLE001
+        cal = {}
+    lo, hi, have = cal.get("fno_from"), cal.get("fno_to"), cal.get("fno") or set()
+    if lo and view < lo:
+        return (f"**No stock F&O data for {view:%d %b %Y}.** That history starts "
+                f"{lo:%d %b %Y}; before it the futures and options columns are "
+                "empty and the score runs on delivery alone.")
+    if lo and view == lo:
+        return (f"**{view:%d %b %Y} is the first F&O session on file.** An OI "
+                "change needs a prior session to compare against, so the "
+                "futures and options columns start from the next one.")
+    if hi and view <= hi:
+        which = "this session" if view not in have else "the session before it"
+        return (f"**F&O file missing for {which}.** The cash-market file for "
+                f"{view:%d %b %Y} is loaded but the futures and options one is "
+                "not, so those columns are empty and the score runs on delivery "
+                "alone. A hole in the stored history, not a quiet day.")
+    return (f"**No F&O data for {view:%d %b %Y} yet.** The cash-market "
+            "file is loaded but the futures and options file for this session "
+            "(or the one before it) is not, so the futures and options columns "
+            "are empty and the score runs on delivery alone. This is a data gap, "
+            "not a quiet day - NSE publishes the F&O file later in the evening.")
+
+
 def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
     from src.dashboard.cache.queries import (cached_index_largecap,
                                              cached_concentration_trend,
@@ -7053,6 +7239,8 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
         help="Each index is split on the widest gaps in its OWN published "
              "weights, so the bucket sizes differ by index — and by date, since "
              "NSE reconstitutes every March and September.") or "NIFTY"
+    # From here on `selected_date` is the TAB's date, which starts as the sidebar's.
+    selected_date, _cal = _ilc_pick_date(selected_date)
     meta = index_meta(sym, selected_date)
     _labels = list(meta["buckets"])
     _n_all = sum(len(v) for v in meta["buckets"].values())
@@ -7065,7 +7253,7 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
     st.caption(
         "The sidebar **Min Traded Value** filter does not apply here: the basket is "
         "fixed index membership, not a liquidity screen. Everything below is "
-        "anchored on the selected date.")
+        "anchored on the **Session date** above.")
 
     try:
         d = cached_index_largecap(selected_date, sym)
@@ -7077,6 +7265,8 @@ def _render_index_largecap(selected_date: date, min_turnover: float) -> None:
         return
 
     _render_ilc_index_notes(sym, selected_date)
+    _render_ilc_replay_notes(sym, d, meta, _cal, selected_date, _n_all, _name)
+    _render_ilc_hindsight(sym, _name, selected_date, _cal)
     # The verdict is the honesty rail of this tab, so its CONCLUSION stays on
     # screen; only the evidence folds away. Hiding the whole box would let the
     # tables below read as signals.
@@ -7305,12 +7495,7 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
             "neighbours. The numbers are correct; read them with that in mind.")
     st.markdown("##### Flow read — delivery, futures OI, options OI")
     if not d.is_expiry_session and d.rows and all(b.fut_valid == 0 for b in d.rows):
-        st.info(
-            f"**No F&O data for {selected_date:%d %b %Y} yet.** The cash-market "
-            "file is loaded but the futures and options file for this session "
-            "(or the one before it) is not, so the futures and options columns "
-            "are empty and the score runs on delivery alone. This is a data gap, "
-            "not a quiet day - NSE publishes the F&O file later in the evening.")
+        st.info(_ilc_no_fno_note(selected_date))
     if d.is_expiry_session:
         st.info(
             "**Monthly expiry day.** Futures OI counts every contract **including "
@@ -7532,7 +7717,7 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
             "Session": f"{selected_date:%d %b %Y}  ← today",
             "Alike": None,
             "Delivery z": _trip(_today, "delivery"),
-            "Futures pressure": _trip(_today, "futures"),
+            "Futures lean": _trip(_today, "futures"),
             "Call vs put": _optrip(_today),
             # NaN, not None: a None here makes the whole column object-typed and
             # Streamlit prints the literal text "None" in today's row.
@@ -7545,7 +7730,7 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
                 "Session": pd.Timestamp(r["date"]).strftime("%d %b %Y"),
                 "Alike": round(100 * (1 - r["distance"] / (_far * 1.15)), 0),
                 "Delivery z": _trip(r, "delivery"),
-                "Futures pressure": _trip(r, "futures"),
+                "Futures lean": _trip(r, "futures"),
                 "Call vs put": _optrip(r),
                 "Next day %": _ilc_num(r["d1"]),
                 "Next day pts": _ilc_num(r.get("d1_pts"), "{:+,.0f}"),
@@ -7572,17 +7757,21 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
                          "is that bucket's delivery against its own 21-session "
                          "normal. Example: today reads +1.13 / +0.58 / +0.42, and "
                          "a row showing +1.29 / +0.63 / +0.44 is a close match."),
-                "Futures pressure": st.column_config.TextColumn(
-                    f"Futures pressure  ({' · '.join(_labels)})",
-                    help="NOT the same number as 'Fut OI %' in the Flow read "
-                         "table above — that one is the plain average OI change, "
-                         "this one is the OI change SIGNED by each stock's price "
-                         "move, which is what the matching uses. Positive = "
-                         "positions grew while prices rose (or shrank while "
-                         "prices fell). Negative = the bearish combination. They "
-                         "can disagree in sign: on 04 Sep 2026 Next 10 read "
-                         "+0.25 plain but -0.72 signed, because OI rose mostly "
-                         "on stocks that FELL."),
+                "Futures lean": st.column_config.TextColumn(
+                    f"Futures lean  ({' · '.join(_labels)})",
+                    help="The same lean the Flow read table names, as one "
+                         "number per bucket: the share of its stocks voting "
+                         "bullish (long build or short covering) minus the "
+                         "share voting bearish (short build or long unwind). "
+                         "+1.00 = every stock bullish, -1.00 = every stock "
+                         "bearish, 0 = split or flat. Example: 4 covering, 1 "
+                         "long, 1 short and 4 flat out of 10 reads +0.40. A "
+                         "matched row with the same sign as today had the same "
+                         "side of futures lean as today. Until 10 Oct 2026 "
+                         "this column was OI change signed by price, which "
+                         "printed short covering and short build with the SAME "
+                         "sign - one matched row in four had the opposite lean "
+                         "to the day it was matched to; now one in twenty."),
                 "Call vs put": st.column_config.TextColumn(
                     f"Call vs put  ({' · '.join(_labels)})",
                     help="Which option side grew faster in each bucket. "
@@ -7636,28 +7825,73 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
             f"(a neighbour from last week shares most of its forward window with "
             f"this one). The 25th match sits at distance {_mq['kth']:.2f} against "
             f"{_mq['median_random']:.2f} for a typical day.")
+        # Three things the headline sentence hides, each measured on this table.
+        _md = sorted(pd.to_datetime(_m["date"]).dt.date)
+        _indep = 1 + sum(1 for a, b in zip(_md[:-1], _md[1:])
+                         if np.busday_count(a, b) > 5)
+        _kr1, _kr5 = _s1.get("k_range"), _s5.get("k_range")
+        _bits = [
+            f"**{len(_md)} rows, but {_indep} separate episodes** — matches "
+            "within a week of each other share most of their next-5-session "
+            "window, so the week figure rests on fewer independent cases than "
+            "it looks."]
+        if _kr1 and _kr5:
+            _bits.append(
+                "**The averages move with how many matches are taken** (10 to "
+                f"60): next day {_kr1[0]:+.2f}% to {_kr1[1]:+.2f}%, the week "
+                f"{_kr5[0]:+.2f}% to {_kr5[1]:+.2f}%"
+                + (" — the week figure changes SIGN, so it says nothing."
+                   if _s5.get("k_sign_flips") else ".")
+                + (" The next-day figure changes sign too."
+                   if _s1.get("k_sign_flips") else ""))
+        _bits.append(
+            "**'Alike' is a relative scale**, set so the 25th match always "
+            "reads about 13% — it ranks these rows against each other and is "
+            "not a percentage of similarity.")
+        _bits.append(
+            "**Every row uses the buckets in force on "
+            f"{selected_date:%d %b %Y}**, applied back through history, so "
+            "like is compared with like. Open an old row with the Session "
+            "date picker and its own table can differ slightly, because that "
+            "day is shown with the buckets it had then.")
+        st.caption("\n\n".join(_bits))
         st.caption("**These matches are a record, not a forecast** — similar "
                    "past days did not predict the next move.")
         _an = st.expander("Do similar past days predict the next move? — the evidence",
                           expanded=False)
         if sym != "NIFTY":
             _an.caption(
-                f"**The analogue engine was audited on Nifty, not re-audited on "
-                f"{_name}.** On Nifty the 25 nearest days forecast no better "
-                "than the 25 FARTHEST (1.444% vs 1.462% error), and the flow "
-                f"score it matches on is measured null on {_name} too (above). "
-                "Read the rows as what happened, not as what will.")
+                f"**Measured on {_name} too: the matches do not forecast it.** "
+                "Walk-forward on 664 sessions (Dec-2023 to Oct-2026), the "
+                "average next day of the 25 matches against what actually "
+                "followed: rank correlation +0.01 on Bank Nifty and +0.02 on "
+                "Fin Nifty, neither distinguishable from zero. Nifty 50 reads "
+                "+0.16 on the same test and is the only one that does, which "
+                "is why it is not believed there either. Read the rows as "
+                "what happened, not as what will.")
         else:
           _an.error(
-            "**Read the spread, not the average.** Measured walk-forward on 968 "
-            "sessions: |mean(25 NEAREST) - actual| = **1.389%** against "
-            "|mean(25 FARTHEST) - actual| = **1.470%** - the most similar days "
-            "forecast NIFTY barely better than the *least* similar ones. The 25 "
-            "nearest hit 49.1% next day against 51.2% for 25 RANDOM past days, "
-            "and beside the index's own close-strength the match dies (t -0.11 "
-            "vs +2.48). Matching the Top 10 alone does not rescue it (IC +0.076, "
-            "t +1.70 at 1 day). Real analogues, real spread, no predictive "
-            "content.")
+            "**A lead on Nifty, not a forecast.** Walk-forward on 664 sessions "
+            "(Dec-2023 to Oct-2026): the average next day of the 25 matches "
+            "lined up with what followed - rank correlation **+0.16**, right "
+            "direction 55.1% against 51.8% for 25 random past days, positive in "
+            "2024, 2025 and 2026, and it holds beside the index's own "
+            "close-strength and the day's return (t +3.63). Three reasons it "
+            "is not shown as a call:\n\n"
+            "- **It does not repeat.** Same code, same window: Bank Nifty "
+            "+0.01, Fin Nifty +0.02.\n"
+            "- **It depends on the match count.** +0.07 with 10 matches, +0.16 "
+            "with 25, +0.14 with 50, +0.04 with 100. A real effect should not "
+            "peak at the one setting this table uses.\n"
+            "- **Most of it cannot be traded.** The F&O file arrives after the "
+            "close. From the next open to the next close it is +0.09 "
+            "(t +1.99).\n\n"
+            "Before 10 Oct 2026 this table matched on a futures number that "
+            "could not tell short covering from short build, and on that "
+            "version the nearest days forecast no better than the farthest "
+            "(1.389% vs 1.470% error). The +0.16 appeared when that was "
+            "corrected, on one index out of three - a result to watch on fresh "
+            "sessions, not to act on.")
 
     # ── state base rates ─────────────────────────────────────────────────────
     st.markdown("##### What has followed this state, historically")

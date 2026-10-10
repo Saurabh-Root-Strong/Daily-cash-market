@@ -375,13 +375,36 @@ def test_the_six_backfilled_sessions_render_and_carry_data():
 
 
 def test_futures_columns_in_the_two_tables_are_not_both_called_the_same_thing():
-    """The Flow read shows the plain mean OI change; the session list shows it
-    SIGNED by each stock's price move. On 04 Sep 2026 Next 10 read +0.25 plain and
-    -0.72 signed - opposite signs under what used to be the same column name."""
+    """The Flow read shows the plain mean OI change; the session list shows the
+    futures LEAN (share voting bullish minus share voting bearish). They are
+    different numbers and must not share a header."""
     from pathlib import Path
     src = Path("src/dashboard/views/sector_rotation.py").read_text(encoding="utf-8")
-    assert '"Futures pressure": _trip(' in src, "session list column not renamed"
+    assert '"Futures lean": _trip(' in src, "session list column not renamed"
     assert src.count('"Futures OI %  (T · N · R)"') == 0, "old colliding header remains"
+    assert '"Futures pressure"' not in src, "the retired signed-OI column is back"
+
+
+def test_the_match_engine_cannot_confuse_short_covering_with_short_build():
+    """The futures dimension was sign(price) x OI change, which is NEGATIVE for
+    both short covering (price up, OI down) and short build (price down, OI up)
+    -- the Flow read's green label and its red one. One matched row in four had
+    the opposite futures lean to the day it was matched to. The dimension is now
+    the vote share, so its sign IS the lean."""
+    import inspect
+    src = inspect.getsource(ilc._flow_state_matrix)
+    assert "np.sign(sub) *" not in src, "signed-OI futures dimension is back"
+    from datetime import date as _d
+    day = _d(2026, 10, 9)
+    _, _, RAW = ilc._flow_state_matrix("NIFTY", day, with_raw=True)
+    assert RAW.filter(like=" futures").abs().max().max() <= 1.0 + 1e-9
+    live = ilc.get_index_largecap(day, "NIFTY")
+    row = RAW.loc[pd.Timestamp(day)]
+    for b in live.rows:
+        if b.fut_lean in (1, -1):
+            assert np.sign(row[f"{b.label} futures"]) == b.fut_lean, (
+                f"{b.label}: Flow read says {b.fut_read}, match engine sees "
+                f"{row[f'{b.label} futures']:+.2f}")
 
 
 def test_today_row_uses_nan_not_none_for_unknown_outcomes():
@@ -929,3 +952,79 @@ def test_verdict_conclusion_stays_visible_and_only_the_evidence_folds():
     for alert in ("Monthly expiry day", "Heavy, basket-wide session", "No F&O data for"):
         k = src.index(alert)
         assert "expander" not in src[k - 400:k], f"{alert!r} must stay visible"
+
+
+# ── date replay: the tab's own session picker ────────────────────────────────
+
+def test_a_non_session_date_snaps_backwards_never_forwards():
+    """A Saturday shows Friday. Snapping forward would show a close that had not
+    happened on the date the reader asked about."""
+    from datetime import date as _d
+    s = [_d(2026, 10, 6), _d(2026, 10, 7), _d(2026, 10, 8), _d(2026, 10, 12)]
+    assert ilc.resolve_session(s, _d(2026, 10, 7)) == _d(2026, 10, 7)
+    assert ilc.resolve_session(s, _d(2026, 10, 10)) == _d(2026, 10, 8)   # Saturday
+    assert ilc.resolve_session(s, _d(2026, 10, 11)) == _d(2026, 10, 8)   # Sunday
+    assert ilc.resolve_session(s, _d(2030, 1, 1)) == _d(2026, 10, 12)
+    assert ilc.resolve_session(s, _d(2020, 1, 1)) == _d(2026, 10, 6)     # before file
+    assert ilc.resolve_session([], _d(2026, 10, 7)) is None
+
+
+def test_reviews_since_counts_the_march_and_september_boundaries():
+    """The base basket is the Aug-2026 list. A date on the far side of a review
+    boundary is read through a membership the index did not have, and the panel
+    says so from this count -- so 0 must mean exactly 'same basket'."""
+    from datetime import date as _d
+    assert ilc.reviews_since(_d(2026, 8, 31)) == 0
+    assert ilc.reviews_since(_d(2026, 4, 1)) == 0
+    assert ilc.reviews_since(_d(2026, 3, 30)) == 1
+    assert ilc.reviews_since(_d(2025, 10, 1)) == 1
+    assert ilc.reviews_since(_d(2025, 9, 29)) == 2
+    assert ilc.reviews_since(_d(2026, 10, 8)) == 0       # after the basket date
+
+
+def test_realised_forward_refuses_a_horizon_with_a_missing_index_row(monkeypatch):
+    """index_data has holes before 2022. A five-session move must be the close
+    five CASH sessions on -- if that index row is missing the answer is None, not
+    the nearest row wearing a five-session label."""
+    from datetime import date as _d
+    days = [_d(2021, 3, d) for d in (1, 2, 3, 4, 5, 8)]
+    rows = {days[0]: (100.0, 100.0), days[1]: (101.0, 102.0), days[2]: (102, 103),
+            days[3]: (103, 104), days[4]: (104, 105), days[5]: (105, 110.0)}
+
+    def fake(drop):
+        def q(sql, params=None):
+            if "FROM daily_data" in sql:
+                return pd.DataFrame({"trade_date": pd.to_datetime(days[1:])})
+            keep = [d for d in days if d not in drop]
+            return pd.DataFrame({"trade_date": pd.to_datetime(keep),
+                                 "open_val": [rows[d][0] for d in keep],
+                                 "close_val": [rows[d][1] for d in keep]})
+        return q
+
+    monkeypatch.setattr(ilc, "query_dataframe", fake(set()))
+    r = ilc.get_realised_forward(days[0], "NIFTY")
+    assert r["gap"] == pytest.approx(1.0) and r["d1"] == pytest.approx(2.0)
+    assert r["d5"] == pytest.approx(10.0) and r["d5_date"] == days[5]
+
+    monkeypatch.setattr(ilc, "query_dataframe", fake({days[5]}))
+    r = ilc.get_realised_forward(days[0], "NIFTY")
+    assert r["d1"] == pytest.approx(2.0) and r["d5"] is None
+
+
+def test_realised_forward_is_empty_on_the_latest_session(monkeypatch):
+    """Nothing has happened after the newest close, so every horizon is None."""
+    from datetime import date as _d
+    monkeypatch.setattr(ilc, "query_dataframe",
+                        lambda sql, params=None: pd.DataFrame({"trade_date": []}))
+    r = ilc.get_realised_forward(_d(2026, 10, 8), "NIFTY")
+    assert r["gap"] is None and r["d1"] is None and r["d5"] is None
+
+
+def test_replay_helper_is_not_used_by_any_causal_function():
+    """get_realised_forward reads rows dated AFTER its argument. It exists for
+    the hindsight box only; a causal function calling it would be lookahead."""
+    import inspect
+    src = inspect.getsource(ilc)
+    assert src.count("get_realised_forward(") == 1, (
+        "get_realised_forward is called from inside index_largecap — it reads "
+        "the future and may only be called by the dashboard's hindsight box")

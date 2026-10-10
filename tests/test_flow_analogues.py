@@ -71,9 +71,11 @@ def test_purge_gap_keeps_last_weeks_sessions_out_of_the_analogue_set():
 
 
 def test_k_sensitivity_is_published_so_an_unstable_number_cannot_hide():
-    """k=25 is a choice. On 3 Sep 2026 the next-day mean ran -0.095% at k=10 and
-    +0.149% at k=40 — a SIGN flip — so the sweep has to travel with the answer."""
-    r = ilc.get_flow_analogues(_dt.date(2026, 9, 3), "NIFTY", 25)
+    """k=25 is a choice. On 7 Oct 2026 the next-day mean ran from -0.33% to +0.10%
+    across k=10..60 — a SIGN flip — so the sweep has to travel with the answer.
+    (The worked example was 3 Sep 2026 until the futures dimension became the
+    vote share on 10 Oct 2026; under it 47 of the last 90 sessions still flip.)"""
+    r = ilc.get_flow_analogues(_dt.date(2026, 10, 7), "NIFTY", 25)
     sw = r["summary"]["k_sweep"]
     assert set(sw) >= {10, 25, 60}, "the k sweep must span the plausible range"
     for h in ("d1", "d5"):
@@ -81,7 +83,7 @@ def test_k_sensitivity_is_published_so_an_unstable_number_cannot_hide():
         assert lo <= r["summary"][h]["mean"] <= hi, "the point estimate must sit in its own range"
         assert isinstance(r["summary"][h]["k_sign_flips"], bool)
     assert r["summary"]["d1"]["k_sign_flips"] is True, (
-        "3 Sep 2026 is the worked example of an unstable horizon; if this ever "
+        "7 Oct 2026 is the worked example of an unstable horizon; if this ever "
         "goes False the sweep has stopped detecting instability")
 
 
