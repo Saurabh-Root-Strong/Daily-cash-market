@@ -3344,6 +3344,21 @@ _CONVICTION_DIVISOR = 20.0
 _C_SIDE             = 0.40                                   # sideways/directional boundary (σ units)
 _DIR_COMPOSITE_MIN  = _CONVICTION_DIVISOR * _C_SIDE          # = 8.0 composite to call a direction
 
+# How much the 1σ band shrinks the session before an expiry (dte ≤ 1). It was ×0.70,
+# and that over-shrank it. Replay of today's engine, 2022-01 .. 2026-10, next close
+# inside ±f × the unshrunk band on 639 expiry eves (ordinary days hold 73.7%):
+#                 ×0.70   ×0.80   ×0.85*  ×0.90   ×1.00
+#   Nifty          60.4    68.7   ~70.8    73.0    77.4
+#   Bank Nifty     62.3    67.3   ~70.4    73.5    79.0
+#   Fin Nifty      71.3    74.7   ~77.7    80.7    83.3
+#   Midcap Select  69.1    74.2   ~75.2    76.3    83.5
+#   pooled         64.8    70.6   ~73.0    75.4    80.1      (* interpolated)
+# Eve moves ARE smaller (median |move|/σ 0.48 vs 0.56) but by ~15%, not 30%. One
+# shared factor, not four fitted ones: per-index factors on 97-230 eves would be
+# fitting noise. Recent eves run calmer (2025-26 hold 84-86% unshrunk), so 0.85
+# errs on the wide side there, which is the safe side for a range.
+_EXPIRY_PIN_MULT    = 0.85
+
 
 def _compute_expected_move(
     idx_hist: pd.DataFrame,
@@ -3427,9 +3442,9 @@ def _compute_expected_move(
     # Expiry-day gamma pinning compresses the expected range
     pin_note = ""
     if dte <= 1:
-        expected_move_pts *= 0.70
-        sigma_pct          *= 0.70
-        pin_note = " · expiry pin ×0.7"
+        expected_move_pts *= _EXPIRY_PIN_MULT
+        sigma_pct          *= _EXPIRY_PIN_MULT
+        pin_note = f" · expiry pin ×{_EXPIRY_PIN_MULT:.2f}"
 
     # Data-driven sideways band: the conviction boundary × the 1σ move (volatility-scaled
     # "±X pts = sideways, beyond = directional"). Same _C_SIDE that gates the verdict.
@@ -3788,24 +3803,29 @@ def _compute_verdict(
     fii_bearish     = any(s.category == "Institutional" and s.direction < 0 and abs(s.score) >= 2 for s in signals)
     broad_rally     = any("Broad-Based Rally" in s.name for s in signals)
 
-    # ── Expiry day: gamma pin dominates ──────────────────────────────────────
+    # ── Expiry tomorrow (dte ≤ 1): the SAME score rule as every other day ────
+    # This branch used to return its own arrow: UP/DOWN toward max pain whenever it
+    # sat >0.15% from spot, else SIDEWAYS MEDIUM. Replay of today's engine, 2022-01
+    # .. 2026-10, next close vs this close:
+    #   max-pain arrow   Nifty 129 calls 40.3% right (−0.20%/call, t −2.49; monthly
+    #                    eves 24%), Midcap 44.3% (t −2.19), Bank 48.1%, Fin 59.0%
+    #   score rule       Nifty 47 calls 63.8%, Bank 19 63.2% (small, not an edge)
+    # The arrow also pointed AGAINST its own composite on 38-46% of eves, and against
+    # its own target on 23-40% — e.g. 12 Oct 2026, Nifty "UP" with a composite of
+    # −8.5 and a target of 22,304 under a 22,363 spot. Reversing it is no fix (53%
+    # pooled, Fin goes the other way). So max pain stays as context in the risk line;
+    # the arrow comes from the composite, like every other session. The expiry pin
+    # still narrows the RANGE (_EXPIRY_PIN_MULT) — that part is measured.
     if dte <= 1:
+        verdict = _compute_verdict(composite, signals, pcr, carry_pct_ann, 99,
+                                   spot_close, levels, ctx, entropy_conf)
+        pin = "Expiry tomorrow — range narrows on gamma pinning."
         if spot_close and levels.max_pain:
             gap = (levels.max_pain - spot_close) / spot_close * 100
-            if gap > 0.15:
-                return ("UP", "LOW", "#69F0AE",
-                        f"Expiry day — max pain {levels.max_pain:.0f} above spot ({gap:.1f}% pull)",
-                        f"Max pain {levels.max_pain:.0f}; gamma pin pulls up",
-                        "Gamma pin breaks on macro gap — low conviction.")
-            if gap < -0.15:
-                return ("DOWN", "LOW", "#FF6D00",
-                        f"Expiry day — max pain {levels.max_pain:.0f} below spot ({abs(gap):.1f}% pull)",
-                        f"Max pain {levels.max_pain:.0f}; gamma pin pulls down",
-                        "Gamma pin breaks on macro gap — low conviction.")
-        return ("SIDEWAYS", "MEDIUM", "#FFD600",
-                "Expiry day — gamma pinning; expect narrow range near current levels",
-                "DTE ≤ 1 — theta decay pins market near max pain",
-                "Gap on global news overrides the pin.")
+            pin = (f"Expiry tomorrow — max pain {levels.max_pain:.0f} ({gap:+.1f}% from spot) "
+                   "is context, not a pull: the old max-pain arrow was right 40% of the "
+                   "time on Nifty.")
+        return verdict[:5] + (f"{pin} {verdict[5]}",)
 
     # ── Entropy confidence gate ───────────────────────────────────────────────
     # When market is chaotic (PE > 0.72, conf_mult = 0.72), cap final confidence

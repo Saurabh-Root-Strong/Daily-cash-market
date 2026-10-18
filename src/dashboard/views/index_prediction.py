@@ -1054,11 +1054,11 @@ def _verdict_meter_note(pred: IndexPrediction) -> str:
     arrow = "▼" if meter_dir < 0 else "▲"
 
     if verdict_dir == 0:
-        is_expiry = (pred.days_to_expiry is not None and pred.days_to_expiry <= 1)
-        reason = ("the expiry-day gamma pin" if is_expiry
-                  else "a neutral-zone / mean-reversion override")
-        msg = (f"{arrow} Raw multi-signal read is <b>{label} ({meter}/100)</b>, but it's suppressed by "
-               f"{reason}. Treat it as the likely <b>break direction</b> ({lean}) if the range "
+        # The expiry-eve verdict no longer has its own arrow (it follows the composite
+        # like any other day), so a SIDEWAYS verdict here always means the score sits
+        # below the directional band -- never "suppressed by the pin".
+        msg = (f"{arrow} Raw multi-signal read is <b>{label} ({meter}/100)</b>, but it sits below "
+               f"the directional band. Treat it as the likely <b>break direction</b> ({lean}) if the range "
                f"fails — not today's base case.")
     else:
         msg = (f"{arrow} The <b>{pred.direction}</b> verdict <b>overrides</b> the raw multi-signal "
@@ -3062,7 +3062,9 @@ products whose accuracy is measured on the live prediction log:
   - **Sideways Band** — the data-driven ± threshold (40% of the 1σ move). If the predicted move stays
     inside this band → range-bound. Beyond it → genuine directional bias. (Replaces a fixed ±40 pts
     with a volatility-scaled band — wider on high-VIX days, tighter on calm days.)
-  - On expiry day (DTE ≤ 1) the range is compressed ×0.7 for gamma pinning.
+  - The session before an expiry (DTE ≤ 1) the range is narrowed ×0.85 for gamma pinning (×0.70 used to
+    leave only 60-62% of Nifty / Bank Nifty closes inside it). The verdict that day follows the composite
+    like any other day — the old "toward max pain" arrow was right 40% of the time on Nifty.
 - **PCR** — Put-Call Ratio. Above 1.3 = peak fear (contrarian bullish). Below 0.70 = complacency (contrarian bearish)
 - **Carry** — annualised futures premium vs spot. Above 8% = bullish demand. Below 3% or negative = smart money cautious
 - **FII net** — Foreign Institutional net futures contracts today. Positive = net long, negative = net short
