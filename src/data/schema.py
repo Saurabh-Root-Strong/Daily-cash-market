@@ -344,6 +344,38 @@ def initialize_schema() -> None:
             PRIMARY KEY (trade_date, commodity)
         )
         """,
+        # Index valuation history from niftyindices (1999+), separate from index_data
+        # because index_data only reaches 2013 and has no total-return index. NULL
+        # pe = "not computed" (the index's combined earnings were negative), never 0.
+        # Methodology break: from 2021-04-01 NSE computes P/E and P/B on CONSOLIDATED
+        # earnings/book (standalone before). Any cross-break comparison must adjust.
+        """
+        CREATE TABLE IF NOT EXISTS index_valuation (
+            trade_date  DATE    NOT NULL,
+            index_name  VARCHAR NOT NULL,
+            pe          DOUBLE,
+            pb          DOUBLE,
+            dy          DOUBLE,
+            close_val   DOUBLE,
+            tri         DOUBLE,
+            PRIMARY KEY (trade_date, index_name)
+        )
+        """,
+        """
+        CREATE TABLE IF NOT EXISTS india_vix_history (
+            trade_date  DATE PRIMARY KEY,
+            vix         DOUBLE
+        )
+        """,
+        # Monthly 10y G-sec yield (%), kept per source so the splice stays auditable.
+        """
+        CREATE TABLE IF NOT EXISTS gsec_yield_monthly (
+            source  VARCHAR NOT NULL,
+            month   DATE    NOT NULL,
+            value   DOUBLE,
+            PRIMARY KEY (source, month)
+        )
+        """,
     )
 
     # ── Non-destructive migrations (ALTER TABLE — may already exist) ───────────

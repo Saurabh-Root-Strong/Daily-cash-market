@@ -301,6 +301,42 @@ def _fetch_slb_window(days: int = 7) -> None:
         d -= timedelta(days=1)
 
 
+def _fetch_index_valuation_window(days: int = 20) -> None:
+    """Refresh P/E, P/B, DY, close and TRI (niftyindices history endpoint) plus India
+    VIX for the last `days`. index_data already carries P/E from the snapshot CSV,
+    but not the total-return index the valuation panel scores returns on."""
+    from src.data.repository import upsert_index_valuation, upsert_india_vix
+    from src.ingestion.index_valuation_fetcher import (VALUATION_INDICES,
+                                                       IndexValuationFetcher)
+    f = IndexValuationFetcher()
+    end = date.today()
+    start = end - timedelta(days=days)
+    n = 0
+    for name, label in VALUATION_INDICES.items():
+        try:
+            v = f.fetch_pepb(name, start, end)
+            if v.empty:
+                continue
+            v = (v.merge(f.fetch_close(name, start, end), on="trade_date", how="left")
+                  .merge(f.fetch_tri(name, start, end), on="trade_date", how="left"))
+            v.insert(1, "index_name", label)
+            n += upsert_index_valuation(v.drop_duplicates(["trade_date", "index_name"]))
+        except Exception as exc:
+            log.warning("index valuation %s: %s", name, exc)
+    log.info("index valuation %s..%s: %d rows", start, end, n)
+    try:
+        log.info("India VIX: %d rows", upsert_india_vix(f.fetch_vix(start, end)))
+    except Exception as exc:
+        log.warning("India VIX fetch failed: %s", exc)
+    # 10y G-sec is monthly and lags ~2-4 months at the source: once a week is plenty.
+    if end.weekday() == 0:
+        try:
+            from src.data.repository import upsert_gsec_yield
+            log.info("G-sec monthly: %d rows", upsert_gsec_yield(f.fetch_gsec_monthly()))
+        except Exception as exc:
+            log.warning("G-sec fetch failed: %s", exc)
+
+
 def _repair_missing_sessions(
     client: NSEHttpClient,
     repo: MarketDataRepository,
@@ -408,6 +444,12 @@ def run_daily_job(
         _fetch_slb_window(days=7)
     except Exception as slb_exc:
         log.warning("SLB fetch failed: %s", slb_exc)
+
+    # Index P/E, P/B, DY + total-return index + VIX (Index P/E & P/B panel).
+    try:
+        _fetch_index_valuation_window(days=20)
+    except Exception as iv_exc:
+        log.warning("Index valuation fetch failed: %s", iv_exc)
 
     # Always run gap-fill: catches FAO/FII/Index lags regardless of bhavcopy status
     try:

@@ -6277,8 +6277,9 @@ _OPER = "🕵️ Operator Footprint"
 _NEXT = "🧭 Market Next Month"
 _ILC  = "🏛️ Index & Large Cap"
 _CMD  = "🛢️ Commodity vs Index"
+_VAL  = "📐 Index P/E & P/B"
 
-_PANELS = (_SMART, _TILT, _CLOCK, _RS, _SEASON, _OPER, _NEXT, _ILC, _CMD)
+_PANELS = (_SMART, _TILT, _CLOCK, _RS, _SEASON, _OPER, _NEXT, _ILC, _CMD, _VAL)
 
 
 def render(selected_date: date, min_turnover: float, all_dates: list | None = None) -> None:
@@ -6316,6 +6317,13 @@ def render(selected_date: date, min_turnover: float, all_dates: list | None = No
         _render_index_largecap(selected_date, min_turnover)
     elif panel == _CMD:
         _render_commodity_index(selected_date)
+    elif panel == _VAL:
+        _render_index_valuation(selected_date)
+
+
+def _render_index_valuation(selected_date: date) -> None:
+    from src.dashboard.views.index_valuation import render_index_valuation
+    render_index_valuation(selected_date)
 
 
 def _render_commodity_index(selected_date: date) -> None:

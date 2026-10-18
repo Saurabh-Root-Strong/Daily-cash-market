@@ -64,6 +64,25 @@ def run_daily_pipeline(write_marker: bool = True) -> int:
         from src.core.logging import get_logger
         get_logger(__name__).warning("Bulk/block analytics rebuild failed: %s", _deal_exc)
 
+    # Index P/E & P/B study: its zone tables ("what came next") are a cached JSON.
+    # The nightly job refreshes the RAW valuation rows, but nothing re-scored them, so
+    # the page would keep quoting a frozen sample forever. Monthly is enough: one more
+    # month adds ~1 of ~330 month-ends. 64s. Non-fatal.
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        _sp = _Path(__file__).resolve().parent.parent / "data" / "index_valuation_study" / "summary.json"
+        _age = None
+        if _sp.exists():
+            _gen = _json.loads(_sp.read_text(encoding="utf-8")).get("generated")
+            _age = (date.today() - date.fromisoformat(_gen)).days if _gen else None
+        if _age is None or _age >= 28:
+            from scripts.index_valuation_study import main as _valuation_study
+            _valuation_study()
+    except Exception as _iv_exc:  # pragma: no cover - operational path
+        from src.core.logging import get_logger
+        get_logger(__name__).warning("Index valuation study refresh failed: %s", _iv_exc)
+
     # Compute & LOG index predictions deterministically (persist=True).
     # This makes prediction_log complete every trading day regardless of whether
     # anyone opens the dashboard — the dashboard now renders read-only

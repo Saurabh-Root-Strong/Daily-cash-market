@@ -465,6 +465,47 @@ class MarketDataRepository:
             """)
         return len(df)
 
+    def upsert_index_valuation(self, df: pd.DataFrame) -> int:
+        if df is None or df.empty:
+            return 0
+        cols = ["trade_date", "index_name", "pe", "pb", "dy", "close_val", "tri"]
+        df = df.reindex(columns=cols)
+        with self._cm.connect() as conn:
+            conn.register("_iv_df", df)
+            conn.execute(f"""
+                INSERT INTO index_valuation ({', '.join(cols)})
+                SELECT {', '.join(cols)} FROM _iv_df
+                ON CONFLICT (trade_date, index_name) DO UPDATE SET
+                    pe = excluded.pe, pb = excluded.pb, dy = excluded.dy,
+                    close_val = COALESCE(excluded.close_val, index_valuation.close_val),
+                    tri = COALESCE(excluded.tri, index_valuation.tri)
+            """)
+        return len(df)
+
+    def upsert_india_vix(self, df: pd.DataFrame) -> int:
+        if df is None or df.empty:
+            return 0
+        df = df[["trade_date", "vix"]].dropna()
+        with self._cm.connect() as conn:
+            conn.register("_vix_df", df)
+            conn.execute("""
+                INSERT INTO india_vix_history SELECT trade_date, vix FROM _vix_df
+                ON CONFLICT (trade_date) DO UPDATE SET vix = excluded.vix
+            """)
+        return len(df)
+
+    def upsert_gsec_yield(self, df: pd.DataFrame) -> int:
+        if df is None or df.empty:
+            return 0
+        df = df[["source", "month", "value"]]
+        with self._cm.connect() as conn:
+            conn.register("_gs_df", df)
+            conn.execute("""
+                INSERT INTO gsec_yield_monthly SELECT source, month, value FROM _gs_df
+                ON CONFLICT (source, month) DO UPDATE SET value = excluded.value
+            """)
+        return len(df)
+
     def log_run(
         self,
         run_type: str,
@@ -676,6 +717,18 @@ def upsert_slb_foreclosure(df: pd.DataFrame) -> int:
 
 def upsert_corp_actions(df: pd.DataFrame, start, end) -> int:
     return get_repository().upsert_corp_actions(df, start, end)
+
+
+def upsert_index_valuation(df: pd.DataFrame) -> int:
+    return get_repository().upsert_index_valuation(df)
+
+
+def upsert_india_vix(df: pd.DataFrame) -> int:
+    return get_repository().upsert_india_vix(df)
+
+
+def upsert_gsec_yield(df: pd.DataFrame) -> int:
+    return get_repository().upsert_gsec_yield(df)
 
 
 def log_run(

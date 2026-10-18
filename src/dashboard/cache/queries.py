@@ -852,3 +852,34 @@ def cached_sector_matrix(trade_date: date, years: float, sector_only: bool) -> d
 def cached_month_ahead(trade_date: date, commodity: str) -> dict:
     from src.analytics.commodity_index import get_month_ahead
     return get_month_ahead(trade_date, commodity)
+
+
+# ── Index P/E & P/B (valuation) ───────────────────────────────────────────────
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def cached_valuation_features(index_name: str, as_of: date):
+    from src.analytics.index_valuation import add_features, load_valuation
+    return add_features(load_valuation(index_name, as_of))
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def cached_valuation_board(as_of: date) -> pd.DataFrame:
+    from src.analytics.index_valuation import current_board
+    return current_board(as_of)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def cached_valuation_study():
+    from src.analytics.index_valuation import study_summary
+    return study_summary()
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def cached_valuation_indices() -> list[str]:
+    from src.analytics.index_valuation import index_names
+    return index_names()
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def cached_valuation_catalog() -> pd.DataFrame:
+    from src.analytics.index_valuation import index_catalog
+    return index_catalog()

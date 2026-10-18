@@ -31,5 +31,8 @@ data/slb_raw/
 data/deals_raw/
 data/crude_study/
 
+# Index valuation raw pulls (re-downloadable: scripts/backfill_index_valuation.py)
+data/index_valuation_raw/
+
 # Screener page cache for stock classification (scripts/fetch_stock_classification.py)
 data/classification_raw/
