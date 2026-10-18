@@ -7182,6 +7182,71 @@ def _render_ilc_stock_flow(d, sym: str, _name: str, selected_date: date) -> None
         })
 
 
+@st.cache_data(ttl=600, show_spinner=False)
+def _cached_ilc_forward_record(fno_symbol: str) -> dict:
+    from src.analytics.ilc_forward import forward_record
+    return forward_record(fno_symbol)
+
+
+def _render_ilc_forward(sym: str, _name: str, selected_date: date) -> None:
+    """The one lead, frozen and logged before each open. A record, not a call."""
+    if sym not in ("NIFTY", "BANKNIFTY"):
+        return
+    from src.analytics.ilc_forward import load_model
+    try:
+        model = load_model()
+        rec = _cached_ilc_forward_record(sym)
+    except Exception as exc:                                   # noqa: BLE001
+        st.caption(f"Forward test unavailable: {exc}")
+        return
+    pre = model["preregistration"]
+    box = st.expander(f"🧪 Forward test — the one lead, frozen {model['frozen_on']}: "
+                      f"{rec['n_scored']} of 300 sessions scored", expanded=False)
+    box.caption(
+        "**Not a signal yet.** The backtest found one weak lead on this tab: the "
+        "numbers above (options side beyond the price move, delivery, futures "
+        f"lean) against the NEXT session's open-to-close — {model['backtest_before_freezing'][sym]}. "
+        "A backtest can fool itself, so the model was **frozen** and is now "
+        "scored only on sessions it has never seen. Each evening's forecast is "
+        "written once, before the next open, and never edited. "
+        f"**Decision at {pre['decision_at']}**: {pre['pass']}. "
+        "Nothing before then is evidence — at its backtest strength the record "
+        "needs ~280 sessions just to separate from luck."
+        + (" Bank Nifty is shown beside Nifty, not counted as a second test: the "
+           "two share their biggest banks." if sym == "BANKNIFTY" else ""))
+    R = rec["rows"]
+    if R is None or len(R) == 0:
+        box.info("No forward rows yet — the first is written by tonight's daily job.")
+        return
+    c1, c2, c3, c4 = box.columns(4)
+    c1.metric("Sessions logged", rec["n_logged"],
+              help="Rows written by the nightly job. One per session; never rewritten.")
+    c2.metric("On time, scored", rec["n_scored"],
+              help="Written before 09:15 on the next session AND that session has "
+                   f"closed. Late rows ({rec['late']}) are kept but never scored.")
+    c3.metric("Rank corr (forecast vs next open-to-close)",
+              "-" if rec["ic"] is None else f"{rec['ic']:+.2f}",
+              None if rec["ic_t"] is None else f"t {rec['ic_t']:+.2f}", delta_color="off",
+              help="The primary test. Backtest +0.12. Needs t >= 2.0 at 300 sessions.")
+    c4.metric("Fifth trades, net of 0.05%",
+              "-" if rec["trade_net"] is None else f"{rec['trade_net']:+.3f}%",
+              (f"{rec['trades']} trades · {rec['trade_hit']:.0f}% won"
+               if rec["trades"] else None), delta_color="off",
+              help="LONG when the forecast is in the top fifth of its history, SHORT "
+                   "in the bottom fifth, else no trade. Next session open to close.")
+    show = R.tail(15).iloc[::-1]
+    box.dataframe(pd.DataFrame({
+        "Session": [d.strftime("%d %b %Y") for d in show.trade_date],
+        "Logged": [t.strftime("%d %b %H:%M") for t in show.logged_at],
+        "On time": ["yes" if v is True else "LATE" if v is False else "pending"
+                    for v in show.on_time],
+        "Forecast %": [f"{v:+.3f}" for v in show.score],
+        "Side": show.side,
+        "Next open→close %": [_ilc_num(v) for v in show.next_oc],
+        "Net %": [_ilc_num(v, "{:+.3f}") for v in show.pnl_net],
+    }), hide_index=True, use_container_width=True)
+
+
 def _ilc_chip(text: str, colour: str) -> str:
     return (f"<span style='background:{colour}22;border:1px solid {colour}55;"
             f"color:{colour};padding:2px 8px;border-radius:10px;"
@@ -7922,6 +7987,7 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
         "earlier build of this score, on mis-drawn buckets, hit 49.3% next day "
         "(`scripts/nifty_bucket_composite.py`). Read this block as **what "
         "positioning is doing**, never as where the index is going.")
+    _render_ilc_forward(sym, _name, selected_date)
 
     # ── historical match: the actual sessions, and what NIFTY did next ──────
     st.markdown(f"##### When these numbers occurred before — what {_name} did next")

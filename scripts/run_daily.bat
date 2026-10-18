@@ -37,6 +37,12 @@ echo [%date% %time%] Classifying new stocks... >> logs\scheduler.log
 python -m src.cli classify-stocks >> logs\scheduler.log 2>&1
 echo [%date% %time%] Stock classification done. >> logs\scheduler.log
 
+REM ── Index & Large Cap forward test: tonight's frozen-model forecast ───────────
+REM    Append-only (data\forward_log\ilc_lead.csv). Must run after the F&O retry
+REM    above; a row written after 09:15 on the next session is kept but never scored.
+echo [%date% %time%] Logging ILC forward-test forecast... >> logs\scheduler.log
+python scripts\ilc_forward_log.py >> logs\scheduler.log 2>&1
+
 REM ── Write timestamp from DB latest trade date (not wall clock) ───────────
 :write_timestamp
 echo [%date% %time%] Writing last_updated marker... >> logs\scheduler.log
