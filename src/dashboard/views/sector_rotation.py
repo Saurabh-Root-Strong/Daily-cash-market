@@ -6791,6 +6791,229 @@ def _render_ilc_cycle_flow(d, sym: str, _name: str, selected_date: date) -> None
             "cumulative figures stand alone.")
 
 
+@st.cache_data(ttl=3600, show_spinner=False)
+def _cached_bucket_trends(trade_date: date, fno_symbol: str) -> dict:
+    from src.analytics.index_largecap import get_bucket_trends
+    return get_bucket_trends(trade_date, fno_symbol)
+
+
+_ILC_TREND_NAME = {
+    "delivery": "Delivery", "futures": "Futures OI", "call": "Call OI",
+    "put": "Put OI", "putcall": "Put minus call",
+}
+_ILC_TREND_FMT = {
+    "delivery": "{:+.2f}", "futures": "{:+.1f}%", "call": "{:+.0f}",
+    "put": "{:+.0f}", "putcall": "{:+.0f}",
+}
+
+
+def _ilc_trend_reading(r: dict) -> str:
+    """One row of the trend table in words. A level, never a call."""
+    v, rk, m = r.get("s"), r.get("rank"), r["measure"]
+    if v is None:
+        return "—"
+    hi = rk is not None and rk >= 70
+    lo = rk is not None and rk <= 30
+    if m == "delivery":
+        if rk is None:
+            return "🟢 heavy" if v > 0.3 else "🔴 light" if v < -0.3 else "⚪ normal"
+        return "🟢 heavy" if hi else "🔴 light" if lo else "⚪ normal"
+    if m == "futures":
+        return _ilc_lab(_ILC_QUAD, r.get("quadrant"))
+    if m in ("call", "put"):
+        return ("⚪ above usual" if hi else "⚪ below usual" if lo
+                else "⚪ near usual") if rk is not None else "—"
+    if rk is None:
+        return "—"
+    return "🟢 puts ahead" if hi else "🔴 calls ahead" if lo else "⚪ even"
+
+
+def _ilc_trend_direction(r: dict) -> str:
+    d, c = r.get("direction"), r.get("cross")
+    arrow = {"rising": "▲ rising", "falling": "▼ falling", "steady": "● steady"}.get(d, "—")
+    if c:
+        ago, way = c
+        when = "today" if ago == 0 else f"{ago} session{'s' if ago != 1 else ''} ago"
+        arrow += f" · crossed {'above' if way > 0 else 'below'} its 22-session pace {when}"
+    return arrow
+
+
+def _render_ilc_trends(sym: str, _name: str, selected_date: date) -> None:
+    """Delivery and positioning over 10 and 22 sessions, beside the index's trend."""
+    try:
+        t = _cached_bucket_trends(selected_date, sym)
+    except Exception as exc:                                   # noqa: BLE001
+        st.caption(f"Trend view unavailable: {exc}")
+        return
+    st.markdown("##### Data trend — the last 10 and 22 sessions")
+    if not t.get("ok"):
+        st.caption(t.get("note") or "No trend available for this date.")
+        return
+    S, L = t["short"], t["long"]
+    st.caption(
+        f"The tables above are one session. This is the **run**: each bucket's "
+        f"delivery and positioning added up over the last **{S}** and **{L}** "
+        "sessions, where that sits in its own history, and whether it is "
+        "rising or fading.")
+
+    ix = t.get("index") or {}
+    if ix:
+        word = {"up": "🟢 UP", "down": "🔴 DOWN", "mixed": "⚪ mixed", "unclear": "—"}
+        c1, c2, c3 = st.columns(3)
+        c1.metric(
+            f"{_name} short trend ({S} sessions)",
+            f"{word[ix['short']]}  {ix['short_ret']:+.1f}%",
+            (f"{'above' if ix['short_above'] else 'below'} its {S}-day average "
+             f"for {ix['short_run']} session{'s' if ix['short_run'] != 1 else ''}"
+             if ix.get("short_run") else None),
+            delta_color="off",
+            help=f"UP = higher than {S} sessions ago AND above its {S}-day "
+                 "average. DOWN = lower and below. Mixed = the two disagree, "
+                 "which is what a turn looks like while it is happening.")
+        c2.metric(
+            f"{_name} long trend ({L} sessions)",
+            f"{word[ix['long']]}  {ix['long_ret']:+.1f}%",
+            (f"{'above' if ix['long_above'] else 'below'} its 50-day average "
+             f"for {ix['long_run']} session{'s' if ix['long_run'] != 1 else ''}"
+             if ix.get("long_run") else None),
+            delta_color="off",
+            help=f"UP = higher than {L} sessions ago (about a month) AND above "
+                 "its 50-day average. DOWN = lower and below.")
+        c3.metric("From its 60-session high", f"{ix['from_high']:+.1f}%",
+                  help="How far the close sits below the highest close of the "
+                       "last 60 sessions. 0 = at the high.")
+
+    rows = []
+    for m in ("delivery", "futures", "call", "put", "putcall"):
+        for r in [x for x in t["rows"] if x["measure"] == m]:
+            f = _ILC_TREND_FMT[m]
+            rows.append({
+                "Measure": _ILC_TREND_NAME[m],
+                "Bucket": r["bucket"],
+                f"{S} sessions": _ilc_num(r["s"], f),
+                f"{L} sessions": _ilc_num(r["l"], f),
+                "Rank": None if r["rank"] is None else round(r["rank"]),
+                "Direction": _ilc_trend_direction(r),
+                "Path": r["path"] if len(r["path"]) >= 5 else None,
+                "Reading": _ilc_trend_reading(r),
+            })
+    st.dataframe(
+        pd.DataFrame(rows), hide_index=True, use_container_width=True,
+        column_config={
+            "Measure": st.column_config.TextColumn(
+                "Measure",
+                help="**Delivery** = average daily delivery z (each stock against "
+                     "its own 21-session normal). **Futures OI** = % change in "
+                     "open futures positions, added up over the window. **Call "
+                     "OI** and **Put OI** = % change in open option positions "
+                     "added up, MINUS what is usual for those sessions of the "
+                     "expiry cycle - a new series fills from near empty every "
+                     "month, so a raw total would rise in every cycle. **Put "
+                     "minus call** = how much faster puts were built than calls, "
+                     "net of the cycle."),
+            "Bucket": st.column_config.TextColumn(
+                "Bucket", help="The same weight buckets as above, as they stand "
+                               "on the Session date, applied back through the "
+                               "window so like is compared with like."),
+            f"{S} sessions": st.column_config.TextColumn(
+                f"{S} sessions",
+                help=f"The short trend: the last {S} sessions, about two weeks. "
+                     "Delivery +0.40 = delivery ran 0.4 standard deviations above "
+                     "normal on an average day. Futures +8.0% = open positions "
+                     "grew 8% in total. Call +30 = call OI grew 30 points more "
+                     "than it usually does over these sessions of a cycle."),
+            f"{L} sessions": st.column_config.TextColumn(
+                f"{L} sessions",
+                help=f"The long trend: the last {L} sessions, about a month. "
+                     f"Compare with the {S}-session column: if the short one is "
+                     "running faster than the long one, the trend is building; "
+                     "slower, it is fading."),
+            "Rank": st.column_config.ProgressColumn(
+                "Rank", format="%d", min_value=0, max_value=100,
+                help=f"Where the {S}-session reading sits among the same reading "
+                     "on up to 500 EARLIER sessions. 50 = ordinary. 90 = higher "
+                     "than nine days in ten. 10 = lower than nine in ten. Blank "
+                     "= fewer than 120 earlier sessions to compare with."),
+            "Direction": st.column_config.TextColumn(
+                "Direction",
+                help=f"Is the {S}-session reading rising or falling against five "
+                     "sessions ago - judged against how much it normally moves "
+                     "in five sessions, so a wobble is 'steady'. 'Crossed' = the "
+                     f"{S}-session pace moved through the {L}-session pace in the "
+                     "last five sessions: the trend is turning."),
+            "Path": st.column_config.LineChartColumn(
+                "Path (30 sessions)",
+                help=f"The {S}-session reading on each of the last 30 sessions, "
+                     "oldest on the left. The shape is the trend; the last point "
+                     "is today."),
+            "Reading": st.column_config.TextColumn(
+                "Reading",
+                help="The level in words. Delivery heavy / light = Rank above 70 "
+                     "/ below 30. Futures uses the same four names as the Flow "
+                     f"read, over the whole {S} sessions: OI up + price up = long "
+                     "build, OI up + price down = short build, OI down + price "
+                     "up = short covering, OI down + price down = long unwind; "
+                     "'price flat' when the bucket moved less than 1.6% over the "
+                     "window. Call / put = above or below what is usual for the "
+                     "cycle. Put minus call: 'puts ahead' = Rank above 70."),
+        })
+    notes = [
+        "**What is left out, and why.** The monthly settlement session is left "
+        "out of every futures and options window - positions roll into the next "
+        "month that day, which reads as a +18% build for a mechanical reason. "
+        "Weekend special sessions (Budget, Muhurat) are left out of everything: "
+        "they are short and thin. A window that loses a session is scaled back "
+        f"up to {S} or {L}, so windows stay comparable."]
+    if not t.get("have_fno"):
+        notes.append("**No stock F&O data in this window** - only the delivery "
+                     "rows can be shown.")
+    elif t.get("n_hist", 0) < 120:
+        notes.append(f"**Only {t.get('n_hist', 0)} earlier sessions on file**, so "
+                     "no Rank is shown yet - the readings are real, the "
+                     "yardstick is not ready.")
+    st.expander("How these trends are built", expanded=False).caption(
+        "\n\n".join(notes))
+    st.caption("**A trend in this table does not forecast the index.** It "
+               "describes what delivery and positioning have been doing. "
+               "Measured, below.")
+    _ev = st.expander("Does the data trend say how long the index trend lasts? "
+                      "— measured", expanded=False)
+    _ev.error(
+        "**No - and that is measured on Nifty 50, not assumed.** 1,141 sessions "
+        "(Mar-2022 to Oct-2026), 87 trend measures built exactly as in this "
+        "table (each bucket, 10 and 22 sessions, and the turn between them) "
+        "against the next 5, 10 and 22 sessions, each one also tested beside "
+        "the index's own momentum.\n\n"
+        "- **As a group, nothing.** The best of the 261 tests reads t=3.50; "
+        "repeating the same search with the outcomes shifted in time gives "
+        "3.29 on a typical run and 4.48 at the 95th percentile. p=0.29.\n"
+        "- **Turning points, nothing.** Eighteen kinds of turn (delivery turns "
+        "up, put OI turns down, and so on): none moved the next 5, 10 or 22 "
+        "sessions (every |t| under 1.5).\n"
+        "- **The one that looked real, and why it is not shown as a rule.** "
+        "Inside a downtrend, futures OI being *shed* was followed by +3.60% "
+        "over 22 sessions (93% up) against -0.48% (36% up) while OI was still "
+        "being *built*. But those 41 days are only 12 separate downtrends - one "
+        "vote per downtrend gives t=+1.35; the gap is absent in 2025-2026 "
+        "(+0.09% vs +0.25%); and in the slide it was found during, the ten "
+        "OI-shed days of 08-24 Sep 2026 were followed by -2.33% over the next "
+        "10 sessions, none of the ten higher.\n"
+        "- **Tops do not share a signature.** Before the Aug-2026 fall, futures "
+        "OI built over 22 sessions was at its lowest reading on record and "
+        "Top-10 delivery at its 98th percentile. Across the seven falls of 5% "
+        "or more since 2022 no reading repeats - the Sep-2024 top had futures "
+        "OI at its 90th percentile, the opposite.\n\n"
+        "A month-long horizon has only about 51 independent windows in this "
+        "history, so an effect smaller than roughly 2% a month could not be "
+        "seen here even if it existed. Read the table as the state of "
+        "positioning, not as where the index goes."
+        + ("" if sym == "NIFTY" else
+           f"\n\nThe full search was run on Nifty 50. On {_name} only the "
+           "futures-in-a-downtrend cell was re-run: same direction on Bank "
+           "Nifty and Midcap Select, absent on Fin Nifty - and the three share "
+           "their largest names, so that is not three confirmations."))
+
+
 def _ilc_lab(table: dict, v) -> str:
     """Label lookup that treats any missing value (None or NaN) as a dash: pandas
     turns a None in a mostly-string column into NaN, which is not a dict key."""
@@ -7661,6 +7884,7 @@ def _render_ilc_body(d, sym, meta, _labels, _n_all, _name, selected_date,
                               "measured hit rate is right below this table."),
                  })
     _render_ilc_cycle_flow(d, sym, _name, selected_date)
+    _render_ilc_trends(sym, _name, selected_date)
     _render_ilc_stock_flow(d, sym, _name, selected_date)
     _ns = d.net_score
     if _ns is not None:

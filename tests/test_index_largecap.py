@@ -1028,3 +1028,79 @@ def test_replay_helper_is_not_used_by_any_causal_function():
     assert src.count("get_realised_forward(") == 1, (
         "get_realised_forward is called from inside index_largecap — it reads "
         "the future and may only be called by the dashboard's hindsight box")
+
+
+
+# ── data trend: 10- and 22-session readings per bucket ───────────────────────
+
+def test_a_trend_crossing_needs_clear_air_on_both_sides():
+    """Two paces sitting on top of each other swap order on noise. The first cut
+    printed 'crossed above today' for delivery at +0.16 against +0.14."""
+    s = pd.Series
+    assert ilc._last_cross(s([-1.0, -1.0, 1.0]), band=0.5) == (0, 1)
+    assert ilc._last_cross(s([1.0, 1.0, -1.0, -1.0]), band=0.5) == (1, -1)
+    assert ilc._last_cross(s([-0.02, 0.02]), band=0.5) is None, "inside the band is level"
+    assert ilc._last_cross(s([-1.0, 0.1, 0.2]), band=0.5) is None, "not clear of the band yet"
+    assert ilc._last_cross(s([-1.0, 0.1, 1.0]), band=0.5) == (0, 1), "through the band counts once clear"
+    assert ilc._last_cross(s([-1.0] + [1.0] * 8), band=0.5) is None, "older than the lookback"
+    assert ilc._last_cross(s([1.0, 1.0, 1.0]), band=0.5) is None
+
+
+def test_trend_direction_ignores_a_wobble():
+    assert ilc._trend_direction(1.0, 0.0, 1.0) == "rising"
+    assert ilc._trend_direction(0.0, 1.0, 1.0) == "falling"
+    assert ilc._trend_direction(0.3, 0.0, 1.0) == "steady"
+    assert ilc._trend_direction(1.0, None, 1.0) is None
+    assert ilc._trend_direction(1.0, 0.0, 0.0) is None
+
+
+def test_trend_daily_numbers_are_the_flow_read_tables_numbers():
+    """The trend is a running total of the SAME daily figures the Flow read
+    prints. If the two ever drift the trend table is describing something else."""
+    from datetime import date as _d
+    day = _d(2026, 10, 9)
+    t = ilc.get_bucket_trends(day, "NIFTY")
+    assert t["ok"]
+    live = ilc.get_index_largecap(day, "NIFTY")
+    row = t["daily"].loc[pd.Timestamp(day)]
+    for b in live.rows:
+        assert row[f"{b.label}|delivery"] == pytest.approx(b.deliv_z, abs=0.02), b.label
+        assert row[f"{b.label}|futures"] == pytest.approx(b.fut_oi_pct, abs=0.05), b.label
+
+
+def test_trend_leaves_out_the_settlement_session_and_weekend_sessions():
+    """Forward OI jumps mechanically on the settlement session (+18.5% on the
+    surviving contracts), and weekend special sessions are thin. Neither may sit
+    inside a trend window."""
+    from datetime import date as _d
+    t = ilc.get_bucket_trends(_d(2026, 10, 9), "NIFTY")
+    d = t["daily"]
+    fut = d.filter(like="|futures")
+    assert fut.loc[pd.Timestamp(_d(2026, 9, 29))].isna().all(), "29 Sep 2026 settled"
+    assert not any(ix.weekday() >= 5 for ix in d.index), "a weekend session is in the window"
+    wk = ilc.get_bucket_trends(_d(2026, 2, 1), "NIFTY")
+    assert not wk["ok"] and "weekend" in wk["note"]
+
+
+def test_trend_rank_uses_only_earlier_sessions():
+    """A past date must rank as it would have then: nothing after the date may be
+    read, and the day being ranked may not sit in its own yardstick."""
+    import inspect
+    src = inspect.getsource(ilc.get_bucket_trends)
+    assert src.count("trade_date <= ?") >= 4, "an unbounded query crept in"
+    assert "s.index < ts" in src, "the rank must exclude the day being ranked"
+    from datetime import date as _d
+    old = ilc.get_bucket_trends(_d(2025, 6, 10), "NIFTY")
+    assert old["ok"] and all(ix <= pd.Timestamp(_d(2025, 6, 10)) for ix in old["daily"].index)
+
+
+def test_trend_degrades_instead_of_inventing_numbers():
+    from datetime import date as _d
+    pre = ilc.get_bucket_trends(_d(2020, 3, 23), "NIFTY")          # before stock F&O history
+    assert pre["ok"] and not pre["have_fno"]
+    assert all(r["s"] is None for r in pre["rows"] if r["measure"] != "delivery")
+    assert all(r["s"] is not None for r in pre["rows"] if r["measure"] == "delivery")
+    early = ilc.get_bucket_trends(_d(2023, 6, 1), "MIDCPNIFTY")    # before its usable history
+    assert not early["ok"] and "start" in early["note"]
+    thin = ilc.get_bucket_trends(_d(2024, 12, 20), "MIDCPNIFTY")   # three weeks of history
+    assert all(r["rank"] is None for r in thin["rows"]), "a rank needs 120 earlier sessions"

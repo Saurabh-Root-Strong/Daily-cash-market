@@ -2324,3 +2324,343 @@ def get_realised_forward(trade_date: date, fno_symbol: str = "NIFTY") -> dict:
         if c5 is not None:
             out["d5"] = (c5 / c0 - 1) * 100
     return out
+
+
+# ── data trend: what delivery and positioning have been DOING, not one day ───
+#
+# The Flow read is one session against the previous one, and the cycle table is
+# today against the last expiry. Neither answers "has delivery been heavy for two
+# weeks, and is that fading?" This does, per bucket, over 10 and 22 sessions, for
+# delivery, futures OI, call OI, put OI and the put-minus-call balance.
+#
+# DESCRIPTIVE. Measured before it was built (10 Oct 2026, 1,141 Nifty sessions,
+# 87 trend measures x next 5 / 10 / 22 sessions, each beside the index's own
+# momentum): the best |t| was 3.50 against a time-shifted null median of 3.29 and
+# 95th percentile of 4.48 -- p = 0.29. Eighteen kinds of trend TURN (the 10-session
+# pace crossing the 22-session one) all sat under |t| 1.5. One cell looked real --
+# inside a downtrend, futures OI being shed was followed by +3.60% over 22
+# sessions (93% up, 41 days) against -0.48% (36% up) while it was still being
+# built -- and it does not hold: 41 days are 12 downtrends, one vote each gives
+# t +1.35; it is absent in 2025-2026 (+0.09% vs +0.25%); and in the slide it was
+# found during, the ten OI-shed days of 08-24 Sep 2026 were followed by -2.33%
+# over 10 sessions with none of the ten higher.
+#
+# THE TRAPS THIS IS BUILT AROUND
+#   settlement session   forward OI jumps mechanically as positions roll in
+#                        (+18.5% on the surviving contracts) and the options book
+#                        is distorted, so that session is LEFT OUT of every
+#                        futures and options window and the window is pro-rated
+#                        over the sessions it has. Counting it on the tab's
+#                        all-contracts basis instead would add ~1.5pp to exactly
+#                        the 10-session windows that straddle an expiry -- a
+#                        calendar signal, which is how the last three artifacts on
+#                        this tab arrived.
+#   options fill          a new series starts near empty, so raw call and put OI
+#                        rise in every cycle (calls +56%, puts +44% by session 3).
+#                        Call and put changes are therefore taken against the
+#                        MEDIAN change at the same number of sessions to expiry in
+#                        earlier cycles only -- "vs usual", never raw.
+#   weekend sessions      Budget Sundays and Muhurat are short and thin (delivery
+#                        z of -1.75 to -2.36 on 01 Feb 2026); one of them moves a
+#                        10-session delivery mean by 0.2. They are left out.
+#   demergers             contracts are re-listed and OI resets by -59% to -66%;
+#                        that stock casts no futures or options reading that day.
+#   thin days             a bucket needs its quorum of F&O names on a day or that
+#                        day is a gap, not a zero.
+#   the yardstick         a reading is ranked against the SAME reading on earlier
+#                        sessions only (up to 500 of them), never against the
+#                        whole file, so a past date ranks as it would have then.
+_TREND_S, _TREND_L = 10, 22
+_TREND_HIST = 500          # earlier sessions a reading is ranked against
+_TREND_MIN_HIST = 120      # fewer than this and no rank is shown
+TREND_MEASURES = ("delivery", "futures", "call", "put", "putcall")
+
+
+def _trend_direction(now: Optional[float], then: Optional[float],
+                     sd: Optional[float]) -> Optional[str]:
+    """Is the 10-session reading rising or falling against five sessions ago?
+
+    Judged against how much that reading normally moves in five sessions, so a
+    wobble is not called a turn: beyond half a typical move it is a direction,
+    inside it the reading is steady.
+    """
+    if any(v is None or pd.isna(v) for v in (now, then, sd)) or not sd > 0:
+        return None
+    step = (now - then) / sd
+    return "rising" if step > 0.5 else "falling" if step < -0.5 else "steady"
+
+
+def _last_cross(gap: pd.Series, lookback: int = 5,
+                band: float = 0.0) -> Optional[tuple]:
+    """(sessions ago, +1 crossed above / -1 crossed below) for the most recent
+    crossing of `gap` through zero inside `lookback` sessions, else None.
+
+    `band` is a dead zone. Two readings that sit on top of each other swap order
+    on noise -- the first cut of this printed "crossed above today" for delivery
+    at +0.16 against +0.14 -- so a crossing only counts when the gap is clear of
+    the band NOW and the side it came from was clear of it too. A gap inside the
+    band today reports nothing, however it got there.
+    """
+    g = gap.dropna()
+    if len(g) < 2:
+        return None
+    v = g.values
+    side = np.where(v > band, 1, np.where(v < -band, -1, 0))
+    now = side[-1]
+    if now == 0:
+        return None
+    first = 0                       # sessions ago the gap first came clear on today's side
+    for ago in range(1, min(lookback + 1, len(side))):
+        s_ = side[-1 - ago]
+        if s_ == -now:
+            return first, int(now)
+        if s_ == now:
+            first = ago
+    return None
+
+
+def get_bucket_trends(trade_date: date, fno_symbol: str = "NIFTY") -> dict:
+    """10- and 22-session trends per bucket, and the index's own trend beside them.
+
+    Returns {ok, note, short, long, rows, index, daily}. Each row is one bucket x
+    one measure: `s` and `l` are the 10- and 22-session readings, `rank` where the
+    10-session one sits among the same reading on earlier sessions (0-100, None
+    when the history is too short), `direction` against five sessions ago,
+    `cross` the latest crossing of the 22-session pace, `path` the last 30
+    readings, and for futures `quadrant`, the OI-price label over the window.
+
+    Units: delivery is the mean daily delivery z; futures is the % OI change
+    summed over the window; call and put are % OI change summed, MINUS what is
+    usual for those sessions of the cycle; putcall is put minus call net of the
+    cycle norm. Causal on `trade_date`.
+    """
+    out = {"ok": False, "note": "", "short": _TREND_S, "long": _TREND_L,
+           "rows": [], "index": {}, "daily": pd.DataFrame(), "n_hist": 0}
+    meta = index_meta(fno_symbol, trade_date)
+    if meta is None:
+        out["note"] = f"No bucket definition for {fno_symbol}."
+        return out
+    if trade_date.weekday() >= 5:
+        out["note"] = (f"{trade_date:%d %b %Y} is a special weekend session. Those "
+                       "are short and thin, so they are left out of every trend "
+                       "window - open the session before it for the trend.")
+        return out
+    buckets = meta["buckets"]
+    all_syms = tuple(s for b in buckets.values() for s in b)
+    q_syms = _with_old(all_syms)
+    ph = ", ".join("?" * len(q_syms))
+    start = trade_date - timedelta(days=int((_TREND_HIST + 3 * _TREND_L) * 1.5))
+    floor = meta.get("history_from")
+    if floor:
+        if trade_date < floor:
+            out["note"] = (f"Trends for {meta['display']} start {floor:%d %b %Y}: "
+                           "before it most of this basket had no stock F&O, so "
+                           "the index could not have held it.")
+            return out
+        start = max(start, floor)
+    # cash is read from a little earlier than `start` only so the 21-session
+    # delivery normal is already formed on the first usable day
+    cash = _qdf(f"""
+        SELECT trade_date, symbol, deliv_per, {_r_sql()} AS r
+        FROM daily_data WHERE symbol IN ({ph}) AND series IN ('EQ','SM','ST')
+          AND close_price > 0 AND prev_close > 0
+          AND trade_date >= (?::date - 60) AND trade_date <= ?
+    """, [*q_syms, start, trade_date])
+    if cash.empty:
+        out["note"] = "No constituent data for this date."
+        return out
+    cash["trade_date"] = pd.to_datetime(cash["trade_date"])
+    cash = cash[(cash["r"].abs() < 40) & (cash["trade_date"].dt.weekday < 5)]
+    ts = pd.Timestamp(trade_date)
+    R = cash.pivot_table("r", "trade_date", "symbol").sort_index()
+    DL = cash.pivot_table("deliv_per", "trade_date", "symbol").sort_index()
+    if ts not in R.index:
+        out["note"] = f"No constituent rows on {trade_date:%d %b %Y}."
+        return out
+    days = R.index
+
+    # same-contract day-over-day OI, as in _flow_state_matrix: each contract is
+    # paired with ITSELF on its prior session, so a roll nets to zero
+    oi = _qdf(f"""
+        WITH f AS (
+            SELECT trade_date, symbol, expiry_date, instrument, option_type,
+                   SUM(open_interest) AS oi
+            FROM fno_bhavcopy
+            WHERE instrument IN ('FUTSTK','OPTSTK') AND open_interest > 0
+              AND (instrument = 'FUTSTK' OR option_type IN ('CE','PE'))
+              AND symbol IN ({ph}) AND expiry_date > trade_date
+              AND trade_date >= ? AND trade_date <= ?
+            GROUP BY 1,2,3,4,5
+        ), l AS (
+            SELECT *, LAG(oi) OVER (PARTITION BY symbol, expiry_date, instrument,
+                                                 option_type
+                                    ORDER BY trade_date) AS poi
+            FROM f
+        )
+        SELECT trade_date, symbol, instrument, option_type,
+               SUM(oi / {factor_sql('l')}) AS oi, SUM(poi) AS poi
+        FROM l WHERE poi > 0
+        GROUP BY 1,2,3,4
+    """, [*q_syms, start, trade_date])
+    have_fno = not oi.empty
+    FOI = CE = PE = pd.DataFrame(index=days)
+    ste = pd.Series(np.nan, index=days)
+    if have_fno:
+        oi["trade_date"] = pd.to_datetime(oi["trade_date"])
+        settle = set(pd.to_datetime(_qdf(
+            "SELECT DISTINCT trade_date FROM fno_bhavcopy WHERE instrument='FUTSTK'"
+            " AND expiry_date = trade_date AND trade_date >= ? AND trade_date <= ?",
+            [start, trade_date])["trade_date"]))
+        oi = oi[~oi["trade_date"].isin(settle)].copy()
+        oi["pct"] = ((oi["oi"] - oi["poi"]) / oi["poi"] * 100).clip(-50, 50)
+        dm = _demerger_days(all_syms, start, trade_date)
+        if dm:
+            bad = {(pd.Timestamp(d_), s_) for d_, s_ in dm}
+            oi = oi[[(t_, s_) not in bad
+                     for t_, s_ in zip(oi["trade_date"], oi["symbol"])]]
+        _f = oi[oi["instrument"] == "FUTSTK"]
+        _o = oi[oi["instrument"] == "OPTSTK"]
+        FOI = _f.pivot_table("pct", "trade_date", "symbol").reindex(days)
+        CE = _o[_o["option_type"] == "CE"].pivot_table(
+            "pct", "trade_date", "symbol").reindex(days)
+        PE = _o[_o["option_type"] == "PE"].pivot_table(
+            "pct", "trade_date", "symbol").reindex(days)
+        from src.analytics.fno_stocks import _sessions_until
+        fe = _qdf("""
+            SELECT trade_date, MIN(expiry_date) AS e FROM fno_bhavcopy
+            WHERE instrument = 'FUTSTK' AND expiry_date > trade_date
+              AND trade_date >= ? AND trade_date <= ? GROUP BY 1
+        """, [start, trade_date])
+        if not fe.empty:
+            fe["trade_date"] = pd.to_datetime(fe["trade_date"])
+            ste = pd.Series(
+                [_sessions_until(t_.date(), pd.to_datetime(e_).date())
+                 for t_, e_ in zip(fe["trade_date"], fe["e"])],
+                index=fe["trade_date"]).reindex(days)
+    scale = meta.get("opt_cycle_scale", 1.0)
+    norm = ste.map(lambda v: _opt_cycle_norm(None if pd.isna(v) else int(v), scale))
+    key = ste.clip(upper=_TREND_L)
+
+    def vs_usual(s: pd.Series) -> pd.Series:
+        """Minus the median change at the same sessions-to-expiry, EARLIER days only."""
+        g = pd.DataFrame({"v": s, "k": key})
+        usual = g.groupby("k")["v"].transform(
+            lambda v: v.expanding(min_periods=6).median().shift(1))
+        return s - usual
+
+    def window(s: pd.Series, n: int, how: str) -> pd.Series:
+        # pro-rated: a window that lost its settlement session is scaled to n
+        m = s.rolling(n, min_periods=int(np.ceil(n * 0.7))).mean()
+        return m if how == "mean" else m * n
+
+    daily, rows = {}, []
+    for label, mem in buckets.items():
+        cols = [s for s in mem if s in R.columns]
+        need = _min_valid(len(mem))
+        mu = DL[cols].rolling(_DELIV_BASE, min_periods=_DELIV_MINP).mean().shift(1)
+        sd = DL[cols].rolling(_DELIV_BASE, min_periods=_DELIV_MINP).std().shift(1)
+        d_del = (((DL[cols] - mu) / sd.where(sd > 1e-9))
+                 .replace([np.inf, -np.inf], np.nan).mean(axis=1))
+        d_del = d_del.where(d_del.index >= pd.Timestamp(start))
+
+        def bucket_mean(W: pd.DataFrame) -> pd.Series:
+            w = W.reindex(columns=cols)
+            return w.mean(axis=1).where(w.notna().sum(axis=1) >= need)
+
+        d_fut, d_ce, d_pe = bucket_mean(FOI), bucket_mean(CE), bucket_mean(PE)
+        series = {
+            "delivery": (d_del, "mean"),
+            "futures":  (d_fut, "sum"),
+            "call":     (vs_usual(d_ce), "sum"),
+            "put":      (vs_usual(d_pe), "sum"),
+            "putcall":  (d_pe - d_ce - norm, "sum"),
+        }
+        px = R[cols].mean(axis=1)
+        for m_key in TREND_MEASURES:
+            day_s, how = series[m_key]
+            daily[f"{label}|{m_key}"] = day_s
+            s = window(day_s, _TREND_S, how)
+            l = window(day_s, _TREND_L, how)
+            row = dict(bucket=label, measure=m_key, s=None, l=None, rank=None,
+                       n_hist=0, direction=None, cross=None, path=[], quadrant=None,
+                       px=None)
+            band = 0.0
+            if ts in s.index and pd.notna(s.loc[ts]):
+                row["s"] = float(s.loc[ts])
+                hist = s[s.index < ts].dropna().tail(_TREND_HIST)
+                row["n_hist"] = int(len(hist))
+                if len(hist) >= _TREND_MIN_HIST:
+                    row["rank"] = float((hist < row["s"]).mean() * 100)
+                    step_sd = float(hist.diff(5).std())
+                    # a quarter of a typical five-session move: closer than that
+                    # and the two paces are level, not crossed
+                    band = 0.25 * step_sd if step_sd > 0 else 0.0
+                    prior = s[s.index < ts].dropna()
+                    then = float(prior.iloc[-5]) if len(prior) >= 5 else None
+                    row["direction"] = _trend_direction(row["s"], then, step_sd)
+                row["path"] = [round(float(v), 3)
+                               for v in s[s.index <= ts].dropna().tail(30)]
+            if ts in l.index and pd.notna(l.loc[ts]):
+                row["l"] = float(l.loc[ts])
+                # the 22-session reading on the 10-session scale, so the two can
+                # be compared: a mean is already comparable, a sum is pro-rated
+                pace = l if how == "mean" else l * (_TREND_S / _TREND_L)
+                row["cross"] = _last_cross((s - pace)[s.index <= ts], band=band)
+            if m_key == "futures" and row["s"] is not None:
+                w = px[px.index <= ts].tail(_TREND_S)
+                row["px"] = float(((1 + w / 100).prod() - 1) * 100)
+                row["quadrant"] = _quadrant(
+                    row["px"], row["s"], _OI_BAND * float(np.sqrt(_TREND_S)))
+            rows.append(row)
+    out["rows"] = rows
+    out["daily"] = pd.DataFrame(daily)
+    out["n_hist"] = max((r["n_hist"] for r in rows), default=0)
+    out["have_fno"] = bool(have_fno)
+    out["ok"] = any(r["s"] is not None for r in rows)
+    if not out["ok"]:
+        out["note"] = ("Not enough earlier sessions to form a "
+                       f"{_TREND_S}-session trend on this date.")
+
+    # the index's own trend, on the same two horizons
+    ix = _qdf("""
+        SELECT trade_date, close_val FROM index_data
+        WHERE index_name = ? AND trade_date > (?::date - 200) AND trade_date <= ?
+        ORDER BY trade_date
+    """, [meta["index_name"], trade_date, trade_date])
+    if not ix.empty:
+        ix["trade_date"] = pd.to_datetime(ix["trade_date"])
+        c = ix.set_index("trade_date")["close_val"].astype(float).dropna()
+        if ts in c.index and len(c) >= _TREND_L + 1:
+            def run_len(flag: pd.Series) -> int:
+                v = flag.values
+                n = 0
+                for x in v[::-1]:
+                    if x != v[-1]:
+                        break
+                    n += 1
+                return n
+            ma_s = c.rolling(_TREND_S).mean()
+            ma_l = c.rolling(50, min_periods=30).mean()
+            mom_s = float((c.iloc[-1] / c.iloc[-1 - _TREND_S] - 1) * 100)
+            mom_l = float((c.iloc[-1] / c.iloc[-1 - _TREND_L] - 1) * 100)
+            ab_s, ab_l = (c > ma_s)[ma_s.notna()], (c > ma_l)[ma_l.notna()]
+
+            def side(mom, above):
+                if above is None:
+                    return "unclear"
+                if mom > 0 and above:
+                    return "up"
+                if mom < 0 and not above:
+                    return "down"
+                return "mixed"
+            out["index"] = dict(
+                close=float(c.iloc[-1]),
+                short_ret=mom_s, long_ret=mom_l,
+                short=side(mom_s, bool(ab_s.iloc[-1]) if len(ab_s) else None),
+                long=side(mom_l, bool(ab_l.iloc[-1]) if len(ab_l) else None),
+                short_above=bool(ab_s.iloc[-1]) if len(ab_s) else None,
+                long_above=bool(ab_l.iloc[-1]) if len(ab_l) else None,
+                short_run=run_len(ab_s) if len(ab_s) else None,
+                long_run=run_len(ab_l) if len(ab_l) else None,
+                from_high=float((c.iloc[-1] / c.tail(60).max() - 1) * 100))
+    return out
