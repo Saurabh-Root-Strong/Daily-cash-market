@@ -256,7 +256,8 @@ def cmd_backfill_fno(args) -> int:
         return set(pd.to_datetime(d["trade_date"]).dt.date) if not d.empty else set()
 
     before = _fno_dates()
-    run_fno_backfill(days=days)
+    # include_today: the nightly job is the only retry a refused same-day file gets
+    run_fno_backfill(days=days, include_today=True)
     print("FNO backfill complete.")
 
     # A day whose F&O file arrived late (rejected by the sanity gate, then filled here)

@@ -10,7 +10,7 @@ Design principles:
 from __future__ import annotations
 
 import time
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 import pandas as pd
@@ -603,6 +603,7 @@ def run_fno_backfill(
     days: int = 7,
     client: Optional[NSEHttpClient] = None,
     repo: Optional[MarketDataRepository] = None,
+    include_today: bool = False,
 ) -> None:
     """
     Fetch F&O Bhavcopy for the last `days` trading days.
@@ -621,6 +622,16 @@ def run_fno_backfill(
     repo   = repo   or get_repository()
 
     target_dates = _weekdays_back(days)
+    # TODAY TOO, once NSE has published (it lands ~19:00). _weekdays_back starts at
+    # yesterday, so a same-day file the 19:30 job refused was never retried that night:
+    # 26 Oct 2026 NSE first served the F&O file without its November contracts (futures
+    # OI 0.232x), the sanity gate rightly refused it, the full file was up within hours,
+    # and nothing asked again -- every F&O reader, and that night's index predictions and
+    # forward log, ran on 23 Oct until the next evening. The 23:30 run now retries it; the
+    # gate still guards the write, and --rederive-recent rebuilds the day once it lands.
+    now = datetime.now()
+    if include_today and now.hour >= 18 and now.date() not in target_dates:
+        target_dates = list(target_dates) + [now.date()]
 
     existing = repo.get_distinct_dates("fno_bhavcopy")
     to_fetch = [d for d in sorted(target_dates) if d not in existing]
@@ -634,6 +645,14 @@ def run_fno_backfill(
             df = fetcher.fetch(d)
             if not df.empty:
                 actual_date = df["trade_date"].iloc[0]
+                if pd.Timestamp(actual_date).date() != d:
+                    # today's request falls back to NSE's no-date "latest" endpoint, which on
+                    # a holiday night (or before publication) serves the PREVIOUS session --
+                    # writing it would DELETE and re-insert a day that is already stored
+                    log.info("  [--] %s not published; NSE served %s instead -- not written",
+                             d, pd.Timestamp(actual_date).date())
+                    time.sleep(1.0)
+                    continue
                 repo.upsert_fno_bhavcopy(df)
                 log.info("  [OK] %d rows stored for %s", len(df), actual_date)
             else:
