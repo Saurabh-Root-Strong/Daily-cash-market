@@ -74,14 +74,13 @@ holidays:
       name: "Muharram"
     - date: "2026-08-15"
       name: "Independence Day"
-    - date: "2026-09-16"
+    - date: "2026-09-14"   # was 09-16: NSE traded 16 Sep (fno_bhavcopy), shut 14 Sep
       name: "Ganesh Chaturthi"
     - date: "2026-10-02"
       name: "Mahatma Gandhi Jayanti"
     - date: "2026-10-20"
       name: "Dussehra"
-    - date: "2026-11-09"
-      name: "Diwali — Laxmi Pujan"
+    # 2026-11-09 removed: NSE listed a NIFTY weekly expiring 09-Nov-2026 (holiday-rolled from Tue 10 Nov), so it is a session
     - date: "2026-11-10"
       name: "Diwali — Balipratipada"
     - date: "2026-11-24"
