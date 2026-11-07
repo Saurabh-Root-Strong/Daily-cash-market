@@ -27,6 +27,7 @@ ABANSENT,ABans Enterprises Ltd,Commodities,Metals & Mining,Metals & Minerals Tra
 ABB,ABB India Ltd,Industrials,Capital Goods,Electrical Equipment,Heavy Electrical Equipment,screener.in (NSE classification),ok,2026-09-25,Capital Goods
 ABBOTINDIA,Abbott India Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
 ABCAPITAL,Aditya Birla Capital Ltd,Financial Services,Financial Services,Finance,Investment Company,screener.in (NSE classification),ok,2026-09-25,Financial Services
+ABCIND,ABC Industries India Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-11-02,
 ABCOTS,AB Cotspin India Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,
 ABDL,Allied Blenders & Distillers Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Beverages,Breweries & Distilleries,screener.in (NSE classification),ok,2026-09-25,FMCG
 ABFRL,Aditya Birla Fashion & Retail Ltd,Consumer Discretionary,Consumer Services,Retailing,Speciality Retail,screener.in (NSE classification),ok,2026-09-25,Consumer Services
@@ -85,7 +86,7 @@ AGARWALEYE,Dr Agarwals Health Care Ltd,Healthcare,Healthcare,Healthcare Services
 AGI,AGI Greenpac Ltd,Industrials,Capital Goods,Industrial Products,Packaging,screener.in (NSE classification),ok,2026-09-25,Capital Goods
 AGIIL,AGI Infra Ltd,Consumer Discretionary,Realty,Realty,"Residential, Commercial Projects",screener.in (NSE classification),ok,2026-09-25,Realty
 AGL,Allcargo Global Ltd,Services,Services,Transport Services,Logistics Solution Provider,screener.in (NSE classification),ok,2026-09-28,Logistics
-AGOL,,,,,,,not_on_source,,
+AGOL,Ashapuri Gold Ornament Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,"Gems, Jewellery And Watches",screener.in (NSE classification),ok,2026-10-22,
 AGRITECH,Agri-Tech (India) Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Agricultural Food & other Products,Other Agricultural Products,screener.in (NSE classification),ok,2026-09-28,
 AGROPHOS,Agro Phos India Ltd,Commodities,Chemicals,Fertilizers & Agrochemicals,Fertilizers,screener.in (NSE classification),ok,2026-09-28,
 AHCL,Anlon Healthcare Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
@@ -98,7 +99,7 @@ AIRAN,Airan Ltd,Information Technology,Information Technology,IT - Services,IT E
 AIROLAM,Airo Lam Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Plywood Boards/ Laminates,screener.in (NSE classification),ok,2026-09-28,
 AJANTPHARM,Ajanta Pharma Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
 AJAXENGG,Ajax Engineering Ltd,Industrials,Capital Goods,"Agricultural, Commercial & Construction Vehicles",Construction Vehicles,screener.in (NSE classification),ok,2026-09-28,Capital Goods
-AJMERA,Ajmera Realty & Infra India Ltd,Consumer Discretionary,Realty,Realty,"Residential, Commercial Projects",screener.in (NSE classification),ok,2026-09-28,
+AJMERA,Ajmera Realty & Infra India Ltd,Consumer Discretionary,Realty,Realty,"Residential, Commercial Projects",screener.in (NSE classification),ok,2026-09-28,Realty
 AJOONI,Ajooni Biotech Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Food Products,Animal Feed,screener.in (NSE classification),ok,2026-09-28,
 AKASH,Akash Infraprojects Ltd,Industrials,Construction,Construction,Civil Construction,screener.in (NSE classification),ok,2026-09-28,
 AKCAPIT,A.K.Capital Services Ltd,Financial Services,Financial Services,Finance,Non Banking Financial Company (NBFC),screener.in (NSE classification),ok,2026-09-28,
@@ -126,7 +127,8 @@ ALPHAGEO,Alphageo (India) Ltd,Energy,"Oil, Gas & Consumable Fuels",Oil,Offshore 
 ALPINETEX,Alpine Texworld Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,
 ALUFLUOR,Alufluoride Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Commodity Chemicals,screener.in (NSE classification),ok,2026-09-28,
 AMAGI,Amagi Media Labs Ltd,Information Technology,Information Technology,IT - Services,IT Enabled Services,screener.in (NSE classification),ok,2026-09-25,IT
-AMAL,Amal Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Specialty Chemicals,screener.in (NSE classification),ok,2026-09-28,
+AMAL,Amal Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Specialty Chemicals,screener.in (NSE classification),ok,2026-09-28,Chemicals
+AMANTA,Amanta Healthcare Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-10-22,
 AMARJOTHI,Amarjothi Spinning Mills Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,
 AMBALALSA,Ambalal Sarabhai Enterprises Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-28,
 AMBER,Amber Enterprises India Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Household Appliances,screener.in (NSE classification),ok,2026-09-25,IT
@@ -155,7 +157,7 @@ ANTHEM,Anthem Biosciences Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnol
 ANUHPHR,Anuh Pharma Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-28,
 ANUP,The Anup Engineering Ltd,Industrials,Capital Goods,Industrial Manufacturing,Industrial Products,screener.in (NSE classification),ok,2026-09-28,Capital Goods
 ANURAS,Anupam Rasayan India Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Specialty Chemicals,screener.in (NSE classification),ok,2026-09-25,Chemicals
-AONESTEELS,A-One Steels India Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-10-05,
+AONESTEELS,A-One Steels India Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-10-05,Metals & Mining
 APARINDS,Apar Industries Ltd,Industrials,Capital Goods,Electrical Equipment,Other Electrical Equipment,screener.in (NSE classification),ok,2026-09-25,Capital Goods
 APCL,Anjani Portland Cement Ltd,Commodities,Construction Materials,Cement & Cement Products,Cement & Cement Products,screener.in (NSE classification),ok,2026-09-28,
 APCOTEXIND,Apcotex Industries Ltd,Industrials,Capital Goods,Industrial Products,Rubber,screener.in (NSE classification),ok,2026-09-25,Automobile
@@ -179,6 +181,7 @@ ARDEE,Ardee Industries Ltd,Commodities,Metals & Mining,Diversified Metals,Divers
 ARE&M,Amara Raja Energy & Mobility Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-25,Automobile
 ARENTERP,Rajdarshan Industries Ltd,Commodities,Metals & Mining,Metals & Minerals Trading,Trading - Minerals,screener.in (NSE classification),ok,2026-09-28,
 ARFIN,Arfin India Ltd,Commodities,Metals & Mining,Non - Ferrous Metals,Aluminium,screener.in (NSE classification),ok,2026-09-25,Metals & Mining
+ARHAM,Arham Technologies Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Consumer Electronics,screener.in (NSE classification),ok,2026-10-31,
 ARIES,Aries Agro Ltd,Commodities,Chemicals,Fertilizers & Agrochemicals,Fertilizers,screener.in (NSE classification),ok,2026-09-28,Chemicals
 ARIHANT,Arihant Foundations & Housing Ltd,Consumer Discretionary,Realty,Realty,"Residential, Commercial Projects",screener.in (NSE classification),ok,2026-09-28,
 ARIHANTCAP,Arihant Capital Markets Ltd,Financial Services,Financial Services,Capital Markets,Stockbroking & Allied,screener.in (NSE classification),ok,2026-09-28,Financial Services
@@ -266,6 +269,7 @@ AYMSYNTEX,AYM Syntex Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Oth
 AZAD,Azad Engineering Ltd,Industrials,Capital Goods,Electrical Equipment,Heavy Electrical Equipment,screener.in (NSE classification),ok,2026-09-25,Capital Goods
 AZADIND,Azad India Mobility Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-28,
 BAGFILMS,B A G Films & Media Ltd,Consumer Discretionary,"Media, Entertainment & Publication",Entertainment,TV Broadcasting & Software Production,screener.in (NSE classification),ok,2026-09-28,
+BAHETI,Baheti Recycling Industries Ltd,Industrials,Capital Goods,Industrial Products,"Aluminium, Copper & Zinc Products",screener.in (NSE classification),ok,2026-11-06,
 BAIDFIN,Baid Finserv Ltd,Financial Services,Financial Services,Finance,Non Banking Financial Company (NBFC),screener.in (NSE classification),ok,2026-09-28,
 BAJAJ-AUTO,Bajaj Auto Ltd,Consumer Discretionary,Automobile and Auto Components,Automobiles,2/3 Wheelers,screener.in (NSE classification),ok,2026-09-25,Automobile
 BAJAJCON,Bajaj Consumer Care Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Personal Products,Personal Care,screener.in (NSE classification),ok,2026-09-25,FMCG
@@ -318,7 +322,7 @@ BECTORFOOD,Mrs Bectors Food Specialities Ltd,Fast Moving Consumer Goods,Fast Mov
 BEDMUTHA,Bedmutha Industries Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-28,
 BEEKAY,Beekay Steel Industries Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-28,
 BEL,Bharat Electronics Ltd,Industrials,Capital Goods,Aerospace & Defense,Aerospace & Defense,screener.in (NSE classification),ok,2026-09-25,Defence
-BELDING,,,,,,,not_on_source,,
+BELDING,Belding India Ltd,Industrials,Capital Goods,Industrial Products,"Aluminium, Copper & Zinc Products",screener.in (NSE classification),ok,2026-10-22,
 BELLACASA,Bella Casa Fashion & Retail Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Garments & Apparels,screener.in (NSE classification),ok,2026-09-28,
 BELRISE,Belrise Industries Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-25,Automobile
 BEML,BEML Ltd,Industrials,Capital Goods,"Agricultural, Commercial & Construction Vehicles",Construction Vehicles,screener.in (NSE classification),ok,2026-09-25,Capital Goods
@@ -331,7 +335,7 @@ BETA,Beta Drugs Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharma
 BFINVEST,BF Investment Ltd,Financial Services,Financial Services,Finance,Holding Company,screener.in (NSE classification),ok,2026-09-28,Financial Services
 BFUTILITIE,BF Utilities Ltd,Services,Services,Transport Infrastructure,"Road AssetsToll, Annuity, Hybrid-Annuity",screener.in (NSE classification),ok,2026-09-28,Infrastructure
 BHAGCHEM,Bhagiradha Chemicals & Industries Ltd,Commodities,Chemicals,Fertilizers & Agrochemicals,Pesticides & Agrochemicals,screener.in (NSE classification),ok,2026-09-28,
-BHAGERIA,Bhageria Industries Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Dyes And Pigments,screener.in (NSE classification),ok,2026-09-28,
+BHAGERIA,Bhageria Industries Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Dyes And Pigments,screener.in (NSE classification),ok,2026-09-28,Chemicals
 BHAGYANGR,Bhagyanagar India Ltd,Commodities,Metals & Mining,Non - Ferrous Metals,Copper,screener.in (NSE classification),ok,2026-09-28,Metals & Mining
 BHANDARI,Bhandari Hosiery Exports Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,
 BHARATCOAL,Bharat Coking Coal Ltd,Energy,"Oil, Gas & Consumable Fuels",Consumable Fuels,Coal,screener.in (NSE classification),ok,2026-09-25,Oil & Gas
@@ -365,6 +369,7 @@ BLISSGVS,Bliss GVS Pharma Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnol
 BLKASHYAP,B.L.Kashyap & Sons Ltd,Industrials,Construction,Construction,Civil Construction,screener.in (NSE classification),ok,2026-09-28,
 BLS,BLS International Services Ltd,Consumer Discretionary,Consumer Services,Leisure Services,"Tour, Travel Related Services",screener.in (NSE classification),ok,2026-09-25,Consumer Services
 BLSE,BLS E-Services Ltd,Information Technology,Information Technology,IT - Services,IT Enabled Services,screener.in (NSE classification),ok,2026-09-28,IT
+BLSPOLY,BLS Polymers Ltd,,,,,,unclassified_on_source,2026-11-03,
 BLUECHIP,Blue Chip India Ltd,Financial Services,Financial Services,Finance,Investment Company,screener.in (NSE classification),ok,2026-09-28,
 BLUECLOUDS,Blue Cloud Softech Solutions Ltd,Information Technology,Information Technology,IT - Software,Software Products,screener.in (NSE classification),ok,2026-09-28,IT
 BLUECOAST,Blue Coast Hotels Ltd,Consumer Discretionary,Consumer Services,Leisure Services,Hotels & Resorts,screener.in (NSE classification),ok,2026-09-28,
@@ -375,9 +380,12 @@ BLUESTONE,Bluestone Jewellery & Lifestyle Ltd,Consumer Discretionary,Consumer Du
 BLUSPRING,Bluspring Enterprises Ltd,Services,Services,Commercial Services & Supplies,Diversified Commercial Services,screener.in (NSE classification),ok,2026-09-28,Consumer Services
 BMWVENTLTD,BMW Ventures Ltd,Commodities,Metals & Mining,Metals & Minerals Trading,Trading - Metals,screener.in (NSE classification),ok,2026-09-28,
 BNAGROCHEM,BN Agrochem Ltd,Services,Services,Commercial Services & Supplies,Trading & Distributors,screener.in (NSE classification),ok,2026-09-28,
+BNALTD,B & A Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Agricultural Food & other Products,Tea & Coffee,screener.in (NSE classification),ok,2026-09-28,
 BODALCHEM,Bodal Chemicals Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Dyes And Pigments,screener.in (NSE classification),ok,2026-09-25,Chemicals
 BOHRAIND,Bohra Industries Ltd,Commodities,Chemicals,Fertilizers & Agrochemicals,Fertilizers,screener.in (NSE classification),ok,2026-09-28,
 BOMDYEING,Bombay Dyeing & Manufacturing Company Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-25,Textiles
+BONDADA,Bondada Engineering Ltd,Telecommunication,Telecommunication,Telecom - Services,Telecom - Infrastructure,screener.in (NSE classification),ok,2026-10-30,
+BONFIG,Bonfiglioli Transmissions Ltd,Industrials,Capital Goods,Industrial Manufacturing,Industrial Products,screener.in (NSE classification),ok,2026-10-26,
 BONLON,Bonlon Industries Ltd,Commodities,Metals & Mining,Diversified Metals,Diversified Metals,screener.in (NSE classification),ok,2026-09-28,
 BORANA,Borana Weaves Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,
 BOROLTD,Borosil Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Houseware,screener.in (NSE classification),ok,2026-09-28,Consumer Durables
@@ -392,6 +400,7 @@ BRAHMINFRA,Brahmaputra Infrastructure Ltd,Industrials,Construction,Construction,
 BRIGADE,Brigade Enterprises Ltd,Consumer Discretionary,Realty,Realty,"Residential, Commercial Projects",screener.in (NSE classification),ok,2026-09-25,Realty
 BRIGHOTEL,Brigade Hotel Ventures Ltd,Consumer Discretionary,Consumer Services,Leisure Services,Hotels & Resorts,screener.in (NSE classification),ok,2026-09-28,
 BRIGHTBR,Bright Brothers Ltd,Industrials,Capital Goods,Industrial Products,Plastic Products - Industrial,screener.in (NSE classification),ok,2026-09-28,
+BRIGHTOUTD,Bright Outdoor Media Ltd,Consumer Discretionary,"Media, Entertainment & Publication",Media,Advertising & Media Agencies,screener.in (NSE classification),ok,2026-11-06,
 BRITANNIA,Britannia Industries Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Food Products,Packaged Foods,screener.in (NSE classification),ok,2026-09-25,FMCG
 BRNL,Bharat Road Network Ltd,Industrials,Construction,Construction,Civil Construction,screener.in (NSE classification),ok,2026-09-28,
 BROOKS,Brooks Laboratories Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-28,
@@ -418,7 +427,6 @@ CAPACITE,Capacite Infraprojects Ltd,Industrials,Construction,Construction,Civil 
 CAPILLARY,Capillary Technologies India Ltd,Information Technology,Information Technology,IT - Software,Software Products,screener.in (NSE classification),ok,2026-09-28,IT
 CAPITALSFB,Capital Small Finance Bank Ltd,Financial Services,Financial Services,Banks,Other Bank,screener.in (NSE classification),ok,2026-09-28,
 CAPLIPOINT,Caplin Point Laboratories Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
-CAPTRUST,Capital Trust Ltd,Financial Services,Financial Services,Finance,Non Banking Financial Company (NBFC),screener.in (NSE classification),ok,2026-09-28,
 CARBORUNIV,Carborundum Universal Ltd,Industrials,Capital Goods,Industrial Products,Abrasives & Bearings,screener.in (NSE classification),ok,2026-09-25,Capital Goods
 CARERATING,CARE Ratings Ltd,Financial Services,Financial Services,Capital Markets,Ratings,screener.in (NSE classification),ok,2026-09-25,Financial Services
 CARRARO,Carraro India Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-28,Automobile
@@ -554,7 +562,7 @@ DCMFINSERV,DCM Financial Services Ltd,Financial Services,Financial Services,Fina
 DCMNVL,DCM Nouvelle Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,
 DCMSHRIRAM,DCM Shriram Ltd,Diversified,Diversified,Diversified,Diversified,screener.in (NSE classification),ok,2026-09-25,Chemicals
 DCMSIL,DCM Shriram International Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,
-DCMSRIND,DCM Shriram Industries Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Agricultural Food & other Products,Sugar,screener.in (NSE classification),ok,2026-09-28,
+DCMSRIND,DCM Shriram Industries Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Agricultural Food & other Products,Sugar,screener.in (NSE classification),ok,2026-09-28,FMCG
 DCW,DCW Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Petrochemicals,screener.in (NSE classification),ok,2026-09-25,Chemicals
 DCXINDIA,DCX Systems Ltd,Industrials,Capital Goods,Aerospace & Defense,Aerospace & Defense,screener.in (NSE classification),ok,2026-09-25,Defence
 DDEVPLSTIK,DDev Plastiks Industries Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Specialty Chemicals,screener.in (NSE classification),ok,2026-09-28,
@@ -635,11 +643,13 @@ EBIX,Ebix Ltd,Consumer Discretionary,Automobile and Auto Components,Automobiles,
 ECLERX,eClerx Services Ltd,Services,Services,Commercial Services & Supplies,Business Process Outsourcing (BPO)/ Knowledge Process Outsourcing (KPO),screener.in (NSE classification),ok,2026-09-25,IT
 ECORECO,Eco Recycling Ltd,Utilities,Utilities,Other Utilities,Waste Management,screener.in (NSE classification),ok,2026-09-28,
 ECOSMOBLTY,Ecos (India) Mobility & Hospitality Ltd,Services,Services,Transport Services,Road Transport,screener.in (NSE classification),ok,2026-09-28,
+EDELALTS,EAAA India Alternatives Ltd,,,,,,unclassified_on_source,2026-11-02,
 EDELWEISS,Edelweiss Financial Services Ltd,Financial Services,Financial Services,Finance,Holding Company,screener.in (NSE classification),ok,2026-09-25,Financial Services
 EFCIL,EFC (I) Ltd,Services,Services,Commercial Services & Supplies,Diversified Commercial Services,screener.in (NSE classification),ok,2026-09-25,Realty
 EICHERMOT,Eicher Motors Ltd,Consumer Discretionary,Automobile and Auto Components,Automobiles,2/3 Wheelers,screener.in (NSE classification),ok,2026-09-25,Automobile
 EIDPARRY,EID Parry (India) Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Food Products,Other Food Products,screener.in (NSE classification),ok,2026-09-25,FMCG
 EIEL,Enviro Infra Engineers Ltd,Utilities,Utilities,Other Utilities,Water Supply & Management,screener.in (NSE classification),ok,2026-09-25,Infrastructure
+EIFFL,Euro India Fresh Foods Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Food Products,Packaged Foods,screener.in (NSE classification),ok,2026-10-26,
 EIHAHOTELS,EIH Associated Hotels Ltd,Consumer Discretionary,Consumer Services,Leisure Services,Hotels & Resorts,screener.in (NSE classification),ok,2026-09-28,
 EIHOTEL,EIH Ltd,Consumer Discretionary,Consumer Services,Leisure Services,Hotels & Resorts,screener.in (NSE classification),ok,2026-09-25,Consumer Services
 EIMCOELECO,Eimco Elecon (India) Ltd,Industrials,Capital Goods,Industrial Manufacturing,Industrial Products,screener.in (NSE classification),ok,2026-09-28,Capital Goods
@@ -699,6 +709,7 @@ EUROPRATIK,Euro Pratik Sales Ltd,Consumer Discretionary,Consumer Durables,Consum
 EUROTEXIND,Eurotex Industries and Exports Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,
 EVEREADY,Eveready Industries India Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Household Products,Household Products,screener.in (NSE classification),ok,2026-09-28,
 EVERESTIND,Everest Industries Ltd,Commodities,Construction Materials,Other Construction Materials,Other Construction Materials,screener.in (NSE classification),ok,2026-10-05,
+EVONILE,Evonile Pharma Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-11-05,
 EXCELINDUS,Excel Industries Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Specialty Chemicals,screener.in (NSE classification),ok,2026-09-28,
 EXCELSOFT,Excelsoft Technologies Ltd,Information Technology,Information Technology,IT - Services,IT Enabled Services,screener.in (NSE classification),ok,2026-09-28,IT
 EXICOM,Exicom Tele-Systems Ltd,Industrials,Capital Goods,Electrical Equipment,Heavy Electrical Equipment,screener.in (NSE classification),ok,2026-09-25,Telecom
@@ -707,7 +718,7 @@ EXPLEOSOL,Expleo Solutions Ltd,Information Technology,Information Technology,IT 
 EXXARO,Exxaro Tiles Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Ceramics,screener.in (NSE classification),ok,2026-09-28,
 FABTECH,Fabtech Technologies Ltd,Healthcare,Healthcare,Healthcare Services,"Healthcare Research, Analytics & Technology",screener.in (NSE classification),ok,2026-09-28,
 FACT,Fertilizers & Chemicals Travancore Ltd,Commodities,Chemicals,Fertilizers & Agrochemicals,Fertilizers,screener.in (NSE classification),ok,2026-09-25,Chemicals
-FAIRCHEMOR,Fairchem Organics Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Specialty Chemicals,screener.in (NSE classification),ok,2026-09-28,
+FAIRCHEMOR,Fairchem Organics Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Specialty Chemicals,screener.in (NSE classification),ok,2026-09-28,Chemicals
 FAZE3Q,Faze Three Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,
 FCL,Fineotex Chemical Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Specialty Chemicals,screener.in (NSE classification),ok,2026-09-25,Chemicals
 FCSSOFT,FCS Software Solutions Ltd,Information Technology,Information Technology,IT - Services,IT Enabled Services,screener.in (NSE classification),ok,2026-09-28,
@@ -742,6 +753,7 @@ FREDUN,Fredun Pharmaceuticals Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotec
 FRONTSP,Frontier Springs Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-28,Automobile
 FSL,Firstsource Solutions Ltd,Services,Services,Commercial Services & Supplies,Business Process Outsourcing (BPO)/ Knowledge Process Outsourcing (KPO),screener.in (NSE classification),ok,2026-09-25,IT
 FUSION,Fusion Finance Ltd,Financial Services,Financial Services,Finance,Microfinance Institutions,screener.in (NSE classification),ok,2026-09-25,Financial Services
+FUSIONCX,Fusion CX Ltd,,,,,,unclassified_on_source,2026-10-22,
 GABRIEL,Gabriel India Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-25,Automobile
 GAEL,Gujarat Ambuja Exports Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Agricultural Food & other Products,Other Agricultural Products,screener.in (NSE classification),ok,2026-09-25,FMCG
 GAIL,GAIL (India) Ltd,Energy,"Oil, Gas & Consumable Fuels",Gas,Gas Transmission/Marketing,screener.in (NSE classification),ok,2026-09-25,Oil & Gas
@@ -759,8 +771,6 @@ GANGAFORGE,Ganga Forging Ltd,Industrials,Capital Goods,Industrial Products,Casti
 GANGESSECU,Ganges Securities Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Agricultural Food & other Products,Tea & Coffee,screener.in (NSE classification),ok,2026-09-28,
 GARFIBRES,Garware Technical Fibres Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,
 GARUDA,Garuda Construction and Engineering Ltd,Industrials,Construction,Construction,Civil Construction,screener.in (NSE classification),ok,2026-09-25,Infrastructure
-GATECH,GACM Technologies Ltd,Financial Services,Financial Services,Finance,Other Financial Services,screener.in (NSE classification),ok,2026-09-28,
-GATECHDVR,GACM Technologies Ltd-DVR,Financial Services,Financial Services,Finance,Other Financial Services,screener.in (NSE classification),ok,2026-09-28,
 GATEWAY,Gateway Distriparks Ltd,Services,Services,Transport Services,Logistics Solution Provider,screener.in (NSE classification),ok,2026-09-28,Logistics
 GAUDIUMIVF,Gaudium IVF and Women Health Ltd,Healthcare,Healthcare,Healthcare Services,Healthcare Service Provider,screener.in (NSE classification),ok,2026-09-28,
 GAYAHWS,Gayatri Highways Ltd,Services,Services,Transport Infrastructure,"Road AssetsToll, Annuity, Hybrid-Annuity",screener.in (NSE classification),ok,2026-09-28,
@@ -907,6 +917,7 @@ HDBFS,HDB Financial Services Ltd,Financial Services,Financial Services,Finance,N
 HDFCAMC,HDFC Asset Management Company Ltd,Financial Services,Financial Services,Capital Markets,Asset Management Company,screener.in (NSE classification),ok,2026-09-25,Financial Services
 HDFCBANK,HDFC Bank Ltd,Financial Services,Financial Services,Banks,Private Sector Bank,screener.in (NSE classification),ok,2026-09-25,Banking
 HDFCLIFE,HDFC Life Insurance Company Ltd,Financial Services,Financial Services,Insurance,Life Insurance,screener.in (NSE classification),ok,2026-09-25,Financial Services
+HDFIRE,HD Fire Protect Ltd,Industrials,Capital Goods,Industrial Manufacturing,Industrial Products,screener.in (NSE classification),ok,2026-10-22,
 HEADSUP,Heads UP Ventures Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Trading - Textile Products,screener.in (NSE classification),ok,2026-09-28,
 HEALTHX,Health X Platform Ltd,Healthcare,Healthcare,Healthcare Services,Healthcare Service Provider,screener.in (NSE classification),ok,2026-09-28,
 HECPROJECT,HEC Infra Projects Ltd,Industrials,Construction,Construction,Civil Construction,screener.in (NSE classification),ok,2026-09-28,
@@ -919,6 +930,7 @@ HERITGFOOD,Heritage Foods Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Go
 HEROMOTOCO,Hero MotoCorp Ltd,Consumer Discretionary,Automobile and Auto Components,Automobiles,2/3 Wheelers,screener.in (NSE classification),ok,2026-09-25,Automobile
 HEROMOTORS,Hero Motors Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-25,Automobile
 HESTERBIO,Hester Biosciences Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-28,Pharma & Healthcare
+HEXAGON,Hexagon Nutrition Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Food Products,Packaged Foods,screener.in (NSE classification),ok,2026-09-28,
 HEXATRADEX,Hexa Tradex Ltd,Financial Services,Financial Services,Finance,Investment Company,screener.in (NSE classification),ok,2026-09-28,
 HEXT,Hexaware Technologies Ltd,Information Technology,Information Technology,IT - Software,Computers - Software & Consulting,screener.in (NSE classification),ok,2026-09-25,IT
 HFCL,HFCL Ltd,Telecommunication,Telecommunication,Telecom - Services,Telecom - Infrastructure,screener.in (NSE classification),ok,2026-09-25,Telecom
@@ -946,7 +958,6 @@ HITECH,Hi-Tech Pipes Ltd,Industrials,Capital Goods,Industrial Products,Iron & St
 HLEGLAS,HLE Glascoat Ltd,Industrials,Capital Goods,Industrial Manufacturing,Industrial Products,screener.in (NSE classification),ok,2026-09-28,Capital Goods
 HLVLTD,HLV Ltd,Consumer Discretionary,Consumer Services,Leisure Services,Hotels & Resorts,screener.in (NSE classification),ok,2026-09-28,
 HMAAGRO,HMA Agro Industries Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Food Products,Meat Products including Poultry,screener.in (NSE classification),ok,2026-09-28,FMCG
-HMVL,Hindustan Media Ventures Ltd,Consumer Discretionary,"Media, Entertainment & Publication",Media,Print Media,screener.in (NSE classification),ok,2026-09-28,
 HNDFDS,Hindustan Foods Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Diversified FMCG,Diversified FMCG,screener.in (NSE classification),ok,2026-09-28,FMCG
 HOMEFIRST,Home First Finance Company India Ltd,Financial Services,Financial Services,Finance,Housing Finance Company,screener.in (NSE classification),ok,2026-09-25,Financial Services
 HONASA,Honasa Consumer Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Personal Products,Personal Care,screener.in (NSE classification),ok,2026-09-25,FMCG
@@ -971,6 +982,7 @@ ICEMAKE,ICE Make Refrigeration Ltd,Industrials,Capital Goods,Industrial Manufact
 ICICIAMC,ICICI Prudential Asset Management Co Ltd,Financial Services,Financial Services,Capital Markets,Asset Management Company,screener.in (NSE classification),ok,2026-09-25,Financial Services
 ICICIBANK,ICICI Bank Ltd,Financial Services,Financial Services,Banks,Private Sector Bank,screener.in (NSE classification),ok,2026-09-25,Banking
 ICICIGI,ICICI Lombard General Insurance Company Ltd,Financial Services,Financial Services,Insurance,General Insurance,screener.in (NSE classification),ok,2026-09-25,Financial Services
+ICICILIFE,ICICI Life Insurance Ltd,Financial Services,Financial Services,Insurance,Life Insurance,screener.in (NSE classification),ok,2026-10-26,
 ICICIPRULI,ICICI Prudential Life Insurance Company Ltd,Financial Services,Financial Services,Insurance,Life Insurance,screener.in (NSE classification),ok,2026-09-25,Financial Services
 ICIL,Indo Count Industries Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-25,Textiles
 ICRA,ICRA Ltd,Financial Services,Financial Services,Capital Markets,Ratings,screener.in (NSE classification),ok,2026-09-28,Financial Services
@@ -990,6 +1002,7 @@ IGL,Indraprastha Gas Ltd,Energy,"Oil, Gas & Consumable Fuels",Gas,LPG/CNG/PNG/LN
 IGPL,I G Petrochemicals Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Commodity Chemicals,screener.in (NSE classification),ok,2026-09-28,Chemicals
 IIFL,IIFL Finance Ltd,Financial Services,Financial Services,Finance,Non Banking Financial Company (NBFC),screener.in (NSE classification),ok,2026-09-25,Financial Services
 IIFLCAPS,IIFL Capital Services Ltd,Financial Services,Financial Services,Capital Markets,Stockbroking & Allied,screener.in (NSE classification),ok,2026-09-25,Financial Services
+IIRM,IIRM Holdings India Ltd,Services,Services,Commercial Services & Supplies,Consulting Services,screener.in (NSE classification),ok,2026-10-22,
 IITL,Industrial Investment Trust Ltd,Financial Services,Financial Services,Finance,Investment Company,screener.in (NSE classification),ok,2026-09-28,
 IKIO,IKIO Technologies Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Consumer Electronics,screener.in (NSE classification),ok,2026-09-28,IT
 IKS,Inventurus Knowledge Solutions Ltd,Information Technology,Information Technology,IT - Services,IT Enabled Services,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
@@ -1012,7 +1025,7 @@ INDIGO,Interglobe Aviation Ltd,Services,Services,Transport Services,Airline,scre
 INDIGOPNTS,Indigo Paints Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Paints,screener.in (NSE classification),ok,2026-09-25,Chemicals
 INDIQUBE,Indiqube Spaces Ltd,Services,Services,Commercial Services & Supplies,Diversified Commercial Services,screener.in (NSE classification),ok,2026-09-28,
 INDNIPPON,India Nippon Electricals Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-25,Automobile
-INDOAMIN,Indo Amines Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Specialty Chemicals,screener.in (NSE classification),ok,2026-09-28,
+INDOAMIN,Indo Amines Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Specialty Chemicals,screener.in (NSE classification),ok,2026-09-28,Chemicals
 INDOBORAX,Indo Borax & Chemicals Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Commodity Chemicals,screener.in (NSE classification),ok,2026-09-28,Chemicals
 INDOCO,Indoco Remedies Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
 INDOFARM,Indo Farm Equipment Ltd,Industrials,Capital Goods,"Agricultural, Commercial & Construction Vehicles",Construction Vehicles,screener.in (NSE classification),ok,2026-09-28,Capital Goods
@@ -1028,6 +1041,7 @@ INDPRUD,Industrial & Prudential Investment Company Ltd,Financial Services,Financ
 INDRAMEDCO,Indraprastha Medical Corporation Ltd,Healthcare,Healthcare,Healthcare Services,Hospital,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
 INDSWFTLAB,Ind-Swift Laboratories Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
 INDTERRAIN,Indian Terrain Fashions Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Garments & Apparels,screener.in (NSE classification),ok,2026-09-28,
+INDTONER,Indian Toners & Developers Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Specialty Chemicals,screener.in (NSE classification),ok,2026-10-31,
 INDUSINDBK,IndusInd Bank Ltd,Financial Services,Financial Services,Banks,Private Sector Bank,screener.in (NSE classification),ok,2026-09-25,Banking
 INDUSTOWER,Indus Towers Ltd,Telecommunication,Telecommunication,Telecom - Services,Telecom - Infrastructure,screener.in (NSE classification),ok,2026-09-25,Telecom
 INFOBEAN,InfoBeans Technologies Ltd,Information Technology,Information Technology,IT - Software,Computers - Software & Consulting,screener.in (NSE classification),ok,2026-09-25,IT
@@ -1100,7 +1114,7 @@ JETFREIGHT,Jet Freight Logistics Ltd,Services,Services,Transport Services,Logist
 JGCHEM,J.G.Chemicals Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Commodity Chemicals,screener.in (NSE classification),ok,2026-09-25,Chemicals
 JHS,JHS Svendgaard Laboratories Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Personal Products,Personal Care,screener.in (NSE classification),ok,2026-09-28,
 JINDALPHOT,Jindal Photo Ltd,Financial Services,Financial Services,Finance,Investment Company,screener.in (NSE classification),ok,2026-09-28,
-JINDALPOLY,Jindal Poly Films Ltd,Industrials,Capital Goods,Industrial Products,Packaging,screener.in (NSE classification),ok,2026-09-28,
+JINDALPOLY,Jindal Poly Films Ltd,Industrials,Capital Goods,Industrial Products,Packaging,screener.in (NSE classification),ok,2026-09-28,Capital Goods
 JINDALSAW,Jindal Saw Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-25,Metals & Mining
 JINDALSTEL,Jindal Steel Ltd,Commodities,Metals & Mining,Ferrous Metals,Iron & Steel,screener.in (NSE classification),ok,2026-09-25,Metals & Mining
 JINDRILL,Jindal Drilling & Industries Ltd,Energy,"Oil, Gas & Consumable Fuels",Oil,Offshore Support Solution Drilling,screener.in (NSE classification),ok,2026-09-25,Oil & Gas
@@ -1121,6 +1135,7 @@ JMFINANCIL,JM Financial Ltd,Financial Services,Financial Services,Finance,Holdin
 JNKINDIA,JNK India Ltd,Industrials,Capital Goods,Industrial Manufacturing,Industrial Products,screener.in (NSE classification),ok,2026-09-28,Capital Goods
 JNPR,Juniper Green Energy Ltd,Utilities,Power,Power,Power Generation,screener.in (NSE classification),ok,2026-09-25,Renewables
 JOCIL,Jocil Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Commodity Chemicals,screener.in (NSE classification),ok,2026-09-28,
+JPL,Jio Platforms Ltd,Telecommunication,Telecommunication,Telecom - Services,Telecom - Cellular & Fixed line services,screener.in (NSE classification),ok,2026-10-29,
 JPOLYINVST,Jindal Poly Investment & Finance Company Ltd,Financial Services,Financial Services,Finance,Investment Company,screener.in (NSE classification),ok,2026-09-28,
 JPPOWER,Jaiprakash Power Ventures Ltd,Utilities,Power,Power,Power Generation,screener.in (NSE classification),ok,2026-09-25,Power & Utilities
 JSFB,Jana Small Finance Bank Ltd,Financial Services,Financial Services,Banks,Other Bank,screener.in (NSE classification),ok,2026-09-25,Banking
@@ -1156,7 +1171,7 @@ KALYANKJIL,Kalyan Jewellers India Ltd,Consumer Discretionary,Consumer Durables,C
 KAMAHOLD,Kama Holdings Ltd,Financial Services,Financial Services,Finance,Holding Company,screener.in (NSE classification),ok,2026-09-28,
 KAMANWALA,Kamanwala Housing Construction Ltd,Consumer Discretionary,Realty,Realty,"Residential, Commercial Projects",screener.in (NSE classification),ok,2026-09-28,
 KAMATHOTEL,Kamat Hotels (India) Ltd,Consumer Discretionary,Consumer Services,Leisure Services,Hotels & Resorts,screener.in (NSE classification),ok,2026-09-28,
-KAMDHENU,Kamdhenu Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-28,
+KAMDHENU,Kamdhenu Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-28,Metals & Mining
 KAMOPAINTS,Kamdhenu Ventures Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Paints,screener.in (NSE classification),ok,2026-09-28,
 KANANIIND,Kanani Industries Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,"Gems, Jewellery And Watches",screener.in (NSE classification),ok,2026-09-28,
 KANCHI,Kanchi Karpooram Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Commodity Chemicals,screener.in (NSE classification),ok,2026-09-28,
@@ -1186,9 +1201,11 @@ KERNEX,Kernex Microsystems (India) Ltd,Services,Services,Transport Services,Tran
 KESORAMIND,Kesoram Industries Ltd,Commodities,Construction Materials,Cement & Cement Products,Cement & Cement Products,screener.in (NSE classification),ok,2026-09-28,
 KEYFINSERV,Keynote Financial Services Ltd,Financial Services,Financial Services,Capital Markets,Stockbroking & Allied,screener.in (NSE classification),ok,2026-09-28,
 KFINTECH,KFin Technologies Ltd,Financial Services,Financial Services,Capital Markets,"Depositories, Clearing Houses and Other Intermediaries",screener.in (NSE classification),ok,2026-09-25,Financial Services
+KHADIM,Khadim India Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Footwear,screener.in (NSE classification),ok,2026-10-26,
 KHAICHEM,Khaitan Chemicals & Fertilizers Ltd,Commodities,Chemicals,Fertilizers & Agrochemicals,Fertilizers,screener.in (NSE classification),ok,2026-09-28,
 KHAITANLTD,Khaitan (India) Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Consumer Electronics,screener.in (NSE classification),ok,2026-09-28,
 KHANDSE,Khandwala Securities Ltd,Financial Services,Financial Services,Capital Markets,Stockbroking & Allied,screener.in (NSE classification),ok,2026-09-28,
+KHAZANCHI,Khazanchi Jewellers Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,"Gems, Jewellery And Watches",screener.in (NSE classification),ok,2026-10-29,
 KICL,Kalyani Investment Company Ltd,Financial Services,Financial Services,Finance,Investment Company,screener.in (NSE classification),ok,2026-09-28,
 KILITCH,Kilitch Drugs (India) Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-10-05,
 KIMS,Krishna Institute of Medical Sciences Ltd,Healthcare,Healthcare,Healthcare Services,Hospital,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
@@ -1335,7 +1352,6 @@ MAGADSUGAR,Magadh Sugar & Energy Ltd,Fast Moving Consumer Goods,Fast Moving Cons
 MAGNUM,Magnum Ventures Ltd,Commodities,Forest Materials,"Paper, Forest & Jute Products",Paper & Paper Products,screener.in (NSE classification),ok,2026-09-28,
 MAHABANK,Bank of Maharashtra,Financial Services,Financial Services,Banks,Public Sector Bank,screener.in (NSE classification),ok,2026-09-25,Banking
 MAHAPEXLTD,Maha Rashtra Apex Corporation Ltd,Financial Services,Financial Services,Finance,Other Financial Services,screener.in (NSE classification),ok,2026-09-28,
-MAHASTEEL,Mahamaya Steel Industries Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-28,
 MAHEPC,Mahindra EPC Irrigation Ltd,Industrials,Capital Goods,Industrial Manufacturing,Industrial Products,screener.in (NSE classification),ok,2026-09-28,
 MAHESHWARI,Maheshwari Logistics Ltd,Diversified,Diversified,Diversified,Diversified,screener.in (NSE classification),ok,2026-09-28,
 MAHLIFE,Mahindra Lifespace Developers Ltd,Consumer Discretionary,Realty,Realty,"Residential, Commercial Projects",screener.in (NSE classification),ok,2026-09-28,Realty
@@ -1343,7 +1359,6 @@ MAHLOG,Mahindra Logistics Ltd,Services,Services,Transport Services,Logistics Sol
 MAHSCOOTER,Maharashtra Scooters Ltd,Financial Services,Financial Services,Finance,Investment Company,screener.in (NSE classification),ok,2026-09-28,Financial Services
 MAHSEAMLES,Maharashtra Seamless Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-25,Metals & Mining
 MAITHANALL,Maithan Alloys Ltd,Commodities,Metals & Mining,Ferrous Metals,Ferro & Silica Manganese,screener.in (NSE classification),ok,2026-09-28,Metals & Mining
-MAJESAUT,Majestic Auto Ltd,Services,Services,Commercial Services & Supplies,Diversified Commercial Services,screener.in (NSE classification),ok,2026-09-28,
 MAKERSL,Makers Laboratories Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-28,
 MALLCOM,Mallcom (India) Ltd,Industrials,Capital Goods,Industrial Products,Other Industrial Products,screener.in (NSE classification),ok,2026-09-28,
 MALUPAPER,Malu Paper Mills Ltd,Commodities,Forest Materials,"Paper, Forest & Jute Products",Paper & Paper Products,screener.in (NSE classification),ok,2026-09-28,
@@ -1359,7 +1374,7 @@ MANBRO,,,,,,,not_on_source,,
 MANCREDIT,Mangal Credit & Fincorp Ltd,Financial Services,Financial Services,Finance,Non Banking Financial Company (NBFC),screener.in (NSE classification),ok,2026-09-28,Financial Services
 MANGALAM,Mangalam Drugs and Organics Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-28,
 MANGLMCEM,Mangalam Cement Ltd,Commodities,Construction Materials,Cement & Cement Products,Cement & Cement Products,screener.in (NSE classification),ok,2026-09-28,Cement & Building Materials
-MANIKA,Manika Plastech Ltd,Industrials,Capital Goods,Industrial Products,Plastic Products - Industrial,screener.in (NSE classification),ok,2026-10-06,
+MANIKA,Manika Plastech Ltd,Industrials,Capital Goods,Industrial Products,Plastic Products - Industrial,screener.in (NSE classification),ok,2026-10-06,Capital Goods
 MANINDS,Man Industries (India) Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-25,Metals & Mining
 MANINFRA,Man Infraconstruction Ltd,Consumer Discretionary,Realty,Realty,"Residential, Commercial Projects",screener.in (NSE classification),ok,2026-09-25,Infrastructure
 MANIPALHOS,Manipal Health Enterprises Ltd,Healthcare,Healthcare,Healthcare Services,Hospital,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
@@ -1408,7 +1423,7 @@ MEESHO,Meesho Ltd,Consumer Discretionary,Consumer Services,Retailing,E-Retail/ E
 MEGASTAR,Megastar Foods Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Food Products,Other Food Products,screener.in (NSE classification),ok,2026-09-28,
 MEIL,Mangal Electrical Industries Ltd,Industrials,Capital Goods,Electrical Equipment,Other Electrical Equipment,screener.in (NSE classification),ok,2026-09-28,
 MENNPIS,Menon Pistons Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-28,
-MENONBE,Menon Bearings Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-28,
+MENONBE,Menon Bearings Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-28,Automobile
 MERCANTILE,Mercantile Ventures Ltd,Services,Services,Commercial Services & Supplies,Diversified Commercial Services,screener.in (NSE classification),ok,2026-09-28,
 MERCURYEV,Mercury EV-Tech Ltd,Consumer Discretionary,Automobile and Auto Components,Automobiles,Passenger Cars & Utility Vehicles,screener.in (NSE classification),ok,2026-09-28,
 METROBRAND,Metro Brands Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Footwear,screener.in (NSE classification),ok,2026-09-28,Consumer Durables
@@ -1433,6 +1448,7 @@ MIRZAINT,Mirza International Ltd,Consumer Discretionary,Consumer Durables,Consum
 MITCON,Mitcon Consultancy & Engineering Services Ltd,Services,Services,Commercial Services & Supplies,Consulting Services,screener.in (NSE classification),ok,2026-09-28,
 MITTAL,Mittal Life Style Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Garments & Apparels,screener.in (NSE classification),ok,2026-09-28,
 MKEXIM,M K Exim (India) Ltd,Consumer Discretionary,Consumer Services,Retailing,Distributors,screener.in (NSE classification),ok,2026-09-28,
+MKJEWELS,M. K. Sons Fine Jewels Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,"Gems, Jewellery And Watches",screener.in (NSE classification),ok,2026-11-05,
 MKPL,M K Proteins Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Agricultural Food & other Products,Edible Oil,screener.in (NSE classification),ok,2026-09-28,
 MLKFOOD,Milkfood Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Food Products,Dairy Products,screener.in (NSE classification),ok,2026-09-28,
 MMFL,M M Forgings Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-28,Automobile
@@ -1453,10 +1469,10 @@ MOL,Meghmani Organics Ltd,Commodities,Chemicals,Fertilizers & Agrochemicals,Pest
 MOLBIO,Molbio Diagnostics Ltd,Healthcare,Healthcare,Healthcare Equipment & Supplies,Medical Equipment & Supplies,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
 MOLDTECH,Mold-Tek Technologies Ltd,Industrials,Construction,Construction,Civil Construction,screener.in (NSE classification),ok,2026-09-28,Infrastructure
 MOLDTKPAC,Mold-Tek Packaging Ltd,Industrials,Capital Goods,Industrial Products,Packaging,screener.in (NSE classification),ok,2026-09-25,Capital Goods
-MOMSBELIEF,Rays of Belief Ltd,Healthcare,Healthcare,Healthcare Services,Hospital,screener.in (NSE classification),ok,2026-09-28,
+MOMSBELIEF,Rays of Belief Ltd,Healthcare,Healthcare,Healthcare Services,Hospital,screener.in (NSE classification),ok,2026-09-28,Pharma & Healthcare
 MONARCH,Monarch Networth Capital Ltd,Financial Services,Financial Services,Capital Markets,Stockbroking & Allied,screener.in (NSE classification),ok,2026-09-28,Financial Services
 MONEYBOXX,Moneyboxx Finance Ltd,Financial Services,Financial Services,Finance,Non Banking Financial Company (NBFC),screener.in (NSE classification),ok,2026-09-28,
-MONEYVIEW,Moneyview Ltd,Financial Services,Financial Services,Financial Technology (Fintech),Financial Technology (Fintech),screener.in (NSE classification),ok,2026-10-05,
+MONEYVIEW,Moneyview Ltd,Financial Services,Financial Services,Financial Technology (Fintech),Financial Technology (Fintech),screener.in (NSE classification),ok,2026-10-05,Financial Services
 MONTECARLO,Monte Carlo Fashions Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Garments & Apparels,screener.in (NSE classification),ok,2026-09-25,Textiles
 MOREPENLAB,Morepen Laboratories Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
 MOSCHIP,Moschip Technologies Ltd,Information Technology,Information Technology,IT - Hardware,Computers Hardware & Equipments,screener.in (NSE classification),ok,2026-09-25,IT
@@ -1561,6 +1577,7 @@ NITCO,Nitco Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Ceram
 NITINSPIN,Nitin Spinners Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-25,Textiles
 NITIRAJ,Nitiraj Engineers Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Consumer Electronics,screener.in (NSE classification),ok,2026-09-28,
 NITTAGELA,Nitta Gelatin India Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Specialty Chemicals,screener.in (NSE classification),ok,2026-09-28,
+NITYAS,Nityas Gems & Jewellery Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,"Gems, Jewellery And Watches",screener.in (NSE classification),ok,2026-10-26,
 NIVABUPA,Niva Bupa Health Insurance Company Ltd,Financial Services,Financial Services,Insurance,General Insurance,screener.in (NSE classification),ok,2026-09-25,Financial Services
 NKIND,N K Industries Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Agricultural Food & other Products,Edible Oil,screener.in (NSE classification),ok,2026-09-28,
 NLCINDIA,NLC India Ltd,Utilities,Power,Power,Power Generation,screener.in (NSE classification),ok,2026-09-25,Power & Utilities
@@ -1580,7 +1597,6 @@ NTCIND,NTC Industries Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,
 NTPC,NTPC Ltd,Utilities,Power,Power,Power Generation,screener.in (NSE classification),ok,2026-09-25,Power & Utilities
 NTPCGREEN,NTPC Green Energy Ltd,Utilities,Power,Power,Power Generation,screener.in (NSE classification),ok,2026-09-25,Renewables
 NUCLEUS,Nucleus Software Exports Ltd,Information Technology,Information Technology,IT - Software,Software Products,screener.in (NSE classification),ok,2026-09-28,
-NURECA,Nureca Ltd,Healthcare,Healthcare,Healthcare Equipment & Supplies,Medical Equipment & Supplies,screener.in (NSE classification),ok,2026-09-28,
 NUVAMA,Nuvama Wealth Management Ltd,Financial Services,Financial Services,Capital Markets,Stockbroking & Allied,screener.in (NSE classification),ok,2026-09-25,Financial Services
 NUVOCO,Nuvoco Vistas Corporation Ltd,Commodities,Construction Materials,Cement & Cement Products,Cement & Cement Products,screener.in (NSE classification),ok,2026-09-25,Cement & Building Materials
 NYKAA,FSN E-Commerce Ventures Ltd,Consumer Discretionary,Consumer Services,Retailing,E-Retail/ E-Commerce,screener.in (NSE classification),ok,2026-09-25,Consumer Services
@@ -1607,7 +1623,7 @@ ONGC,Oil & Natural Gas Corpn Ltd,Energy,"Oil, Gas & Consumable Fuels",Oil,Oil Ex
 ONIDA,Onida Electronics Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Consumer Electronics,screener.in (NSE classification),ok,2026-09-28,
 ONIXSOLAR,Onix Solar Energy Ltd,Commodities,Metals & Mining,Non - Ferrous Metals,Copper,screener.in (NSE classification),ok,2026-09-28,Metals & Mining
 ONMOBILE,OnMobile Global Ltd,Consumer Discretionary,"Media, Entertainment & Publication",Media,Web based media and service,screener.in (NSE classification),ok,2026-09-28,
-ONWARDTEC,Onward Technologies Ltd,Information Technology,Information Technology,IT - Services,IT Enabled Services,screener.in (NSE classification),ok,2026-09-28,
+ONWARDTEC,Onward Technologies Ltd,Information Technology,Information Technology,IT - Services,IT Enabled Services,screener.in (NSE classification),ok,2026-09-28,IT
 OPTIEMUS,Optiemus Infracom Ltd,Telecommunication,Telecommunication,Telecom -  Equipment & Accessories,Telecom -  Equipment & Accessories,screener.in (NSE classification),ok,2026-09-25,IT
 OPTIFIN,Optimus Finance Ltd,Financial Services,Financial Services,Finance,Non Banking Financial Company (NBFC),screener.in (NSE classification),ok,2026-09-28,
 ORBTEXP,Orbit Exports Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,
@@ -1650,12 +1666,13 @@ PARACABLES,Paramount Communications Ltd,Industrials,Capital Goods,Industrial Pro
 PARADEEP,Paradeep Phosphates Ltd,Commodities,Chemicals,Fertilizers & Agrochemicals,Fertilizers,screener.in (NSE classification),ok,2026-09-25,Chemicals
 PARAGMILK,Parag Milk Foods Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Food Products,Dairy Products,screener.in (NSE classification),ok,2026-09-25,FMCG
 PARAS,Paras Defence and Space Technologies Ltd,Industrials,Capital Goods,Aerospace & Defense,Aerospace & Defense,screener.in (NSE classification),ok,2026-09-25,Defence
+PARASHLTH,Paras Healthcare Ltd,Healthcare,Healthcare,Healthcare Services,Hospital,screener.in (NSE classification),ok,2026-10-29,
 PARASPETRO,Paras Petrofils Ltd,Financial Services,Financial Services,Finance,Investment Company,screener.in (NSE classification),ok,2026-09-28,
 PARIN,Parin Enterprises Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,"Furniture, Home Furnishing",screener.in (NSE classification),ok,2026-09-28,
 PARKHOSPS,Park Medi World Ltd,Healthcare,Healthcare,Healthcare Services,Hospital,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
 PARKHOTELS,Apeejay Surrendra Park Hotels Ltd,Consumer Discretionary,Consumer Services,Leisure Services,Hotels & Resorts,screener.in (NSE classification),ok,2026-09-28,
 PARNAXLAB,Parnax Lab Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-28,
-PASHUPATI,Pashupati Cotspin Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,
+PASHUPATI,Pashupati Cotspin Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,Textiles
 PASUPTAC,Pasupati Acrylon Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Petrochemicals,screener.in (NSE classification),ok,2026-09-28,
 PATANJALI,Patanjali Foods Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Agricultural Food & other Products,Edible Oil,screener.in (NSE classification),ok,2026-09-25,FMCG
 PATELENG,Patel Engineering Ltd,Industrials,Construction,Construction,Civil Construction,screener.in (NSE classification),ok,2026-09-25,Infrastructure
@@ -1679,7 +1696,7 @@ PETRONET,Petronet LNG Ltd,Energy,"Oil, Gas & Consumable Fuels",Gas,LPG/CNG/PNG/L
 PFC,Power Finance Corporation Ltd,Financial Services,Financial Services,Finance,Financial Institution,screener.in (NSE classification),ok,2026-09-25,Power & Utilities
 PFIZER,Pfizer Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
 PFOCUS,Prime Focus Ltd,Consumer Discretionary,"Media, Entertainment & Publication",Entertainment,Media & Entertainment,screener.in (NSE classification),ok,2026-09-25,Media & Entertainment
-PFS,PTC India Financial Services Ltd,Financial Services,Financial Services,Finance,Non Banking Financial Company (NBFC),screener.in (NSE classification),ok,2026-09-28,
+PFS,PTC India Financial Services Ltd,Financial Services,Financial Services,Finance,Non Banking Financial Company (NBFC),screener.in (NSE classification),ok,2026-09-28,Financial Services
 PGEL,PG Electroplast Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Consumer Electronics,screener.in (NSE classification),ok,2026-09-25,IT
 PGHH,Procter & Gamble Hygiene and Health Care Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Personal Products,Personal Care,screener.in (NSE classification),ok,2026-09-28,FMCG
 PGHL,Procter & Gamble Health Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-28,Pharma & Healthcare
@@ -1700,7 +1717,7 @@ PITTIENG,Pitti Engineering Ltd,Industrials,Capital Goods,Industrial Manufacturin
 PIXTRANS,Pix Transmission Ltd,Industrials,Capital Goods,Industrial Products,Rubber,screener.in (NSE classification),ok,2026-09-28,Capital Goods
 PKTEA,The Peria Karamalai Tea & Produce Company Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Agricultural Food & other Products,Tea & Coffee,screener.in (NSE classification),ok,2026-09-28,
 PLASTIBLEN,Plastiblends India Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Specialty Chemicals,screener.in (NSE classification),ok,2026-09-28,
-PLATIND,Platinum Industries Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Specialty Chemicals,screener.in (NSE classification),ok,2026-09-28,
+PLATIND,Platinum Industries Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Specialty Chemicals,screener.in (NSE classification),ok,2026-09-28,Chemicals
 PLAZACABLE,Plaza Wires Ltd,Industrials,Capital Goods,Industrial Products,Cables - Electricals,screener.in (NSE classification),ok,2026-09-28,
 PML,Paul Merchants Ltd,Financial Services,Financial Services,Finance,Other Financial Services,screener.in (NSE classification),ok,2026-09-28,
 PNB,Punjab National Bank,Financial Services,Financial Services,Banks,Public Sector Bank,screener.in (NSE classification),ok,2026-09-25,Banking
@@ -1725,6 +1742,7 @@ POWERGRID,Power Grid Corporation of India Ltd,Utilities,Power,Power,Power - Tran
 POWERICA,Powerica Ltd,Industrials,Capital Goods,Electrical Equipment,Heavy Electrical Equipment,screener.in (NSE classification),ok,2026-09-25,Power & Utilities
 POWERINDIA,Hitachi Energy India Ltd,Industrials,Capital Goods,Electrical Equipment,Heavy Electrical Equipment,screener.in (NSE classification),ok,2026-09-25,Power & Utilities
 POWERMECH,Power Mech Projects Ltd,Industrials,Construction,Construction,Civil Construction,screener.in (NSE classification),ok,2026-09-25,Infrastructure
+PPAP,PPAP Automotive Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-28,
 PPL,Prakash Pipes Ltd,Industrials,Capital Goods,Industrial Products,Plastic Products - Industrial,screener.in (NSE classification),ok,2026-10-05,
 PPLPHARMA,Piramal Pharma Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
 PRABHA,Prabha Energy Ltd,Energy,"Oil, Gas & Consumable Fuels",Oil,Oil Exploration & Production,screener.in (NSE classification),ok,2026-09-25,Oil & Gas
@@ -1803,7 +1821,7 @@ RAMBHAJO,Advit Jewels Ltd,Consumer Discretionary,Consumer Durables,Consumer Dura
 RAMCOCEM,The Ramco Cements Ltd,Commodities,Construction Materials,Cement & Cement Products,Cement & Cement Products,screener.in (NSE classification),ok,2026-09-25,Cement & Building Materials
 RAMCOIND,Ramco Industries Ltd,Commodities,Construction Materials,Other Construction Materials,Other Construction Materials,screener.in (NSE classification),ok,2026-09-28,Cement & Building Materials
 RAMCOSYS,Ramco Systems Ltd,Information Technology,Information Technology,IT - Software,Software Products,screener.in (NSE classification),ok,2026-09-28,IT
-RAMKY,Ramky Infrastructure Ltd,Industrials,Construction,Construction,Civil Construction,screener.in (NSE classification),ok,2026-09-28,
+RAMKY,Ramky Infrastructure Ltd,Industrials,Construction,Construction,Civil Construction,screener.in (NSE classification),ok,2026-09-28,Infrastructure
 RAMRAT,Ram Ratna Wires Ltd,Industrials,Capital Goods,Electrical Equipment,Other Electrical Equipment,screener.in (NSE classification),ok,2026-09-25,Capital Goods
 RANASUG,Rana Sugars Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Agricultural Food & other Products,Sugar,screener.in (NSE classification),ok,2026-09-28,
 RANEHOLDIN,Rane Holdings Ltd,Financial Services,Financial Services,Finance,Holding Company,screener.in (NSE classification),ok,2026-09-25,Automobile
@@ -1867,13 +1885,11 @@ RPEL,Raghav Productivity Enhancers Ltd,Industrials,Capital Goods,Industrial Prod
 RPGLIFE,RPG Life Sciences Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
 RPOWER,Reliance Power Ltd,Utilities,Power,Power,Power Generation,screener.in (NSE classification),ok,2026-09-25,Power & Utilities
 RPPINFRA,RPP Infra Projects Ltd,Industrials,Construction,Construction,Civil Construction,screener.in (NSE classification),ok,2026-09-28,
-RPPL,Rajshree Polypack Ltd,Industrials,Capital Goods,Industrial Products,Packaging,screener.in (NSE classification),ok,2026-09-28,
 RPSGVENT,RPSG Ventures Ltd,Services,Services,Commercial Services & Supplies,Business Process Outsourcing (BPO)/ Knowledge Process Outsourcing (KPO),screener.in (NSE classification),ok,2026-09-25,Diversified
 RPTECH,Rashi Peripherals Ltd,Information Technology,Information Technology,IT - Hardware,Computers Hardware & Equipments,screener.in (NSE classification),ok,2026-09-25,IT
 RRECL,RDB Real Estate Construction Ltd,Consumer Discretionary,Realty,Realty,"Residential, Commercial Projects",screener.in (NSE classification),ok,2026-09-28,
 RRIL,RRIL Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,
 RRKABEL,R R Kabel Ltd,Industrials,Capital Goods,Industrial Products,Cables - Electricals,screener.in (NSE classification),ok,2026-09-25,Capital Goods
-RSDFIN,RSD Finance Ltd,Financial Services,Financial Services,Finance,Non Banking Financial Company (NBFC),screener.in (NSE classification),ok,2026-09-28,
 RSL,Rajputana Stainless Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-25,Metals & Mining
 RSSOFTWARE,R S Software (India) Ltd,Information Technology,Information Technology,IT - Software,Computers - Software & Consulting,screener.in (NSE classification),ok,2026-09-28,
 RSWM,RSWM Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,
@@ -1897,7 +1913,6 @@ RVTH,Revathi Equipment India Ltd,Industrials,Capital Goods,Industrial Manufactur
 S&SPOWER,S & S Power Switchgear Ltd,Industrials,Capital Goods,Electrical Equipment,Other Electrical Equipment,screener.in (NSE classification),ok,2026-09-28,
 SAATVIKGL,Saatvik Green Energy Ltd,Industrials,Capital Goods,Electrical Equipment,Other Electrical Equipment,screener.in (NSE classification),ok,2026-09-28,Renewables
 SAB,SAB Industries Ltd,Industrials,Construction,Construction,Civil Construction,screener.in (NSE classification),ok,2026-09-28,
-SABEVENTS,SAB Events & Governance Now Media Ltd,Consumer Discretionary,"Media, Entertainment & Publication",Media,Electronic Media,screener.in (NSE classification),ok,2026-09-28,
 SADBHAV,Sadbhav Engineering Ltd,Industrials,Construction,Construction,Civil Construction,screener.in (NSE classification),ok,2026-09-28,
 SADBHIN,Sadbhav Infrastructure Projects Ltd,Industrials,Construction,Construction,Civil Construction,screener.in (NSE classification),ok,2026-09-28,
 SADHNANIQ,Sadhana Nitro Chem Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Commodity Chemicals,screener.in (NSE classification),ok,2026-10-12,
@@ -1932,7 +1947,7 @@ SANDUMA,Sandur Manganese & Iron Ores Ltd,Commodities,Metals & Mining,Ferrous Met
 SANGAMIND,Sangam (India) Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,Textiles
 SANGHVIMOV,Sanghvi Movers Ltd,Services,Services,Commercial Services & Supplies,Diversified Commercial Services,screener.in (NSE classification),ok,2026-09-28,Infrastructure
 SANOFI,Sanofi India Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
-SANOFICONR,Sanofi Consumer Healthcare India Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-28,
+SANOFICONR,Sanofi Consumer Healthcare India Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-28,Pharma & Healthcare
 SANSERA,Sansera Engineering Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-25,Automobile
 SANSTAR,Sanstar Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Agricultural Food & other Products,Other Agricultural Products,screener.in (NSE classification),ok,2026-09-25,Chemicals
 SAPPHIRE,Sapphire Foods India Ltd,Consumer Discretionary,Consumer Services,Leisure Services,Restaurants,screener.in (NSE classification),ok,2026-09-25,Consumer Services
@@ -1955,6 +1970,7 @@ SBICARD,SBI Cards & Payment Services Ltd,Financial Services,Financial Services,F
 SBIFUNDS,SBI Funds Management Ltd,Financial Services,Financial Services,Capital Markets,Asset Management Company,screener.in (NSE classification),ok,2026-09-25,Financial Services
 SBILIFE,SBI Life Insurance Company Ltd,Financial Services,Financial Services,Insurance,Life Insurance,screener.in (NSE classification),ok,2026-09-25,Financial Services
 SBIN,State Bank of India,Financial Services,Financial Services,Banks,Public Sector Bank,screener.in (NSE classification),ok,2026-09-25,Banking
+SBINEXT50,,,,,,,not_on_source,,
 SCANSTL,Scan Steels Ltd,Commodities,Metals & Mining,Ferrous Metals,Iron & Steel,screener.in (NSE classification),ok,2026-09-28,
 SCHAEFFLER,Schaeffler India Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-25,Automobile
 SCHAND,S Chand & Company Ltd,Consumer Discretionary,"Media, Entertainment & Publication",Printing & Publication,Printing & Publication,screener.in (NSE classification),ok,2026-09-28,
@@ -1980,6 +1996,7 @@ SERVOTECH,Servotech Renewable Power System Ltd,Industrials,Capital Goods,Electri
 SESHAPAPER,Seshasayee Paper & Boards Ltd,Commodities,Forest Materials,"Paper, Forest & Jute Products",Paper & Paper Products,screener.in (NSE classification),ok,2026-09-28,
 SETCO,Setco Automotive Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-10-12,
 SETL,Standard Engineering Technology Ltd,Industrials,Capital Goods,Industrial Manufacturing,Industrial Products,screener.in (NSE classification),ok,2026-09-25,Capital Goods
+SFCTECH,SFC Environmental Technologies Ltd,,,,,,unclassified_on_source,2026-11-03,
 SFL,Sheela Foam Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,"Furniture, Home Furnishing",screener.in (NSE classification),ok,2026-09-25,Consumer Durables
 SGFIN,SG Finserve Ltd,Financial Services,Financial Services,Finance,Non Banking Financial Company (NBFC),screener.in (NSE classification),ok,2026-09-25,Financial Services
 SGIL,Synergy Green Industries Ltd,Industrials,Capital Goods,Industrial Products,Castings & Forgings,screener.in (NSE classification),ok,2026-09-28,
@@ -1990,6 +2007,7 @@ SGRL,Shree Ganesh Remedies Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechno
 SHADOWFAX,Shadowfax Technologies Ltd,Services,Services,Transport Services,Logistics Solution Provider,screener.in (NSE classification),ok,2026-09-25,Logistics
 SHAH,Shah Metacorp Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-28,
 SHAHALLOYS,Shah Alloys Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-28,
+SHAHINVEST,Shah Investors Home Ltd,Financial Services,Financial Services,Capital Markets,Stockbroking & Allied,screener.in (NSE classification),ok,2026-10-22,
 SHAILY,Shaily Engineering Plastics Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Plastic Products - Consumer,screener.in (NSE classification),ok,2026-09-25,Capital Goods
 SHAKTIPUMP,Shakti Pumps (India) Ltd,Industrials,Capital Goods,Industrial Products,"Compressors, Pumps & Diesel Engines",screener.in (NSE classification),ok,2026-09-25,Renewables
 SHALBY,Shalby Ltd,Healthcare,Healthcare,Healthcare Services,Hospital,screener.in (NSE classification),ok,2026-09-28,
@@ -2025,7 +2043,7 @@ SHRADHA,Shradha Realty Ltd,Consumer Discretionary,Realty,Realty,"Residential, Co
 SHREDIGCEM,Shree Digvijay Cement Co. Ltd,Commodities,Construction Materials,Cement & Cement Products,Cement & Cement Products,screener.in (NSE classification),ok,2026-09-28,
 SHREECEM,Shree Cement Ltd,Commodities,Construction Materials,Cement & Cement Products,Cement & Cement Products,screener.in (NSE classification),ok,2026-09-25,Cement & Building Materials
 SHREEJISPG,Shreeji Shipping Global Ltd,Services,Services,Transport Services,Shipping,screener.in (NSE classification),ok,2026-09-25,Logistics
-SHREEPUSHK,Shree Pushkar Chemicals & Fertilizers Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Dyes And Pigments,screener.in (NSE classification),ok,2026-09-28,
+SHREEPUSHK,Shree Pushkar Chemicals & Fertilizers Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Dyes And Pigments,screener.in (NSE classification),ok,2026-09-28,Chemicals
 SHREERAMA,Shree Rama Multi-Tech Ltd,Industrials,Capital Goods,Industrial Products,Packaging,screener.in (NSE classification),ok,2026-09-28,
 SHREYANIND,Shreyans Industries Ltd,Commodities,Forest Materials,"Paper, Forest & Jute Products",Paper & Paper Products,screener.in (NSE classification),ok,2026-09-28,
 SHRIKRISH,Shri Krishna Devcon Ltd,Consumer Discretionary,Realty,Realty,"Residential, Commercial Projects",screener.in (NSE classification),ok,2026-09-28,
@@ -2049,7 +2067,6 @@ SIGMAADV,Sigma Advanced System Ltd,Industrials,Capital Goods,Aerospace & Defense
 SIGNATURE,SignatureGlobal India Ltd,Consumer Discretionary,Realty,Realty,"Residential, Commercial Projects",screener.in (NSE classification),ok,2026-09-25,Realty
 SIGNPOST,Signpost India Ltd,Consumer Discretionary,"Media, Entertainment & Publication",Media,Advertising & Media Agencies,screener.in (NSE classification),ok,2026-09-28,Media & Entertainment
 SIKA,Sika Interplant Systems Ltd,Industrials,Capital Goods,Aerospace & Defense,Aerospace & Defense,screener.in (NSE classification),ok,2026-09-28,Defence
-SIKKO,Sikko Industries Ltd,Commodities,Chemicals,Fertilizers & Agrochemicals,Pesticides & Agrochemicals,screener.in (NSE classification),ok,2026-09-28,
 SIL,Standard Industries Ltd,Consumer Discretionary,Realty,Realty,Real Estate related services,screener.in (NSE classification),ok,2026-09-28,
 SILGO,Silgo Retail Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,"Gems, Jewellery And Watches",screener.in (NSE classification),ok,2026-09-28,
 SILINV,SIL Investments Ltd,Financial Services,Financial Services,Finance,Investment Company,screener.in (NSE classification),ok,2026-09-28,
@@ -2073,11 +2090,13 @@ SKIPPER,Skipper Ltd,Industrials,Capital Goods,Electrical Equipment,Heavy Electri
 SKMEGGPROD,SKM Egg Products Export (India) Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Food Products,Meat Products including Poultry,screener.in (NSE classification),ok,2026-09-28,FMCG
 SKYGOLD,Sky Gold & Diamonds Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,"Gems, Jewellery And Watches",screener.in (NSE classification),ok,2026-09-25,Gems & Jewellery
 SKYWAYS,Skyways Air Services Ltd,Services,Services,Transport Services,Logistics Solution Provider,screener.in (NSE classification),ok,2026-09-25,Logistics
+SMARTLINK,Smartlink Holdings Ltd,Information Technology,Information Technology,IT - Hardware,Computers Hardware & Equipments,screener.in (NSE classification),ok,2026-10-22,
 SMARTWORKS,Smartworks Coworking Spaces Ltd,Services,Services,Commercial Services & Supplies,Diversified Commercial Services,screener.in (NSE classification),ok,2026-09-28,Realty
 SMCGLOBAL,SMC Global Securities Ltd,Financial Services,Financial Services,Capital Markets,Stockbroking & Allied,screener.in (NSE classification),ok,2026-09-25,Financial Services
 SMLMAH,SML Mahindra Ltd,Industrials,Capital Goods,"Agricultural, Commercial & Construction Vehicles",Commercial Vehicles,screener.in (NSE classification),ok,2026-09-25,Automobile
 SMLT,Sarthak Metals Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-28,
 SMSPHARMA,SMS Pharmaceuticals Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
+SMT,Sahajanand Medical Technologies Ltd,Healthcare,Healthcare,Healthcare Equipment & Supplies,Medical Equipment & Supplies,screener.in (NSE classification),ok,2026-10-26,
 SNOWMAN,Snowman Logistics Ltd,Services,Services,Transport Services,Logistics Solution Provider,screener.in (NSE classification),ok,2026-09-28,
 SOBHA,Sobha Ltd,Consumer Discretionary,Realty,Realty,"Residential, Commercial Projects",screener.in (NSE classification),ok,2026-09-25,Realty
 SOFTTECH,Softtech Engineers Ltd,Information Technology,Information Technology,IT - Software,Computers - Software & Consulting,screener.in (NSE classification),ok,2026-09-28,
@@ -2115,6 +2134,7 @@ SRF,SRF Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Commodity Chemicals
 SRGHFL,SRG Housing Finance Ltd,Financial Services,Financial Services,Finance,Housing Finance Company,screener.in (NSE classification),ok,2026-09-28,
 SRHHYPOLTD,Sree Rayalaseema Hi-Strength Hypo Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Commodity Chemicals,screener.in (NSE classification),ok,2026-09-28,
 SRIKPRIND,Sri KPR Industries Ltd,Industrials,Capital Goods,Industrial Products,Plastic Products - Industrial,screener.in (NSE classification),ok,2026-09-28,
+SRIT,SRIT India Ltd,Information Technology,Information Technology,IT - Services,IT Enabled Services,screener.in (NSE classification),ok,2026-10-22,
 SRM,SRM Contractors Ltd,Industrials,Construction,Construction,Civil Construction,screener.in (NSE classification),ok,2026-09-28,
 SRTL,Shree Ram Twistex Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,
 SSDL,Saraswati Saree Depot Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Garments & Apparels,screener.in (NSE classification),ok,2026-09-28,
@@ -2147,6 +2167,7 @@ SUBEXLTD,Subex Ltd,Information Technology,Information Technology,IT - Software,S
 SUBROS,Subros Ltd,Industrials,Capital Goods,Industrial Products,Other Industrial Products,screener.in (NSE classification),ok,2026-09-28,
 SUDARCOLOR,Sudarshan Colorants India Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Dyes And Pigments,screener.in (NSE classification),ok,2026-09-28,
 SUDARSCHEM,Sudarshan Chemical Industries Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Dyes And Pigments,screener.in (NSE classification),ok,2026-09-25,Chemicals
+SUDARSHAN,Sudarshan Pharma Industries Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Specialty Chemicals,screener.in (NSE classification),ok,2026-10-29,
 SUDEEPPHRM,Sudeep Pharma Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-25,Chemicals
 SUKHJITS,Sukhjit Starch & Chemicals Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Agricultural Food & other Products,Other Agricultural Products,screener.in (NSE classification),ok,2026-09-28,
 SULA,Sula Vineyards Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Beverages,Breweries & Distilleries,screener.in (NSE classification),ok,2026-09-28,FMCG
@@ -2170,6 +2191,7 @@ SUNSHINE,Sunshine Pictures Ltd,Consumer Discretionary,"Media, Entertainment & Pu
 SUNTECK,Sunteck Realty Ltd,Consumer Discretionary,Realty,Realty,"Residential, Commercial Projects",screener.in (NSE classification),ok,2026-09-25,Realty
 SUNTV,Sun TV Network Ltd,Consumer Discretionary,"Media, Entertainment & Publication",Entertainment,TV Broadcasting & Software Production,screener.in (NSE classification),ok,2026-09-25,Media & Entertainment
 SUPERHOUSE,Superhouse Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Leather And Leather Products,screener.in (NSE classification),ok,2026-09-28,
+SUPERSPIN,Super Spinning Mills Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-11-03,
 SUPRAJIT,Suprajit Engineering Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-28,Automobile
 SUPREME,Supreme Holdings & Hospitality Ltd,Consumer Discretionary,Realty,Realty,"Residential, Commercial Projects",screener.in (NSE classification),ok,2026-09-28,
 SUPREMEIND,Supreme Industries Ltd,Industrials,Capital Goods,Industrial Products,Plastic Products - Industrial,screener.in (NSE classification),ok,2026-09-25,Capital Goods
@@ -2207,6 +2229,7 @@ SYMPHONY,Symphony Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables
 SYNCOMF,Syncom Formulations (India) Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
 SYNGENE,Syngene International Ltd,Healthcare,Healthcare,Healthcare Services,"Healthcare Research, Analytics & Technology",screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
 SYRMA,Syrma SGS Technology Ltd,Industrials,Capital Goods,Industrial Manufacturing,Industrial Products,screener.in (NSE classification),ok,2026-09-25,IT
+SYSTMTXC,Systematix Corporate Services Ltd,Financial Services,Financial Services,Capital Markets,Stockbroking & Allied,screener.in (NSE classification),ok,2026-11-02,
 TAALTECH,TAAL Tech Ltd,Services,Services,Transport Services,Airline,screener.in (NSE classification),ok,2026-09-28,Consumer Services
 TAINWALCHM,Tainwala Chemicals & Plastics (India) Ltd,Industrials,Capital Goods,Industrial Products,Plastic Products - Industrial,screener.in (NSE classification),ok,2026-09-28,
 TAJGVK,TajGVK Hotels & Resorts Ltd,Consumer Discretionary,Consumer Services,Leisure Services,Hotels & Resorts,screener.in (NSE classification),ok,2026-09-28,
@@ -2287,7 +2310,6 @@ TINNARUBR,Tinna Rubber & Infrastructure Ltd,Industrials,Capital Goods,Industrial
 TIPSFILMS,Tips Films Ltd,Consumer Discretionary,"Media, Entertainment & Publication",Entertainment,"Film Production, Distribution & Exhibition",screener.in (NSE classification),ok,2026-09-28,
 TIPSMUSIC,Tips Music Ltd,Consumer Discretionary,"Media, Entertainment & Publication",Entertainment,Media & Entertainment,screener.in (NSE classification),ok,2026-09-25,Media & Entertainment
 TIRUMALCHM,Thirumalai Chemicals Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Commodity Chemicals,screener.in (NSE classification),ok,2026-09-28,Chemicals
-TIRUPATIFL,Tirupati Forge Ltd,Industrials,Capital Goods,Industrial Products,Castings & Forgings,screener.in (NSE classification),ok,2026-09-28,
 TITAGARH,Titagarh Rail Systems Ltd,Industrials,Capital Goods,Industrial Manufacturing,Railway Wagons,screener.in (NSE classification),ok,2026-09-25,Capital Goods
 TITAN,Titan Company Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,"Gems, Jewellery And Watches",screener.in (NSE classification),ok,2026-09-25,Gems & Jewellery
 TMB,Tamilnad Mercantile Bank Ltd,Financial Services,Financial Services,Banks,Private Sector Bank,screener.in (NSE classification),ok,2026-09-25,Banking
@@ -2298,6 +2320,7 @@ TNPL,Tamil Nadu Newsprint & Papers Ltd,Commodities,Forest Materials,"Paper, Fore
 TNTELE,Tamil Nadu Telecommunications Ltd,Telecommunication,Telecommunication,Telecom -  Equipment & Accessories,Telecom -  Equipment & Accessories,screener.in (NSE classification),ok,2026-09-28,
 TOKYOPLAST,Tokyo Plast International Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Plastic Products - Consumer,screener.in (NSE classification),ok,2026-09-28,
 TOLINS,Tolins Tyres Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Tyres & Rubber Products,screener.in (NSE classification),ok,2026-09-28,
+TONBO,Tonbo Imaging India Ltd,Industrials,Capital Goods,Aerospace & Defense,Aerospace & Defense,screener.in (NSE classification),ok,2026-10-26,
 TORNTPHARM,Torrent Pharmaceuticals Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-25,Pharma & Healthcare
 TORNTPOWER,Torrent Power Ltd,Utilities,Power,Power,Integrated Power Utilities,screener.in (NSE classification),ok,2026-09-25,Power & Utilities
 TOTAL,Total Transport Systems Ltd,Services,Services,Transport Services,Logistics Solution Provider,screener.in (NSE classification),ok,2026-09-28,
@@ -2309,6 +2332,7 @@ TRACXN,Tracxn Technologies Ltd,Services,Services,Commercial Services & Supplies,
 TRANSCOR,Transcorp International Ltd,Financial Services,Financial Services,Finance,Other Financial Services,screener.in (NSE classification),ok,2026-09-28,
 TRANSPEK,Transpek Industry Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Commodity Chemicals,screener.in (NSE classification),ok,2026-09-28,
 TRANSRAILL,Transrail Lighting Ltd,Industrials,Capital Goods,Electrical Equipment,Heavy Electrical Equipment,screener.in (NSE classification),ok,2026-09-25,Infrastructure
+TRANSWORLD,Transworld Shipping Lines Ltd,Services,Services,Transport Services,Shipping,screener.in (NSE classification),ok,2026-10-22,
 TRAVELFOOD,Travel Food Services Ltd,Consumer Discretionary,Consumer Services,Leisure Services,Restaurants,screener.in (NSE classification),ok,2026-09-25,Consumer Services
 TREEHOUSE,Tree House Education & Accessories Ltd,Consumer Discretionary,Consumer Services,Other Consumer Services,Education,screener.in (NSE classification),ok,2026-09-28,
 TREJHARA,Trejhara Solutions Ltd,Information Technology,Information Technology,IT - Software,Computers - Software & Consulting,screener.in (NSE classification),ok,2026-09-28,
@@ -2320,6 +2344,7 @@ TRIGYN,Trigyn Technologies Ltd,Information Technology,Information Technology,IT 
 TRITONV,Triton Valves Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-28,
 TRITURBINE,Triveni Turbine Ltd,Industrials,Capital Goods,Electrical Equipment,Heavy Electrical Equipment,screener.in (NSE classification),ok,2026-09-25,Capital Goods
 TRIVENI,Triveni Engineering and Industries Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Agricultural Food & other Products,Sugar,screener.in (NSE classification),ok,2026-09-25,FMCG
+TRIVENIPT,Triveni Power Transmission Ltd,Utilities,Power,Power,Power - Transmission,screener.in (NSE classification),ok,2026-10-29,
 TRU,TruCap Finance Ltd,Financial Services,Financial Services,Finance,Non Banking Financial Company (NBFC),screener.in (NSE classification),ok,2026-09-28,
 TRUALT,TruAlt Bioenergy Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Agricultural Food & other Products,Other Agricultural Products,screener.in (NSE classification),ok,2026-09-25,Oil & Gas
 TSFINV,Tsf Investments Ltd,Financial Services,Financial Services,Finance,Investment Company,screener.in (NSE classification),ok,2026-09-28,
@@ -2335,7 +2360,6 @@ TVSMOTOR,TVS Motor Company Ltd,Consumer Discretionary,Automobile and Auto Compon
 TVSSCS,TVS Supply Chain Solutions Ltd,Services,Services,Transport Services,Logistics Solution Provider,screener.in (NSE classification),ok,2026-09-28,Logistics
 TVSSRICHAK,TVS Srichakra Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Tyres & Rubber Products,screener.in (NSE classification),ok,2026-09-28,Automobile
 TVTODAY,T.V. Today Network Ltd,Consumer Discretionary,"Media, Entertainment & Publication",Entertainment,TV Broadcasting & Software Production,screener.in (NSE classification),ok,2026-09-28,
-TVVISION,TV Vision Ltd,Consumer Discretionary,"Media, Entertainment & Publication",Entertainment,TV Broadcasting & Software Production,screener.in (NSE classification),ok,2026-09-28,
 UBL,United Breweries Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Beverages,Breweries & Distilleries,screener.in (NSE classification),ok,2026-09-25,FMCG
 UCAL,Ucal Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-28,
 UCOBANK,UCO Bank,Financial Services,Financial Services,Banks,Public Sector Bank,screener.in (NSE classification),ok,2026-09-25,Banking
@@ -2350,6 +2374,7 @@ UGROCAP,Ugro Capital Ltd,Financial Services,Financial Services,Finance,Non Banki
 UJJIVANSFB,Ujjivan Small Finance Bank Ltd,Financial Services,Financial Services,Banks,Other Bank,screener.in (NSE classification),ok,2026-09-25,Banking
 ULTRACEMCO,UltraTech Cement Ltd,Commodities,Construction Materials,Cement & Cement Products,Cement & Cement Products,screener.in (NSE classification),ok,2026-09-25,Cement & Building Materials
 ULTRAMAR,Ultramarine & Pigments Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Dyes And Pigments,screener.in (NSE classification),ok,2026-09-28,Chemicals
+UMAEXPORTS,Uma Exports Ltd,Services,Services,Commercial Services & Supplies,Trading & Distributors,screener.in (NSE classification),ok,2026-10-22,
 UMESLTD,Usha Martin Education & Solutions Ltd,Consumer Discretionary,Consumer Services,Other Consumer Services,E-Learning,screener.in (NSE classification),ok,2026-09-28,
 UMIYA-MRO,Umiya Buildcon Ltd,Telecommunication,Telecommunication,Telecom -  Equipment & Accessories,Telecom -  Equipment & Accessories,screener.in (NSE classification),ok,2026-09-28,
 UNICHEMLAB,Unichem Laboratories Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-28,Pharma & Healthcare
@@ -2368,6 +2393,7 @@ UNIVCABLES,Universal Cables Ltd,Industrials,Capital Goods,Industrial Products,Ca
 UNOMINDA,Uno Minda Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-25,Automobile
 UPHOT,U P Hotels Ltd,Consumer Discretionary,Consumer Services,Leisure Services,Hotels & Resorts,screener.in (NSE classification),ok,2026-09-28,
 UPL,UPL Ltd,Commodities,Chemicals,Fertilizers & Agrochemicals,Pesticides & Agrochemicals,screener.in (NSE classification),ok,2026-09-25,Chemicals
+URAVIDEF,Uravi Defence & Technology Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-10-26,
 URBANCO,Urban Company Ltd,Consumer Discretionary,Consumer Services,Retailing,E-Retail/ E-Commerce,screener.in (NSE classification),ok,2026-09-25,Consumer Services
 URJA,Urja Global Ltd,Industrials,Capital Goods,Electrical Equipment,Other Electrical Equipment,screener.in (NSE classification),ok,2026-09-28,
 USHAMART,Usha Martin Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-25,Metals & Mining
@@ -2376,7 +2402,6 @@ UTIAMC,UTI Asset Management Company Ltd,Financial Services,Financial Services,Ca
 UTKARSHBNK,Utkarsh Small Finance Bank Ltd,Financial Services,Financial Services,Banks,Other Bank,screener.in (NSE classification),ok,2026-09-25,Banking
 UTLSOLAR,Fujiyama Power Systems Ltd,Industrials,Capital Goods,Electrical Equipment,Other Electrical Equipment,screener.in (NSE classification),ok,2026-09-25,Renewables
 UTTAMSUGAR,Uttam Sugar Mills Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Agricultural Food & other Products,Sugar,screener.in (NSE classification),ok,2026-09-28,FMCG
-UYFINCORP,U. Y. Fincorp Ltd,Financial Services,Financial Services,Finance,Non Banking Financial Company (NBFC),screener.in (NSE classification),ok,2026-09-28,
 V2RETAIL,V2 Retail Ltd,Consumer Discretionary,Consumer Services,Retailing,Speciality Retail,screener.in (NSE classification),ok,2026-09-25,Consumer Services
 VADILALIND,Vadilal Industries Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Food Products,Dairy Products,screener.in (NSE classification),ok,2026-09-28,FMCG
 VADILENT,Vadilal Enterprises Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Food Products,Dairy Products,screener.in (NSE classification),ok,2026-09-28,
@@ -2384,7 +2409,7 @@ VAIBHAVGBL,Vaibhav Global Ltd,Consumer Discretionary,Consumer Durables,Consumer 
 VAISHALI,Vaishali Pharma Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-28,
 VAKRANGEE,Vakrangee Ltd,Information Technology,Information Technology,IT - Services,IT Enabled Services,screener.in (NSE classification),ok,2026-09-28,
 VALIANTLAB,Valiant Laboratories Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-28,
-VALIANTORG,Valiant Organics Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Specialty Chemicals,screener.in (NSE classification),ok,2026-09-28,
+VALIANTORG,Valiant Organics Ltd,Commodities,Chemicals,Chemicals & Petrochemicals,Specialty Chemicals,screener.in (NSE classification),ok,2026-09-28,Chemicals
 VAML,Vedanta Aluminium Metal Ltd,Commodities,Metals & Mining,Non - Ferrous Metals,Aluminium,screener.in (NSE classification),ok,2026-09-25,Metals & Mining
 VARDHACRLC,Vardhman Acrylics Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-10-05,
 VARDMNPOLY,Vardhman Polytex Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,
@@ -2399,7 +2424,7 @@ VEDAVAAG,Vedavaag Systems Ltd,Information Technology,Information Technology,IT -
 VEDL,Vedanta Ltd,Commodities,Metals & Mining,Diversified Metals,Diversified Metals,screener.in (NSE classification),ok,2026-09-25,Metals & Mining
 VEDPOWER,Vedanta Power Ltd,Utilities,Power,Power,Power Generation,screener.in (NSE classification),ok,2026-09-25,Power & Utilities
 VEEDOL,Veedol Corporation Ltd,Energy,"Oil, Gas & Consumable Fuels",Petroleum Products,Lubricants,screener.in (NSE classification),ok,2026-09-28,
-VEEGALAND,Veegaland Developers Ltd,Consumer Discretionary,Realty,Realty,"Residential, Commercial Projects",screener.in (NSE classification),ok,2026-10-05,
+VEEGALAND,Veegaland Developers Ltd,Consumer Discretionary,Realty,Realty,"Residential, Commercial Projects",screener.in (NSE classification),ok,2026-10-05,Realty
 VENKEYS,Venkys (India) Ltd,Fast Moving Consumer Goods,Fast Moving Consumer Goods,Food Products,Meat Products including Poultry,screener.in (NSE classification),ok,2026-09-25,FMCG
 VENTIVE,Ventive Hospitality Ltd,Consumer Discretionary,Consumer Services,Leisure Services,Hotels & Resorts,screener.in (NSE classification),ok,2026-09-28,
 VENUSPIPES,Venus Pipes & Tubes Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-25,Metals & Mining
@@ -2450,6 +2475,7 @@ VMARCIND,V-Marc India Ltd,Industrials,Capital Goods,Industrial Products,Cables -
 VMART,V-Mart Retail Ltd,Consumer Discretionary,Consumer Services,Retailing,Diversified Retail,screener.in (NSE classification),ok,2026-09-25,Consumer Services
 VMM,Vishal Mega Mart Ltd,Consumer Discretionary,Consumer Services,Retailing,Diversified Retail,screener.in (NSE classification),ok,2026-09-25,Consumer Services
 VMSTMT,VMS TMT Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-28,
+VNL,Vishal Nirmiti Ltd,Industrials,Construction,Construction,Civil Construction,screener.in (NSE classification),ok,2026-10-26,
 VOEPL,Virtuoso Optoelectronics Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Diversified consumer products,screener.in (NSE classification),ok,2026-09-28,Consumer Durables
 VOGL,Vedanta Oil and Gas Ltd,Energy,"Oil, Gas & Consumable Fuels",Oil,Oil Exploration & Production,screener.in (NSE classification),ok,2026-09-25,Oil & Gas
 VOITHPAPR,Voith Paper Fabrics India Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-28,
@@ -2480,6 +2506,7 @@ WEIZMANIND,Weizmann Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Othe
 WEL,Wonder Electricals Ltd,Consumer Discretionary,Consumer Durables,Consumer Durables,Household Appliances,screener.in (NSE classification),ok,2026-09-25,IT
 WELCORP,Welspun Corp Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-25,Metals & Mining
 WELENT,Welspun Enterprises Ltd,Industrials,Construction,Construction,Civil Construction,screener.in (NSE classification),ok,2026-09-25,Infrastructure
+WELINV,Welspun Investments & Commercials Ltd,Financial Services,Financial Services,Finance,Investment Company,screener.in (NSE classification),ok,2026-10-26,
 WELSPLSOL,Welspun Specialty Solutions Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-28,
 WELSPUNLIV,Welspun Living Ltd,Consumer Discretionary,Textiles,Textiles & Apparels,Other Textile Products,screener.in (NSE classification),ok,2026-09-25,Textiles
 WENDT,Wendt India Ltd,Industrials,Capital Goods,Industrial Products,Abrasives & Bearings,screener.in (NSE classification),ok,2026-09-28,Capital Goods
@@ -2519,6 +2546,7 @@ ZENITHEXPO,Zenith Exports Ltd,Consumer Discretionary,Consumer Durables,Consumer 
 ZENITHSTL,Zenith Steel Pipes & Industries Ltd,Industrials,Capital Goods,Industrial Products,Iron & Steel Products,screener.in (NSE classification),ok,2026-09-28,
 ZENSARTECH,Zensar Technologies Ltd,Information Technology,Information Technology,IT - Software,Computers - Software & Consulting,screener.in (NSE classification),ok,2026-09-25,IT
 ZENTEC,Zen Technologies Ltd,Industrials,Capital Goods,Aerospace & Defense,Aerospace & Defense,screener.in (NSE classification),ok,2026-09-25,Defence
+ZETWERK,Zetwerk Manufacturing Businesses Ltd,Industrials,Capital Goods,Industrial Manufacturing,Industrial Products,screener.in (NSE classification),ok,2026-10-26,
 ZFCVINDIA,ZF Commercial Vehicle Control System India Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-25,Automobile
 ZFSTEERING,Z F Steering Gear (India) Ltd,Consumer Discretionary,Automobile and Auto Components,Auto Components,Auto Components & Equipments,screener.in (NSE classification),ok,2026-09-28,
 ZIMLAB,Zim Laboratories Ltd,Healthcare,Healthcare,Pharmaceuticals & Biotechnology,Pharmaceuticals,screener.in (NSE classification),ok,2026-09-28,
