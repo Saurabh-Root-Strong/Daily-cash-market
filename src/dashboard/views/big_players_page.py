@@ -351,9 +351,18 @@ def _render_positions_now(pb: dict) -> None:
             f"{n['last_date']:%d %b} ({_p(n['chg_pct'],0)} in {n['sessions']} sessions). "
             f"{'High' if rising else 'Low'} since then: {n['extreme_value']:,.0f} on {n['extreme_date']:%d %b}"
             f" — now {_p(n['off_extreme_pct'],0)} from it"
-            + (f"; a 30% turn the other way would mark a new {'peak' if rising else 'bottom'}."
-               if abs(n['off_extreme_pct'] or 0) < 30 else ".")
+            + (f"; it becomes a confirmed {'peak' if rising else 'bottom'} only if the 5-session median "
+               f"{'falls below' if rising else 'rises above'} <b>{n['confirm_level']:,.0f}</b> (hollow ▽△ on the chart)."
+               if n.get("confirm_level") else ".")
             + "</div>", unsafe_allow_html=True)
+    st.warning(
+        "**Will the ▲▼ marks appear like this in future?** Not at the same moment. A mark is drawn on the day of "
+        "the peak or bottom, but it can only be **confirmed** once the position has swung 30% the other way — "
+        "a median **7–8 sessions later** (2018–2026), by which time Nifty had already moved about **2–3.5%** from "
+        "its own turn. And only about 4 in 10 futures marks (1 in 3 options marks) coincided with a Nifty turn at "
+        "all; the rest were position swings with no price turn. On a finished chart you only notice the ones "
+        "that worked. Hover any mark to see when it was really confirmed; the hollow ▽△ is today's unconfirmed "
+        "candidate and the level that would confirm it.")
     st.caption(
         "How to use this: position peaks and bottoms line up with Nifty's swing turns at a median of 0 sessions "
         "(about a third before, a quarter the same day, the rest after) — about 4 in 10 futures turns and 1 in 3 "
@@ -937,8 +946,28 @@ def _swing_chart(pb: dict) -> go.Figure:
             textposition="top center" if peak else "bottom center",
             textfont=dict(size=10.5, color=col), hovertemplate=(
                 f"{'Longs' if t['side'] == 'L' and is_fut else 'Shorts' if is_fut else 'Bullish side' if t['side'] == 'L' else 'Bearish side'} "
-                f"{'PEAK' if peak else 'BOTTOM'} {td:%d %b %Y}: {t['value']:,.0f}<extra></extra>")),
+                f"{'PEAK' if peak else 'BOTTOM'} {td:%d %b %Y}: {t['value']:,.0f}"
+                + (f"<br>confirmed {t['confirmed']:%d %b} — {t['lag']} sessions later (this is when a live "
+                   "reader could first have known)" if t.get("confirmed") else "")
+                + "<extra></extra>")),
             row=2, col=1, secondary_y=(t["side"] == "S" and is_fut))
+    # the CURRENT extreme of each side: not a turn yet -- hollow marker + the level that confirms it
+    for side_, n_ in (bk.get("side_now") or {}).items():
+        if not n_ or n_.get("extreme_value") is None:
+            continue
+        col = "#26a69a" if side_ == "L" else "#ef5350"
+        rising = n_["direction"] == "rising"
+        fig.add_trace(go.Scatter(
+            x=[pd.Timestamp(n_["extreme_date"])], y=[n_["extreme_value"] / 1000], mode="markers+text",
+            marker=dict(symbol="triangle-down-open" if rising else "triangle-up-open", size=14, color=col,
+                        line=dict(width=2, color=col)),
+            text=[f"? {_cfmt(n_['extreme_value'])} (unconfirmed) "], textposition="middle left",
+            textfont=dict(size=10, color=col), showlegend=False,
+            hovertemplate=(f"UNCONFIRMED {'peak' if rising else 'bottom'} so far: {n_['extreme_value']:,.0f} "
+                           f"({pd.Timestamp(n_['extreme_date']):%d %b})<br>becomes a marked turn only if the 5-session "
+                           f"median {'falls below' if rising else 'rises above'} {n_['confirm_level']:,.0f}"
+                           "<extra></extra>")),
+            row=2, col=1, secondary_y=(side_ == "S" and is_fut))
     for d_, f_ in ((pd.Timestamp("2025-12-30"), 75 / 65),):
         if x0 <= d_ <= x1:
             fig.add_vline(x=d_, line_color="rgba(255,255,255,0.45)", line_dash="dash", line_width=1, row=2, col=1)
@@ -1157,6 +1186,13 @@ acted on at the next morning's open at the earliest.
   bottoms — and flips in the week AFTER. In options the flip is sharpest: bearish buildup in about half
   of the weeks after a top (vs 30% normally) and almost never in the week after a bottom (4%). So the
   flip confirms a turn; it does not predict it.
+- **Can FII data warn of a turn EARLY?** Tested 2018–2026 (scripts/study_early_warning.py): 26 evening-known
+  features — all four players' positions, FII's traded volume (buy share, churn, share of market volume),
+  rupee flow, open-interest value, put/call ratio — plus price, in a walk-forward model refit every year.
+  Judged fairly (tops only inside uptrends, bottoms only inside downtrends), **no FII or participant feature
+  added anything beyond price**; stepping aside on the model's warnings lagged simply holding Nifty
+  (+54–88% vs +108% since 2020) with the same −38% drawdown. The market-wide put/call ratio looked like
+  a top warning (8 of 9 years) but carries the same information as "price near its 20-day high".
 - **Data repair (16 Nov 2026):** 298 days in the NSE participant table held another date's file. All were
   re-downloaded and replaced; every number on this page is measured on the repaired data.
 

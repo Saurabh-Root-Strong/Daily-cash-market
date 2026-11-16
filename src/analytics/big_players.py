@@ -773,13 +773,17 @@ def _position_turns(idx, L: np.ndarray, S: np.ndarray) -> tuple[list[dict], dict
                 lo = i
             last = zz[-1][0] if zz else -1
             if d >= 0 and x[i] <= x[hi] * (1 - POS_TURN_PCT) and hi > last and hi > start:
-                zz.append((hi, "PEAK")); d, lo = -1, i
+                zz.append((hi, "PEAK", i)); d, lo = -1, i
             elif d <= 0 and x[i] >= x[lo] * (1 + POS_TURN_PCT) and lo > last and lo > start:
-                zz.append((lo, "TROUGH")); d, hi = 1, i
-        for i, k in zz:
-            turns.append({"side": side, "kind": k, "date": idx[i].date(), "value": _f(x[i])})
+                zz.append((lo, "TROUGH", i)); d, hi = 1, i
+        # A turn is only KNOWN on the day the 30% reversal completes ("confirmed"), not on the
+        # day it is drawn. Measured 2018-2026: median 7-8 sessions later, by which time Nifty had
+        # already moved ~2-3.5% from its own turn -- the chart looks perfect only in hindsight.
+        for i, k, ci in zz:
+            turns.append({"side": side, "kind": k, "date": idx[i].date(), "value": _f(x[i]),
+                          "confirmed": idx[ci].date(), "lag": int(ci - i)})
         if zz and np.isfinite(x[-1]):
-            i, k = zz[-1]
+            i, k, _ci = zz[-1]
             seg = x[i:]
             ext = int(np.nanargmax(seg) if k == "TROUGH" else np.nanargmin(seg)) + i
             now[side] = {"last_kind": k, "last_date": idx[i].date(), "last_value": _f(x[i]),
@@ -787,7 +791,10 @@ def _position_turns(idx, L: np.ndarray, S: np.ndarray) -> tuple[list[dict], dict
                          "sessions": int(len(x) - 1 - i),
                          "direction": "rising" if k == "TROUGH" else "falling",
                          "extreme_value": _f(x[ext]), "extreme_date": idx[ext].date(),
-                         "off_extreme_pct": _f((x[-1] / x[ext] - 1) * 100)}
+                         "off_extreme_pct": _f((x[-1] / x[ext] - 1) * 100),
+                         # the level that would CONFIRM the current extreme as a new turn
+                         "confirm_level": _f(x[ext] * (1 - POS_TURN_PCT) if k == "TROUGH"
+                                             else x[ext] * (1 + POS_TURN_PCT))}
     return turns, now
 
 
