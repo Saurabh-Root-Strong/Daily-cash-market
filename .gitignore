@@ -36,3 +36,6 @@ data/index_valuation_raw/
 
 # Screener page cache for stock classification (scripts/fetch_stock_classification.py)
 data/classification_raw/
+
+# resumable-run state for scripts/repair_participant_copies.py, not a record
+data/backup/repair_progress.json

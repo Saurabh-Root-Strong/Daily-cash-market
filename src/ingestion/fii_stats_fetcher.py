@@ -165,6 +165,12 @@ def _parse_fii_stats_xls(data: bytes, trade_date: date) -> pd.DataFrame:
     if raw.shape[1] < 6:
         raise ParseError(f"FII Stats has only {raw.shape[1]} columns (expected 7)")
 
+    # Same wrong-date-file defect as the participant CSV (see fao_fetcher.title_date):
+    # refuse a file whose title names another date.
+    stated = _date_from_title_row(raw)
+    if stated is not None and stated != trade_date:
+        raise ParseError(f"FII Stats file is for {stated}, not {trade_date}")
+
     # Assign fixed column names — structure is stable across report versions
     # Col 0: category | 1: buy_contracts | 2: buy_value_cr |
     # 3: sell_contracts | 4: sell_value_cr | 5: oi_contracts | 6: oi_value_cr

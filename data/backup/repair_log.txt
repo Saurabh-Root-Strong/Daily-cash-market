@@ -1,0 +1,728 @@
+suspects 401 · fao dates 2276 · fii dates 2270
+  fao 0/2276  7s  0 replaced 0 deleted
+  - fao 2018-03-02: no NSE file, not a session -> deleted
+  - fao 2018-03-29: no NSE file, not a session -> deleted
+  - fao 2018-03-30: no NSE file, not a session -> deleted
+  - fao 2018-05-01: no NSE file, not a session -> deleted
+  - fao 2018-08-15: no NSE file, not a session -> deleted
+  - fao 2018-08-22: no NSE file, not a session -> deleted
+  - fao 2018-10-02: no NSE file, not a session -> deleted
+  - fao 2018-10-18: no NSE file, not a session -> deleted
+  - fao 2018-11-08: no NSE file, not a session -> deleted
+  - fao 2018-11-23: no NSE file, not a session -> deleted
+  - fao 2018-12-25: no NSE file, not a session -> deleted
+  fao 25/2276  30s  0 replaced 11 deleted
+  - fao 2019-03-04: no NSE file, not a session -> deleted
+  - fao 2019-03-21: no NSE file, not a session -> deleted
+  - fao 2019-04-17: no NSE file, not a session -> deleted
+  - fao 2019-04-29: no NSE file, not a session -> deleted
+  - fao 2019-05-01: no NSE file, not a session -> deleted
+  - fao 2019-08-15: no NSE file, not a session -> deleted
+  - fao 2019-09-02: no NSE file, not a session -> deleted
+  - fao 2019-09-10: no NSE file, not a session -> deleted
+  - fao 2019-10-02: no NSE file, not a session -> deleted
+  - fao 2019-10-08: no NSE file, not a session -> deleted
+  - fao 2019-10-21: no NSE file, not a session -> deleted
+  - fao 2019-10-28: no NSE file, not a session -> deleted
+  - fao 2019-12-25: no NSE file, not a session -> deleted
+  fao 50/2276  51s  0 replaced 24 deleted
+  - fao 2020-02-21: no NSE file, not a session -> deleted
+  - fao 2020-03-10: no NSE file, not a session -> deleted
+  - fao 2020-04-02: no NSE file, not a session -> deleted
+  - fao 2020-04-06: no NSE file, not a session -> deleted
+  - fao 2020-04-10: no NSE file, not a session -> deleted
+  - fao 2020-04-14: no NSE file, not a session -> deleted
+  - fao 2020-05-01: no NSE file, not a session -> deleted
+  - fao 2020-10-02: no NSE file, not a session -> deleted
+  - fao 2020-11-16: no NSE file, not a session -> deleted
+  - fao 2020-11-30: no NSE file, not a session -> deleted
+  - fao 2021-03-11: no NSE file, not a session -> deleted
+  - fao 2021-03-29: no NSE file, not a session -> deleted
+  - fao 2021-04-14: no NSE file, not a session -> deleted
+  - fao 2021-04-21: no NSE file, not a session -> deleted
+  - fao 2021-05-13: no NSE file, not a session -> deleted
+  fao 75/2276  71s  0 replaced 39 deleted
+  - fao 2021-07-21: no NSE file, not a session -> deleted
+  - fao 2021-08-19: no NSE file, not a session -> deleted
+  - fao 2021-10-15: no NSE file, not a session -> deleted
+  - fao 2021-11-05: no NSE file, not a session -> deleted
+  - fao 2021-11-19: no NSE file, not a session -> deleted
+  - fao 2022-03-18: no NSE file, not a session -> deleted
+  - fao 2022-04-14: no NSE file, not a session -> deleted
+  - fao 2022-05-03: no NSE file, not a session -> deleted
+  - fao 2022-08-31: no NSE file, not a session -> deleted
+  - fao 2022-10-05: no NSE file, not a session -> deleted
+  - fao 2023-03-30: no NSE file, not a session -> deleted
+  - fao 2023-04-04: no NSE file, not a session -> deleted
+  - fao 2023-09-19: no NSE file, not a session -> deleted
+  fao 100/2276  92s  0 replaced 52 deleted
+  - fao 2023-10-02: no NSE file, not a session -> deleted
+  - fao 2023-10-24: no NSE file, not a session -> deleted
+  - fao 2023-11-27: no NSE file, not a session -> deleted
+  - fao 2023-12-25: no NSE file, not a session -> deleted
+  - fao 2024-03-08: no NSE file, not a session -> deleted
+  - fao 2024-03-25: no NSE file, not a session -> deleted
+  - fao 2024-03-29: no NSE file, not a session -> deleted
+  - fao 2024-04-11: no NSE file, not a session -> deleted
+  - fao 2024-04-17: no NSE file, not a session -> deleted
+  - fao 2024-05-01: no NSE file, not a session -> deleted
+  - fao 2024-05-20: no NSE file, not a session -> deleted
+  - fao 2024-06-17: no NSE file, not a session -> deleted
+  - fao 2024-07-17: no NSE file, not a session -> deleted
+  - fao 2024-08-15: no NSE file, not a session -> deleted
+  - fao 2024-10-02: no NSE file, not a session -> deleted
+  fao 125/2276  112s  0 replaced 67 deleted
+  - fao 2024-11-15: no NSE file, not a session -> deleted
+  - fao 2024-11-20: no NSE file, not a session -> deleted
+  - fao 2024-12-25: no NSE file, not a session -> deleted
+  * fao 2024-12-30: replaced with NSE's own file
+  * fao 2024-12-31: replaced with NSE's own file
+2026-11-15 12:45:40 [WARNING ] src.ingestion.http_client: Request error attempt 1/3 for https://nsearchives.nseindia.com/content/nsccl/fao_participant_vol_28012025.csv: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+  fao 150/2276  167s  2 replaced 70 deleted
+  * fao 2025-02-03: replaced with NSE's own file
+  * fao 2025-02-06: replaced with NSE's own file
+  * fao 2025-02-07: replaced with NSE's own file
+  * fao 2025-02-10: replaced with NSE's own file
+  * fao 2025-02-13: replaced with NSE's own file
+  * fao 2025-02-14: replaced with NSE's own file
+  * fao 2025-02-17: replaced with NSE's own file
+  * fao 2025-02-20: replaced with NSE's own file
+  * fao 2025-02-21: replaced with NSE's own file
+  * fao 2025-02-24: replaced with NSE's own file
+  * fao 2025-02-27: replaced with NSE's own file
+  * fao 2025-02-28: replaced with NSE's own file
+  * fao 2025-03-03: replaced with NSE's own file
+  * fao 2025-03-06: replaced with NSE's own file
+  * fao 2025-03-07: replaced with NSE's own file
+  * fao 2025-03-10: replaced with NSE's own file
+  * fao 2025-03-13: replaced with NSE's own file
+  - fao 2025-03-14: no NSE file, not a session -> deleted
+  * fao 2025-03-17: replaced with NSE's own file
+  * fao 2025-03-21: replaced with NSE's own file
+  * fao 2025-03-24: replaced with NSE's own file
+  * fao 2025-03-27: replaced with NSE's own file
+  fao 175/2276  200s  23 replaced 71 deleted
+  * fao 2025-03-28: replaced with NSE's own file
+  - fao 2025-03-31: no NSE file, not a session -> deleted
+  * fao 2025-04-01: replaced with NSE's own file
+  * fao 2025-04-02: replaced with NSE's own file
+  * fao 2025-04-03: replaced with NSE's own file
+  * fao 2025-04-07: replaced with NSE's own file
+  * fao 2025-04-08: replaced with NSE's own file
+  * fao 2025-04-09: replaced with NSE's own file
+  - fao 2025-04-10: no NSE file, not a session -> deleted
+  - fao 2025-04-14: no NSE file, not a session -> deleted
+  * fao 2025-04-15: replaced with NSE's own file
+  * fao 2025-04-16: replaced with NSE's own file
+  * fao 2025-04-17: replaced with NSE's own file
+  * fao 2025-04-21: replaced with NSE's own file
+  * fao 2025-04-22: replaced with NSE's own file
+  * fao 2025-04-23: replaced with NSE's own file
+  * fao 2025-04-24: replaced with NSE's own file
+  * fao 2025-04-28: replaced with NSE's own file
+  * fao 2025-04-29: replaced with NSE's own file
+  * fao 2025-04-30: replaced with NSE's own file
+  - fao 2025-05-01: no NSE file, not a session -> deleted
+  * fao 2025-05-02: replaced with NSE's own file
+  * fao 2025-05-06: replaced with NSE's own file
+  * fao 2025-05-07: replaced with NSE's own file
+  * fao 2025-05-08: replaced with NSE's own file
+  fao 200/2276  231s  44 replaced 75 deleted
+  * fao 2025-05-09: replaced with NSE's own file
+  * fao 2025-05-13: replaced with NSE's own file
+  * fao 2025-05-14: replaced with NSE's own file
+  * fao 2025-05-15: replaced with NSE's own file
+  * fao 2025-05-16: replaced with NSE's own file
+  * fao 2025-05-20: replaced with NSE's own file
+  * fao 2025-05-21: replaced with NSE's own file
+  * fao 2025-05-22: replaced with NSE's own file
+  * fao 2025-05-23: replaced with NSE's own file
+  * fao 2025-05-27: replaced with NSE's own file
+  * fao 2025-05-28: replaced with NSE's own file
+  * fao 2025-05-29: replaced with NSE's own file
+  * fao 2025-05-30: replaced with NSE's own file
+  * fao 2025-06-02: replaced with NSE's own file
+  * fao 2025-06-03: replaced with NSE's own file
+  * fao 2025-06-06: replaced with NSE's own file
+  * fao 2025-06-09: replaced with NSE's own file
+  * fao 2025-06-10: replaced with NSE's own file
+  * fao 2025-06-13: replaced with NSE's own file
+  * fao 2025-06-16: replaced with NSE's own file
+  * fao 2025-06-17: replaced with NSE's own file
+  * fao 2025-06-20: replaced with NSE's own file
+  * fao 2025-06-23: replaced with NSE's own file
+  * fao 2025-06-24: replaced with NSE's own file
+  * fao 2025-06-27: replaced with NSE's own file
+  fao 225/2276  265s  69 replaced 75 deleted
+  * fao 2025-06-30: replaced with NSE's own file
+  * fao 2025-07-01: replaced with NSE's own file
+  * fao 2025-07-02: replaced with NSE's own file
+  * fao 2025-07-03: replaced with NSE's own file
+  * fao 2025-07-07: replaced with NSE's own file
+  * fao 2025-07-08: replaced with NSE's own file
+  * fao 2025-07-09: replaced with NSE's own file
+  * fao 2025-07-10: replaced with NSE's own file
+  * fao 2025-07-14: replaced with NSE's own file
+  * fao 2025-07-15: replaced with NSE's own file
+  * fao 2025-07-16: replaced with NSE's own file
+  * fao 2025-07-17: replaced with NSE's own file
+  * fao 2025-07-21: replaced with NSE's own file
+  * fao 2025-07-22: replaced with NSE's own file
+  * fao 2025-07-23: replaced with NSE's own file
+  * fao 2025-07-24: replaced with NSE's own file
+  * fao 2025-07-28: replaced with NSE's own file
+  * fao 2025-07-29: replaced with NSE's own file
+  * fao 2025-07-30: replaced with NSE's own file
+  * fao 2025-07-31: replaced with NSE's own file
+  * fao 2025-08-01: replaced with NSE's own file
+  * fao 2025-08-06: replaced with NSE's own file
+  * fao 2025-08-07: replaced with NSE's own file
+  * fao 2025-08-08: replaced with NSE's own file
+  * fao 2025-08-13: replaced with NSE's own file
+  fao 250/2276  299s  94 replaced 75 deleted
+  * fao 2025-08-14: replaced with NSE's own file
+  - fao 2025-08-15: no NSE file, not a session -> deleted
+  * fao 2025-08-20: replaced with NSE's own file
+  * fao 2025-08-21: replaced with NSE's own file
+  * fao 2025-08-22: replaced with NSE's own file
+  - fao 2025-08-27: no NSE file, not a session -> deleted
+  * fao 2025-08-28: replaced with NSE's own file
+  * fao 2025-08-29: replaced with NSE's own file
+  * fao 2025-09-01: replaced with NSE's own file
+  * fao 2025-09-02: replaced with NSE's own file
+  * fao 2025-09-03: replaced with NSE's own file
+  * fao 2025-09-08: replaced with NSE's own file
+  * fao 2025-09-09: replaced with NSE's own file
+  * fao 2025-09-10: replaced with NSE's own file
+  * fao 2025-09-15: replaced with NSE's own file
+  * fao 2025-09-16: replaced with NSE's own file
+  * fao 2025-09-17: replaced with NSE's own file
+  * fao 2025-09-22: replaced with NSE's own file
+  * fao 2025-09-23: replaced with NSE's own file
+  * fao 2025-09-24: replaced with NSE's own file
+  * fao 2025-09-29: replaced with NSE's own file
+  * fao 2025-09-30: replaced with NSE's own file
+  * fao 2025-10-01: replaced with NSE's own file
+  - fao 2025-10-02: no NSE file, not a session -> deleted
+  * fao 2025-10-03: replaced with NSE's own file
+  fao 275/2276  331s  116 replaced 78 deleted
+  * fao 2025-10-06: replaced with NSE's own file
+  * fao 2025-10-07: replaced with NSE's own file
+  * fao 2025-10-08: replaced with NSE's own file
+  * fao 2025-10-09: replaced with NSE's own file
+  * fao 2025-10-10: replaced with NSE's own file
+  * fao 2025-10-13: replaced with NSE's own file
+  * fao 2025-10-14: replaced with NSE's own file
+  * fao 2025-10-15: replaced with NSE's own file
+  * fao 2025-10-16: replaced with NSE's own file
+  * fao 2025-10-17: replaced with NSE's own file
+  * fao 2025-10-20: replaced with NSE's own file
+  * fao 2025-10-21: replaced with NSE's own file
+  - fao 2025-10-22: no NSE file, not a session -> deleted
+  * fao 2025-10-23: replaced with NSE's own file
+  * fao 2025-10-24: replaced with NSE's own file
+  * fao 2025-10-27: replaced with NSE's own file
+  * fao 2025-10-28: replaced with NSE's own file
+  * fao 2025-10-29: replaced with NSE's own file
+  * fao 2025-10-30: replaced with NSE's own file
+  * fao 2025-10-31: replaced with NSE's own file
+  * fao 2025-11-03: replaced with NSE's own file
+  * fao 2025-11-06: replaced with NSE's own file
+  * fao 2025-11-07: replaced with NSE's own file
+  * fao 2025-11-10: replaced with NSE's own file
+  * fao 2025-11-13: replaced with NSE's own file
+  fao 300/2276  364s  140 replaced 79 deleted
+  * fao 2025-11-14: replaced with NSE's own file
+  * fao 2025-11-17: replaced with NSE's own file
+  * fao 2025-11-20: replaced with NSE's own file
+  * fao 2025-11-21: replaced with NSE's own file
+  * fao 2025-11-24: replaced with NSE's own file
+  * fao 2025-11-27: replaced with NSE's own file
+  * fao 2025-11-28: replaced with NSE's own file
+  * fao 2025-12-01: replaced with NSE's own file
+  * fao 2025-12-02: replaced with NSE's own file
+  * fao 2025-12-03: replaced with NSE's own file
+  * fao 2025-12-08: replaced with NSE's own file
+  * fao 2025-12-09: replaced with NSE's own file
+  * fao 2025-12-10: replaced with NSE's own file
+  * fao 2025-12-15: replaced with NSE's own file
+  * fao 2025-12-16: replaced with NSE's own file
+  * fao 2025-12-17: replaced with NSE's own file
+  * fao 2025-12-22: replaced with NSE's own file
+  * fao 2025-12-23: replaced with NSE's own file
+  * fao 2025-12-24: replaced with NSE's own file
+  * fao 2025-12-29: replaced with NSE's own file
+  * fao 2025-12-30: replaced with NSE's own file
+  * fao 2025-12-31: replaced with NSE's own file
+  fao 325/2276  397s  162 replaced 79 deleted
+  * fao 2026-02-02: replaced with NSE's own file
+  * fao 2026-02-05: replaced with NSE's own file
+  * fao 2026-02-06: replaced with NSE's own file
+  * fao 2026-02-09: replaced with NSE's own file
+  * fao 2026-02-12: replaced with NSE's own file
+  * fao 2026-02-13: replaced with NSE's own file
+  * fao 2026-02-16: replaced with NSE's own file
+  * fao 2026-02-19: replaced with NSE's own file
+  fao 350/2276  427s  170 replaced 79 deleted
+  * fao 2026-02-20: replaced with NSE's own file
+  * fao 2026-02-23: replaced with NSE's own file
+  * fao 2026-02-27: replaced with NSE's own file
+  * fao 2026-03-02: replaced with NSE's own file
+  * fao 2026-03-05: replaced with NSE's own file
+  * fao 2026-03-06: replaced with NSE's own file
+  * fao 2026-03-09: replaced with NSE's own file
+  * fao 2026-03-12: replaced with NSE's own file
+  * fao 2026-03-13: replaced with NSE's own file
+  * fao 2026-03-16: replaced with NSE's own file
+  * fao 2026-03-19: replaced with NSE's own file
+  * fao 2026-03-20: replaced with NSE's own file
+  * fao 2026-03-23: replaced with NSE's own file
+  * fao 2026-03-27: replaced with NSE's own file
+  * fao 2026-03-30: replaced with NSE's own file
+  * fao 2026-04-01: replaced with NSE's own file
+  * fao 2026-04-02: replaced with NSE's own file
+  * fao 2026-04-06: replaced with NSE's own file
+  * fao 2026-04-07: replaced with NSE's own file
+  * fao 2026-04-08: replaced with NSE's own file
+  * fao 2026-04-09: replaced with NSE's own file
+  * fao 2026-04-13: replaced with NSE's own file
+  - fao 2026-04-14: no NSE file, not a session -> deleted
+  * fao 2026-04-16: replaced with NSE's own file
+  * fao 2026-04-20: replaced with NSE's own file
+  fao 375/2276  460s  194 replaced 80 deleted
+  * fao 2026-04-21: replaced with NSE's own file
+  * fao 2026-04-22: replaced with NSE's own file
+  * fao 2026-04-23: replaced with NSE's own file
+  * fao 2026-04-27: replaced with NSE's own file
+  * fao 2026-04-28: replaced with NSE's own file
+  * fao 2026-04-29: replaced with NSE's own file
+  * fao 2026-04-30: replaced with NSE's own file
+  - fao 2026-05-01: no NSE file, not a session -> deleted
+  * fao 2026-05-05: replaced with NSE's own file
+  * fao 2026-05-06: replaced with NSE's own file
+  * fao 2026-05-07: replaced with NSE's own file
+  * fao 2026-05-08: replaced with NSE's own file
+  * fao 2026-05-12: replaced with NSE's own file
+  * fao 2026-05-13: replaced with NSE's own file
+  * fao 2026-05-14: replaced with NSE's own file
+  * fao 2026-05-19: replaced with NSE's own file
+  * fao 2026-05-20: replaced with NSE's own file
+  * fao 2026-05-21: replaced with NSE's own file
+  * fao 2026-05-22: replaced with NSE's own file
+  - fao 2026-05-28: no NSE file, not a session -> deleted
+  * fao 2026-06-29: replaced with NSE's own file
+  * fao 2026-06-30: replaced with NSE's own file
+  * fao 2026-07-14: replaced with NSE's own file
+  * fao 2026-07-20: replaced with NSE's own file
+  * fao 2026-07-28: replaced with NSE's own file
+  fao 400/2276  492s  217 replaced 82 deleted
+  fao 425/2276  523s  217 replaced 82 deleted
+  fao 450/2276  553s  217 replaced 82 deleted
+  fao 475/2276  582s  217 replaced 82 deleted
+  fao 500/2276  612s  217 replaced 82 deleted
+  ! fao 2018-06-13: Missing 'Client Type' column in F&O OI for 2018-06-13. Got: ['Client', '255533', '170613', '1048634', '438279', '481180', '715231', '583933', '886558', '263176', '131878', '212194', '127548', '2895632', '2419125']
+  fao 525/2276  639s  217 replaced 82 deleted
+  fao 550/2276  669s  217 replaced 82 deleted
+  fao 575/2276  699s  217 replaced 82 deleted
+  fao 600/2276  730s  217 replaced 82 deleted
+  fao 625/2276  763s  217 replaced 82 deleted
+  fao 650/2276  793s  217 replaced 82 deleted
+  fao 675/2276  823s  217 replaced 82 deleted
+  fao 700/2276  852s  217 replaced 82 deleted
+  fao 725/2276  881s  217 replaced 82 deleted
+  fao 750/2276  910s  217 replaced 82 deleted
+  fao 775/2276  940s  217 replaced 82 deleted
+  fao 800/2276  970s  217 replaced 82 deleted
+  fao 825/2276  998s  217 replaced 82 deleted
+  fao 850/2276  1029s  217 replaced 82 deleted
+  fao 875/2276  1060s  217 replaced 82 deleted
+  fao 900/2276  1088s  217 replaced 82 deleted
+  fao 925/2276  1122s  217 replaced 82 deleted
+  fao 950/2276  1153s  217 replaced 82 deleted
+  fao 975/2276  1183s  217 replaced 82 deleted
+  fao 1000/2276  1212s  217 replaced 82 deleted
+  fao 1025/2276  1240s  217 replaced 82 deleted
+  fao 1050/2276  1272s  217 replaced 82 deleted
+  fao 1075/2276  1302s  217 replaced 82 deleted
+  fao 1100/2276  1330s  217 replaced 82 deleted
+  fao 1125/2276  1359s  217 replaced 82 deleted
+  fao 1150/2276  1387s  217 replaced 82 deleted
+  fao 1175/2276  1417s  217 replaced 82 deleted
+  fao 1200/2276  1447s  217 replaced 82 deleted
+  fao 1225/2276  1475s  217 replaced 82 deleted
+  fao 1250/2276  1505s  217 replaced 82 deleted
+  fao 1275/2276  1533s  217 replaced 82 deleted
+  fao 1300/2276  1561s  217 replaced 82 deleted
+  fao 1325/2276  1589s  217 replaced 82 deleted
+  fao 1350/2276  1618s  217 replaced 82 deleted
+  fao 1375/2276  1646s  217 replaced 82 deleted
+  fao 1400/2276  1675s  217 replaced 82 deleted
+  fao 1425/2276  1703s  217 replaced 82 deleted
+  fao 1450/2276  1731s  217 replaced 82 deleted
+  fao 1475/2276  1759s  217 replaced 82 deleted
+  fao 1500/2276  1787s  217 replaced 82 deleted
+  fao 1525/2276  1816s  217 replaced 82 deleted
+  fao 1550/2276  1845s  217 replaced 82 deleted
+  fao 1575/2276  1875s  217 replaced 82 deleted
+  fao 1600/2276  1904s  217 replaced 82 deleted
+  fao 1625/2276  1933s  217 replaced 82 deleted
+  fao 1650/2276  1962s  217 replaced 82 deleted
+  fao 1675/2276  1991s  217 replaced 82 deleted
+  fao 1700/2276  2019s  217 replaced 82 deleted
+  fao 1725/2276  2047s  217 replaced 82 deleted
+  fao 1750/2276  2075s  217 replaced 82 deleted
+  fao 1775/2276  2104s  217 replaced 82 deleted
+  fao 1800/2276  2132s  217 replaced 82 deleted
+  fao 1825/2276  2161s  217 replaced 82 deleted
+  fao 1850/2276  2190s  217 replaced 82 deleted
+  fao 1875/2276  2218s  217 replaced 82 deleted
+  fao 1900/2276  2247s  217 replaced 82 deleted
+  fao 1925/2276  2275s  217 replaced 82 deleted
+  fao 1950/2276  2304s  217 replaced 82 deleted
+  fao 1975/2276  2339s  217 replaced 82 deleted
+  fao 2000/2276  2367s  217 replaced 82 deleted
+  fao 2025/2276  2397s  217 replaced 82 deleted
+  fao 2050/2276  2426s  217 replaced 82 deleted
+  fao 2075/2276  2456s  217 replaced 82 deleted
+  fao 2100/2276  2486s  217 replaced 82 deleted
+  fao 2125/2276  2516s  217 replaced 82 deleted
+  fao 2150/2276  2545s  217 replaced 82 deleted
+  fao 2175/2276  2575s  217 replaced 82 deleted
+  fao 2200/2276  2604s  217 replaced 82 deleted
+  fao 2225/2276  2633s  217 replaced 82 deleted
+  * fao 2026-09-28: replaced with NSE's own file
+  fao 2250/2276  2663s  218 replaced 82 deleted
+  fao 2275/2276  2692s  218 replaced 82 deleted
+  fii 0/2270  2692s  0 replaced
+  fii 25/2270  2705s  0 replaced
+  fii 50/2270  2717s  0 replaced
+  fii 75/2270  2729s  0 replaced
+  fii 100/2270  2741s  0 replaced
+  fii 125/2270  2754s  0 replaced
+  * fii 2024-12-30: replaced
+  * fii 2024-12-31: replaced
+  fii 150/2270  2766s  2 replaced
+  * fii 2025-02-03: replaced
+  * fii 2025-02-06: replaced
+  * fii 2025-02-07: replaced
+  * fii 2025-02-10: replaced
+  * fii 2025-02-13: replaced
+  * fii 2025-02-14: replaced
+  * fii 2025-02-17: replaced
+  * fii 2025-02-20: replaced
+  * fii 2025-02-21: replaced
+  * fii 2025-02-24: replaced
+  * fii 2025-02-27: replaced
+  * fii 2025-02-28: replaced
+  * fii 2025-03-03: replaced
+  * fii 2025-03-06: replaced
+  * fii 2025-03-07: replaced
+  * fii 2025-03-10: replaced
+  * fii 2025-03-13: replaced
+  * fii 2025-03-17: replaced
+  * fii 2025-03-21: replaced
+  * fii 2025-03-24: replaced
+  * fii 2025-03-27: replaced
+  fii 175/2270  2780s  23 replaced
+  * fii 2025-03-28: replaced
+  * fii 2025-04-01: replaced
+  * fii 2025-04-02: replaced
+  * fii 2025-04-03: replaced
+  * fii 2025-04-07: replaced
+  * fii 2025-04-08: replaced
+  * fii 2025-04-09: replaced
+  * fii 2025-04-15: replaced
+  * fii 2025-04-16: replaced
+  * fii 2025-04-17: replaced
+  * fii 2025-04-21: replaced
+  * fii 2025-04-22: replaced
+  * fii 2025-04-23: replaced
+  * fii 2025-04-24: replaced
+  * fii 2025-04-28: replaced
+  * fii 2025-04-29: replaced
+  * fii 2025-04-30: replaced
+  * fii 2025-05-02: replaced
+  * fii 2025-05-06: replaced
+  * fii 2025-05-07: replaced
+  * fii 2025-05-08: replaced
+  fii 200/2270  2795s  44 replaced
+  * fii 2025-05-09: replaced
+  * fii 2025-05-13: replaced
+  * fii 2025-05-14: replaced
+  * fii 2025-05-15: replaced
+  * fii 2025-05-16: replaced
+  * fii 2025-05-20: replaced
+  * fii 2025-05-21: replaced
+  * fii 2025-05-22: replaced
+  * fii 2025-05-23: replaced
+  * fii 2025-05-27: replaced
+  * fii 2025-05-28: replaced
+  * fii 2025-05-29: replaced
+  * fii 2025-05-30: replaced
+  * fii 2025-06-02: replaced
+  * fii 2025-06-03: replaced
+  * fii 2025-06-06: replaced
+  * fii 2025-06-09: replaced
+  * fii 2025-06-10: replaced
+  * fii 2025-06-13: replaced
+  * fii 2025-06-16: replaced
+  * fii 2025-06-17: replaced
+  * fii 2025-06-20: replaced
+  * fii 2025-06-23: replaced
+  * fii 2025-06-24: replaced
+  * fii 2025-06-27: replaced
+  fii 225/2270  2810s  69 replaced
+  * fii 2025-06-30: replaced
+  * fii 2025-07-01: replaced
+  * fii 2025-07-02: replaced
+  * fii 2025-07-03: replaced
+  * fii 2025-07-07: replaced
+  * fii 2025-07-08: replaced
+  * fii 2025-07-09: replaced
+  * fii 2025-07-10: replaced
+  * fii 2025-07-14: replaced
+  * fii 2025-07-15: replaced
+  * fii 2025-07-16: replaced
+  * fii 2025-07-17: replaced
+  * fii 2025-07-21: replaced
+  * fii 2025-07-22: replaced
+  * fii 2025-07-23: replaced
+  * fii 2025-07-24: replaced
+  * fii 2025-07-28: replaced
+  * fii 2025-07-29: replaced
+  * fii 2025-07-30: replaced
+  * fii 2025-07-31: replaced
+  * fii 2025-08-01: replaced
+  * fii 2025-08-06: replaced
+  * fii 2025-08-07: replaced
+  * fii 2025-08-08: replaced
+  * fii 2025-08-13: replaced
+  fii 250/2270  2825s  94 replaced
+  * fii 2025-08-14: replaced
+  * fii 2025-08-20: replaced
+  * fii 2025-08-21: replaced
+  * fii 2025-08-22: replaced
+  * fii 2025-08-28: replaced
+  * fii 2025-08-29: replaced
+  * fii 2025-09-01: replaced
+  * fii 2025-09-02: replaced
+  * fii 2025-09-03: replaced
+  * fii 2025-09-08: replaced
+  * fii 2025-09-09: replaced
+  * fii 2025-09-10: replaced
+  * fii 2025-09-15: replaced
+  * fii 2025-09-16: replaced
+  * fii 2025-09-17: replaced
+  * fii 2025-09-22: replaced
+  * fii 2025-09-23: replaced
+  * fii 2025-09-24: replaced
+  * fii 2025-09-29: replaced
+  * fii 2025-09-30: replaced
+  * fii 2025-10-01: replaced
+  * fii 2025-10-03: replaced
+  fii 275/2270  2840s  116 replaced
+  * fii 2025-10-06: replaced
+  * fii 2025-10-07: replaced
+  * fii 2025-10-08: replaced
+  * fii 2025-10-09: replaced
+  * fii 2025-10-10: replaced
+  * fii 2025-10-13: replaced
+  * fii 2025-10-14: replaced
+  * fii 2025-10-15: replaced
+  * fii 2025-10-16: replaced
+  * fii 2025-10-17: replaced
+  * fii 2025-10-20: replaced
+  * fii 2025-10-21: replaced
+  * fii 2025-10-23: replaced
+  * fii 2025-10-24: replaced
+  * fii 2025-10-27: replaced
+  * fii 2025-10-28: replaced
+  * fii 2025-10-29: replaced
+  * fii 2025-10-30: replaced
+  * fii 2025-10-31: replaced
+  * fii 2025-11-03: replaced
+  * fii 2025-11-06: replaced
+  * fii 2025-11-07: replaced
+  * fii 2025-11-10: replaced
+  * fii 2025-11-13: replaced
+  fii 300/2270  2855s  140 replaced
+  * fii 2025-11-14: replaced
+  * fii 2025-11-17: replaced
+  * fii 2025-11-20: replaced
+  * fii 2025-11-21: replaced
+  * fii 2025-11-24: replaced
+  * fii 2025-11-27: replaced
+  * fii 2025-11-28: replaced
+  * fii 2025-12-02: replaced
+  * fii 2025-12-03: replaced
+  * fii 2025-12-08: replaced
+  * fii 2025-12-09: replaced
+  * fii 2025-12-15: replaced
+  * fii 2025-12-16: replaced
+  * fii 2025-12-17: replaced
+  * fii 2025-12-22: replaced
+  * fii 2025-12-23: replaced
+  * fii 2025-12-24: replaced
+  * fii 2025-12-29: replaced
+  * fii 2025-12-30: replaced
+  * fii 2025-12-31: replaced
+  fii 325/2270  2869s  160 replaced
+  * fii 2026-02-02: replaced
+  * fii 2026-02-05: replaced
+  * fii 2026-02-06: replaced
+  * fii 2026-02-09: replaced
+  * fii 2026-02-12: replaced
+  * fii 2026-02-13: replaced
+  * fii 2026-02-19: replaced
+  fii 350/2270  2881s  167 replaced
+  * fii 2026-02-20: replaced
+  * fii 2026-02-23: replaced
+  * fii 2026-02-27: replaced
+  * fii 2026-03-09: replaced
+  * fii 2026-03-12: replaced
+  * fii 2026-03-13: replaced
+  * fii 2026-03-19: replaced
+  * fii 2026-03-20: replaced
+  * fii 2026-03-23: replaced
+  * fii 2026-03-27: replaced
+  * fii 2026-03-30: replaced
+  * fii 2026-04-01: replaced
+  * fii 2026-04-02: replaced
+  * fii 2026-04-06: replaced
+  * fii 2026-04-07: replaced
+  * fii 2026-04-08: replaced
+  * fii 2026-04-09: replaced
+  * fii 2026-04-13: replaced
+  * fii 2026-04-20: replaced
+  fii 375/2270  2896s  186 replaced
+  * fii 2026-04-22: replaced
+  * fii 2026-04-23: replaced
+  * fii 2026-04-27: replaced
+  * fii 2026-04-28: replaced
+  * fii 2026-04-30: replaced
+  * fii 2026-05-06: replaced
+  * fii 2026-05-07: replaced
+  * fii 2026-05-08: replaced
+  * fii 2026-05-12: replaced
+  * fii 2026-05-13: replaced
+  * fii 2026-05-14: replaced
+  * fii 2026-05-19: replaced
+  * fii 2026-05-20: replaced
+  * fii 2026-05-21: replaced
+  * fii 2026-05-22: replaced
+  * fii 2026-06-29: replaced
+  * fii 2026-06-30: replaced
+  * fii 2026-07-14: replaced
+  * fii 2026-07-20: replaced
+  * fii 2026-07-28: replaced
+  fii 400/2270  2910s  206 replaced
+  fii 425/2270  2923s  206 replaced
+  fii 450/2270  2937s  206 replaced
+  fii 475/2270  2950s  206 replaced
+  fii 500/2270  2961s  206 replaced
+  fii 525/2270  2974s  206 replaced
+  fii 550/2270  2986s  206 replaced
+  fii 575/2270  2998s  206 replaced
+  fii 600/2270  3010s  206 replaced
+  fii 625/2270  3022s  206 replaced
+  fii 650/2270  3033s  206 replaced
+  fii 675/2270  3045s  206 replaced
+  fii 700/2270  3057s  206 replaced
+  fii 725/2270  3068s  206 replaced
+  fii 750/2270  3079s  206 replaced
+  fii 775/2270  3091s  206 replaced
+  fii 800/2270  3103s  206 replaced
+  fii 825/2270  3115s  206 replaced
+  fii 850/2270  3126s  206 replaced
+  fii 875/2270  3138s  206 replaced
+  fii 900/2270  3149s  206 replaced
+  fii 925/2270  3161s  206 replaced
+  fii 950/2270  3172s  206 replaced
+  fii 975/2270  3183s  206 replaced
+  fii 1000/2270  3195s  206 replaced
+  fii 1025/2270  3207s  206 replaced
+  fii 1050/2270  3218s  206 replaced
+  fii 1075/2270  3229s  206 replaced
+  fii 1100/2270  3242s  206 replaced
+  fii 1125/2270  3254s  206 replaced
+  fii 1150/2270  3266s  206 replaced
+  fii 1175/2270  3279s  206 replaced
+  fii 1200/2270  3290s  206 replaced
+2026-11-16 07:51:13 [WARNING ] src.ingestion.http_client: Request error attempt 1/3 for https://nsearchives.nseindia.com/content/fo/fii_stats_25-Jun-2021.xls: ('Connection aborted.', ConnectionResetError(10054, 'An existing connection was forcibly closed by the remote host', None, 10054, None))
+  fii 1225/2270  68902s  206 replaced
+  fii 1250/2270  68915s  206 replaced
+  fii 1275/2270  68927s  206 replaced
+  fii 1300/2270  68939s  206 replaced
+  fii 1325/2270  68951s  206 replaced
+  fii 1350/2270  68962s  206 replaced
+  fii 1375/2270  68973s  206 replaced
+  fii 1400/2270  68986s  206 replaced
+  fii 1425/2270  68998s  206 replaced
+  fii 1450/2270  69010s  206 replaced
+  fii 1475/2270  69021s  206 replaced
+  fii 1500/2270  69033s  206 replaced
+  fii 1525/2270  69044s  206 replaced
+  fii 1550/2270  69056s  206 replaced
+  fii 1575/2270  69068s  206 replaced
+  fii 1600/2270  69082s  206 replaced
+  fii 1625/2270  69094s  206 replaced
+  fii 1650/2270  69105s  206 replaced
+  fii 1675/2270  69117s  206 replaced
+  fii 1700/2270  69129s  206 replaced
+  fii 1725/2270  69141s  206 replaced
+  fii 1750/2270  69154s  206 replaced
+  fii 1775/2270  69166s  206 replaced
+  fii 1800/2270  69179s  206 replaced
+  fii 1825/2270  69190s  206 replaced
+  fii 1850/2270  69202s  206 replaced
+  fii 1875/2270  69214s  206 replaced
+  fii 1900/2270  69226s  206 replaced
+  fii 1925/2270  69239s  206 replaced
+  fii 1950/2270  69251s  206 replaced
+  fii 1975/2270  69263s  206 replaced
+  fii 2000/2270  69275s  206 replaced
+  fii 2025/2270  69286s  206 replaced
+  fii 2050/2270  69298s  206 replaced
+  fii 2075/2270  69309s  206 replaced
+  * fii 2025-03-20: replaced
+  fii 2100/2270  69321s  207 replaced
+  fii 2125/2270  69333s  207 replaced
+  fii 2150/2270  69345s  207 replaced
+  fii 2175/2270  69356s  207 replaced
+  fii 2200/2270  69368s  207 replaced
+  fii 2225/2270  69380s  207 replaced
+  fii 2250/2270  69392s  207 replaced
+
+DONE {
+ "fao_replaced": 218,
+ "fao_deleted": 82,
+ "fao_same": 1974,
+ "fao_missing_session": [
+  1,
+  [
+   "2025-09-19"
+  ]
+ ],
+ "fao_bad_title": [
+  0,
+  []
+ ],
+ "fii_replaced": 207,
+ "fii_deleted": 82,
+ "fii_same": 1979,
+ "fii_missing_session": [
+  1,
+  [
+   "2023-08-17"
+  ]
+ ],
+ "fii_bad": [
+  1,
+  [
+   [
+    "2018-09-10",
+    "parse: FII Stats file is for 2018-09-11, not 2018-09-10"
+   ]
+  ]
+ ]
+}

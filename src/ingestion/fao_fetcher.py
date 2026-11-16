@@ -95,6 +95,33 @@ _NUMERIC_COLS = [
     "total_long", "total_short",
 ]
 
+_TITLE_DATE = re.compile(r"as on\s+([A-Za-z]{3,9})\.?\s+(\d{1,2}),?\s+(\d{4})", re.I)
+_MONTHS = {m: i for i, m in enumerate(
+    ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"], start=1)}
+
+
+def title_date(text: str) -> date | None:
+    """Date printed in the CSV's title line ('... as on Feb 09, 2026'), or None.
+
+    WHY: the NSE /api/reports fallback (and occasionally a mis-keyed archive request)
+    has served the file for a DIFFERENT date with the same day-of-month. 298 of
+    2,192 stored OI days (2018-2026) were such copies — e.g. 09-Jan-2026's file
+    stored again under 09-Feb and 09-Apr. Found 2026-11-15. The title line is the
+    only place the file states its own date, so it is checked on every fetch.
+    """
+    first = text.strip().splitlines()[0] if text and text.strip() else ""
+    m = _TITLE_DATE.search(first)
+    if not m:
+        return None
+    mon = _MONTHS.get(m.group(1)[:3].lower())
+    if not mon:
+        return None
+    try:
+        return date(int(m.group(3)), mon, int(m.group(2)))
+    except ValueError:
+        return None
+
+
 class FAOParticipantFetcher(BaseFetcher):
     """Downloads and parses both OI + Volume participant CSVs for one date."""
 
@@ -129,6 +156,11 @@ class FAOParticipantFetcher(BaseFetcher):
                 continue
             first = text.strip().splitlines()[0]
             if "<" in first or "{" in first:
+                continue
+            stated = title_date(text)
+            if stated is not None and stated != trade_date:
+                log.warning("FAO %s for %s REJECTED: file says it is for %s (via %s)",
+                            label, trade_date, stated, url[-60:])
                 continue
             log.debug("FAO %s for %s fetched via %s", label, trade_date, url[-60:])
             return text
