@@ -397,10 +397,11 @@ def measure_tails(as_of: date, n_perm: int = 2000, seed: int = 7) -> dict | None
         for z in range(1, 6):
             row[z] = round(float(100 * below[zone == z].mean()), 1)
         obs = below[zone == 1].mean() - below.mean()
-        null = np.array([below[np.roll(zone, int(rng.integers(60, len(zone) - 60))) == 1].mean() - below.mean()
-                         for _ in range(n_perm)])
         row["q1_excess_pp"] = round(float(100 * obs), 2)
-        row["q1_perm_p"] = round(float((null >= obs).mean()), 4)
+        if n_perm:
+            null = np.array([below[np.roll(zone, int(rng.integers(60, len(zone) - 60))) == 1].mean()
+                             - below.mean() for _ in range(n_perm)])
+            row["q1_perm_p"] = round(float((null >= obs).mean()), 4)
         row["n"] = int(len(sub))
         out[h] = row
     out["measured_to"] = str(pd.Timestamp(as_of).date())

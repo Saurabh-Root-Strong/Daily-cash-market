@@ -61,6 +61,9 @@ __all__ = ["get_fii_only_view", "get_fii_actions", "get_fii_footprint", "get_fii
            "FII_TRACK_RECORD", "FII_ACTION_TRACK", "FII_ERA_SPLIT", "FII_ZONES", "FII_STRIKE_HOLD", "FII_LEG_IC", "FII_LEG_BACKTEST_2Y", "FII_HEDGE_TEST", "FII_FAMILY_SWEEP_2Y", "get_fii_hedge_read",
            "INDEX_CATEGORY", "LEG_LABELS"]
 
+# RE-MEASURED 2026-11-16 by scripts/remeasure_fii_only.py on the repaired participant table, data to 2026-11-13.
+# The prose comments below quote the ORIGINAL Aug-2026 numbers; the dict values are current.
+
 # ── What FIIs DID: the six legs NSE publishes, read directly ────────────────
 # Nothing here is inferred. fao_participant carries FII long AND short OI for
 # index futures, and long AND short for index calls and puts, so "added longs"
@@ -86,29 +89,39 @@ _LEG_SIGN = {"fut_long": +1, "fut_short": -1, "call_long": +1,
 
 # Measured 2026-08-13, walk-forward on 2,104 sessions (2018-2026). This is a
 # DIFFERENT signal from the z-score composite above and gets its own numbers.
-FII_ACTION_TRACK = {
-    "n": 2104,
-    "d1_oc_hit": 50.8, "d1_oc_naive": 52.4, "d1_oc_ic": 0.035,
-    "wk1_hit": 51.2, "wk1_naive": 56.4,
-    "wk2_hit": 50.5, "wk2_naive": 58.6,
-    # the counter-intuitive part, and the reason the labels carry a warning
-    "bear_down_1wk": 44.2, "bear_down_2wk": 41.6,
-    "bull_up_2wk": 63.2, "base_up_2wk": 58.6,
-    "leg_ic_range": "-0.055 to +0.009",
-}
+FII_ACTION_TRACK = {'n': 2174,
+ 'd1_oc_hit': 52.1,
+ 'd1_oc_naive': 53.2,
+ 'd1_oc_ic': 0.049,
+ 'wk1_hit': 50.9,
+ 'wk1_naive': 53.3,
+ 'wk2_hit': 51.7,
+ 'wk2_naive': 55.8,
+ 'bear_down_1wk': 47.6,
+ 'bear_down_2wk': 45.9,
+ 'bull_up_2wk': 57.4,
+ 'base_up_2wk': 55.9,
+ 'leg_ic_range': '+0.001 to +0.066'}
 
 # measured 2026-08-13 — see the module docstring for how
-FII_TRACK_RECORD = {
-    "n": 1592, "since": "2018-03-28",
-    "next_day_cc_hit": 56.7, "next_day_cc_base": 53.7, "next_day_cc_ic": 0.106,
-    "next_day_oc_hit": 53.2, "next_day_oc_base": 47.5, "next_day_oc_ic": 0.090,
-    "next_day_naive": 52.5,
-    "bear_down_rate": 57.1, "bear_mean_pct": -0.155,
-    "bull_up_rate": 48.5, "bull_mean_pct": 0.013,
-    "wk1_hit": 52.7, "wk1_naive": 56.5,
-    "wk2_hit": 54.1, "wk2_naive": 58.5,
-    "cost_floor_bps": 50,
-}
+FII_TRACK_RECORD = {'n': 2164,
+ 'since': '2018-02-12',
+ 'next_day_cc_hit': 56.4,
+ 'next_day_cc_base': 53.8,
+ 'next_day_cc_ic': 0.08,
+ 'next_day_oc_hit': 52.2,
+ 'next_day_oc_base': 46.7,
+ 'next_day_oc_ic': 0.066,
+ 'next_day_naive': 53.3,
+ 'bear_down_rate': 55.1,
+ 'bear_mean_pct': -0.12,
+ 'bull_up_rate': 48.9,
+ 'bull_mean_pct': 0.003,
+ 'wk1_hit': 52.6,
+ 'wk1_naive': 52.6,
+ 'wk2_hit': 53.5,
+ 'wk2_naive': 56.4,
+ 'cost_floor_bps': 50}
 
 # ── COMPOSITION DRIFT, AND WHY THE HEADLINE TRACK RECORD IS SPLIT ──────────
 # The composite is a plain mean of whichever components are live, and the number
@@ -127,12 +140,18 @@ FII_TRACK_RECORD = {
 # FIRST era's number, earned by a FOUR-component signal — not by the five-component
 # stance the page actually shows today. In the live composition the stance is
 # BELOW a coin flip. Both numbers are published; the live one governs.
-FII_ERA_SPLIT = {
-    "era4": {"label": "4 components (to Jun-2024)", "n": 1542, "fires_pct": 51,
-             "dir_hit": 55.0, "bear_down": 58.3, "bear_mean": -0.194},
-    "era5": {"label": "5 components (Jun-2024 on)", "n": 555, "fires_pct": 44,
-             "dir_hit": 42.1, "bear_down": 49.6, "bear_mean": -0.030},
-}
+FII_ERA_SPLIT = {'era4': {'label': '4 components (before FII cash data)',
+          'n': 1543,
+          'fires_pct': 53.0,
+          'dir_hit': 54.5,
+          'bear_down': 58.1,
+          'bear_mean': -0.174},
+ 'era5': {'label': '5 components (with FII cash data)',
+          'n': 620,
+          'fires_pct': 51.0,
+          'dir_hit': 46.2,
+          'bear_down': 48.4,
+          'bear_mean': 0.005}}
 
 # Zone map for the FII composite, measured 2026-08-18 on the composition-stable
 # score (the raw mean re-standardised on its own trailing 250 sessions, so a
@@ -141,22 +160,20 @@ FII_ERA_SPLIT = {
 # NOTHING HERE CLEARS MULTIPLICITY: 10 cells were measured, so Bonferroni needs
 # |t| > 2.81 and the best cells are t = -2.09 (Q1, 5-day) and +2.44 (Q5, 5-day).
 # Treat the gradient as descriptive.
-_ZONE_CUTS = [-0.8042, -0.2626, 0.2194, 0.7934]          # quintile edges of the score
-FII_ZONES = {
-    "cuts": _ZONE_CUTS,
-    "d1_base": {"mean": -0.0643, "up": 47.4},
-    "d5_base": {"mean": +0.1067, "up": 52.9},
-    "d1": {1: {"n": 396, "mean": -0.146, "up": 43.7, "t": -1.77},
-           2: {"n": 396, "mean": -0.052, "up": 47.2, "t": +0.26},
-           3: {"n": 394, "mean": -0.063, "up": 48.0, "t": +0.03},
-           4: {"n": 397, "mean": -0.050, "up": 51.4, "t": +0.34},
-           5: {"n": 396, "mean": -0.011, "up": 46.7, "t": +1.22}},
-    "d5": {1: {"n": 396, "mean": -0.162, "up": 47.0, "t": -2.09},
-           2: {"n": 396, "mean": +0.053, "up": 52.3, "t": -0.47},
-           3: {"n": 394, "mean": +0.168, "up": 56.3, "t": +0.54},
-           4: {"n": 397, "mean": +0.114, "up": 52.9, "t": +0.06},
-           5: {"n": 396, "mean": +0.361, "up": 56.1, "t": +2.44}},
-}
+_ZONE_CUTS = [-0.8242, -0.2632, 0.2317, 0.8619]          # quintile edges of the score
+FII_ZONES = {'cuts': _ZONE_CUTS,
+ 'd1_base': {'mean': -0.0405, 'up': 48.9},
+ 'd5_base': {'mean': 0.178, 'up': 53.4},
+ 'd1': {1: {'n': 315, 'mean': -0.084, 'up': 45.7, 't': -0.99},
+        2: {'n': 333, 'mean': -0.062, 'up': 49.5, 't': -0.49},
+        3: {'n': 329, 'mean': -0.057, 'up': 48.6, 't': -0.47},
+        4: {'n': 275, 'mean': -0.021, 'up': 49.1, 't': 0.55},
+        5: {'n': 292, 'mean': 0.031, 'up': 51.7, 't': 1.74}},
+ 'd5': {1: {'n': 315, 'mean': 0.047, 'up': 49.2, 't': -1.17},
+        2: {'n': 333, 'mean': 0.035, 'up': 50.5, 't': -1.36},
+        3: {'n': 329, 'mean': 0.212, 'up': 55.0, 't': 0.31},
+        4: {'n': 275, 'mean': 0.232, 'up': 54.9, 't': 0.47},
+        5: {'n': 288, 'mean': 0.397, 'up': 58.3, 't': 2.0}}}
 _ZONE_LABEL = {1: "most bearish", 2: "lean bearish", 3: "middle",
                4: "lean bullish", 5: "most bullish"}
 
@@ -201,12 +218,36 @@ def _z(s: pd.Series, win: int = _Z_WIN) -> pd.Series:
 # date never changes, and today's is refreshed by the nightly load, so a tiny
 # cache keyed by date is safe. Bounded so a long replay session cannot grow it.
 @lru_cache(maxsize=64)
-def _components_cached(as_of: date) -> pd.DataFrame:
+def _components_cached(as_of: date, _version: tuple = ()) -> pd.DataFrame:
     return _components_uncached(as_of)
 
 
 def _components(as_of: date) -> pd.DataFrame:
-    return _components_cached(as_of).copy()
+    # the data fingerprint is part of the key: a date-only key served the pre-repair
+    # frame forever in a running dashboard (audit 2026-11-16)
+    from src.analytics.positioning_cycle import data_version
+    return _components_cached(as_of, data_version()).copy()
+
+
+@lru_cache(maxsize=32)
+def _live_measures(as_of: date, _version: tuple = ()) -> dict:
+    """Zone cut-points, zone outcome table, era split and downside tails, measured
+    from data on or before as_of (src/analytics/fii_measure.py). Any piece that
+    lacks history comes back None and the caller uses the re-measured constant."""
+    from src.analytics import fii_measure as M
+    out = {}
+    for key, fn in (("zones", M.measure_zones), ("era", M.measure_era_split),
+                    ("tails", lambda d: M.measure_tails(d, n_perm=0))):
+        try:
+            out[key] = fn(as_of)
+        except Exception:                                   # noqa: BLE001
+            out[key] = None
+    return out
+
+
+def live_measures(as_of: date) -> dict:
+    from src.analytics.positioning_cycle import data_version
+    return _live_measures(as_of, data_version())
 
 
 def _components_uncached(as_of: date) -> pd.DataFrame:
@@ -425,10 +466,8 @@ _FII_QUANTILES = {
 }
 # P(forward move below the stated sigma multiple), by zone. Index 0 = base rate.
 # The 5-day row is monotone across all five zones -- 22.5% down to 9.8%.
-_FII_TAIL = {
-    "d1": {"thr": -1.0, 0: 13.8, 1: 18.9, 2: 17.4, 3: 13.5, 4: 9.3, 5: 10.1},
-    "d5": {"thr": -2.0, 0: 15.8, 1: 22.5, 2: 17.2, 3: 16.2, 4: 13.1, 5: 9.8},
-}
+_FII_TAIL = {'d1': {'thr': -1.0, 0: 13.7, 1: 18.1, 2: 17.1, 3: 13.7, 4: 8.4, 5: 10.3},
+ 'd5': {'thr': -2.0, 0: 15.2, 1: 18.4, 2: 19.5, 3: 15.8, 4: 11.6, 5: 9.4}}
 
 
 # ── DOES THE STRIKE WITH THE BIGGEST FRESH OI ADD ACTUALLY HOLD? ───────────
@@ -461,17 +500,23 @@ FII_STRIKE_HOLD = {
 # (tradeable). Signed so a positive IC means the leg's printed lean is the
 # right direction. Only futures-short is even marginally separated, and six
 # tests need |t| > 2.64 to clear Bonferroni, so nothing here survives.
-FII_LEG_IC = {
-    "fut_long": +0.0089, "fut_short": +0.0557, "call_long": +0.0001,
-    "call_short": +0.0324, "put_long": +0.0171, "put_short": +0.0040,
-    "_t": {"fut_long": 0.41, "fut_short": 2.56, "call_long": 0.00,
-           "call_short": 1.49, "put_long": 0.78, "put_short": 0.18},
-    "net_ic": +0.0353, "net_t": 1.62, "n": 2110,
-    # the net leg score and the composite stance are only moderately related
-    # and point OPPOSITE ways on 13.3% of days, so the page must not show them
-    # as if they were two confirmations of one view
-    "vs_composite_spearman": +0.599, "disagree_pct": 13.3,
-}
+FII_LEG_IC = {'fut_long': 0.0147,
+ 'fut_short': 0.0662,
+ 'call_long': 0.0263,
+ 'call_short': 0.0096,
+ 'put_long': 0.0011,
+ 'put_short': 0.0206,
+ '_t': {'fut_long': 0.69,
+        'fut_short': 3.09,
+        'call_long': 1.22,
+        'call_short': 0.45,
+        'put_long': 0.05,
+        'put_short': 0.96},
+ 'net_ic': 0.0488,
+ 'net_t': 2.28,
+ 'n': 2173,
+ 'vs_composite_spearman': 0.58,
+ 'disagree_pct': 6.3}
 
 
 # ── WHAT THE SIX-LEG VERDICT WAS WORTH, LAST TWO YEARS ─────────────────────
@@ -506,28 +551,46 @@ FII_LEG_IC = {
 # +0.035% (t=+0.80) -- correct sign, no strength. The last two years are the
 # anomaly, and with n=193/208 per arm that is exactly the sample size where a
 # regime read and a fluke look identical. Do not trade the inversion either.
-FII_LEG_BACKTEST_2Y = {
-    "start": "2024-08-21", "end": "2026-08-20", "n": 496,
-    "expiry_n": 108, "expiry_pct": 21.8,
-    "base_mean": -0.032, "base_up": 46.4, "naive": 53.6, "naive_side": "down",
-    "bull": {"n": 208, "mean": -0.085, "up": 41.8, "ci": (35.3, 48.6)},
-    "bear": {"n": 193, "mean": +0.047, "up": 52.8, "ci": (45.8, 59.8)},
-    "diff": -0.133, "welch_t": -2.05, "hit": 44.4,
-    "exq": {"n": 388, "diff": -0.095, "t": -1.28, "hit": 46.3,
-            "bull_mean": -0.090, "bear_mean": +0.005},
-    "expiry_only": {"n": 108, "diff": -0.232, "t": -1.74, "hit": 37.8},
-    "thresholds": {3: 46.9, 5: 46.3, 10: 46.7, 15: 45.4},
-    "full_hist": {"n": 2110, "diff": +0.035, "t": +0.80, "hit": 51.3, "naive": 52.4},
-    # the WEEK view: enter next open, hold five sessions
-    "week": {"bull_mean": -0.109, "bull_up": 45.6, "bear_mean": +0.042,
-             "bear_up": 45.3, "t": -0.81, "hit": 50.0, "naive": 54.1,
-             "base_mean": -0.042, "base_up": 45.9},
-    # the 5-session leg score (net_5d) as the signal, 2yr ex-expiry -- this one
-    # at least has the RIGHT sign, though the intervals overlap heavily
-    "net5": {"bull_n": 143, "bull_mean": +0.012, "bull_up": 50.3,
-             "bear_n": 158, "bear_mean": -0.045, "bear_up": 41.8,
-             "base_mean": -0.058, "base_up": 46.0},
-}
+FII_LEG_BACKTEST_2Y = {'start': '2024-11-13',
+ 'end': '2026-11-13',
+ 'n': 496,
+ 'expiry_n': 108,
+ 'expiry_pct': 21.8,
+ 'base_mean': -0.013,
+ 'base_up': 47.3,
+ 'naive': 53.2,
+ 'naive_side': 'down',
+ 'bull': {'n': 215, 'mean': -0.064, 'up': 44.2, 'ci': (37.5, 50.8)},
+ 'bear': {'n': 176, 'mean': 0.013, 'up': 50.0, 'ci': (42.6, 57.4)},
+ 'diff': -0.077,
+ 'welch_t': -1.16,
+ 'hit': 46.8,
+ 'exq': {'n': 388,
+         'diff': -0.089,
+         't': -1.04,
+         'hit': 45.0,
+         'bull_mean': -0.071,
+         'bear_mean': 0.018},
+ 'expiry_only': {'n': 108, 'diff': 0.028, 't': 0.14, 'hit': 52.7},
+ 'thresholds': {3: 46.5, 5: 45.0, 10: 42.3, 15: 44.5},
+ 'full_hist': {'n': 2174, 'diff': 0.06, 't': 1.41, 'hit': 52.1, 'naive': 53.2},
+ 'week': {'bull_mean': 0.009,
+          'bull_up': 46.5,
+          'bear_mean': 0.001,
+          'bear_up': 45.1,
+          't': 0.04,
+          'hit': 50.3,
+          'naive': 54.1,
+          'base_mean': 0.061,
+          'base_up': 46.6},
+ 'net5': {'bull_n': 162,
+          'bull_mean': 0.266,
+          'bull_up': 53.8,
+          'bear_n': 149,
+          'bear_mean': -0.088,
+          'bear_up': 40.9,
+          'base_mean': 0.044,
+          'base_up': 46.1}}
 
 
 # ── SELF-AUDIT, 2026-08-20: WHY THE TABLES ABOVE ARE NOW ONLY A FALLBACK ───
@@ -617,20 +680,25 @@ def _zone_series(as_of: date) -> pd.DataFrame:
 # Domestic institutions take the other side of most FII cash flow, so FII selling
 # arrives into matching DII buying and net demand barely moves. FII cash
 # direction is a statement about WHO owns the float, not about where price goes.
-FII_HEDGE_TEST = {
-    "start": "2024-04-01", "end": "2026-08-20", "n": 587,
-    "base_oc": -0.035, "base_up": 45.7,
-    "states": {
-        "build_sell": {"n": 245, "oc": -0.030, "up": 46.1, "t": -0.67, "wk": +0.078},
-        "build_buy":  {"n":  92, "oc": -0.005, "up": 44.6, "t": -0.08, "wk": +0.214},
-        "cover_buy":  {"n":  93, "oc": -0.105, "up": 39.8, "t": -1.32, "wk": -0.218},
-        "cover_sell": {"n": 157, "oc": -0.017, "up": 49.0, "t": -0.34, "wk": -0.038},
-    },
-    "alone_oc": -0.023, "alone_n": 337, "adds_oc": -0.007, "adds_t": -0.12,
-    "adds_wk": -0.036, "adds_wk_t": -0.24,
-    "rho_deliv": +0.093, "rho_turn": +0.078, "rho_dii": -0.652,
-    "triple_n": 82, "triple_oc": -0.002,
-}
+FII_HEDGE_TEST = {'start': '2024-04-01',
+ 'end': '2026-11-12',
+ 'n': 642,
+ 'base_oc': -0.027,
+ 'base_up': 46.0,
+ 'states': {'build_sell': {'n': 288, 'oc': -0.022, 'up': 46.5, 't': 0.12, 'wk': 0.028},
+            'build_buy': {'n': 81, 'oc': 0.017, 'up': 46.9, 't': 0.66, 'wk': 0.204},
+            'cover_buy': {'n': 125, 'oc': -0.062, 'up': 40.8, 't': -0.52, 'wk': 0.082},
+            'cover_sell': {'n': 148, 'oc': -0.032, 'up': 48.6, 't': -0.08, 'wk': 0.024}},
+ 'alone_oc': -0.014,
+ 'alone_n': 369,
+ 'adds_oc': -0.009,
+ 'adds_t': -0.16,
+ 'adds_wk': -0.039,
+ 'adds_wk_t': -0.27,
+ 'rho_dii': -0.67,
+ # carried over from the Aug-2026 run: built from delivery/turnover (daily_data), not the
+ # participant table, so the repair does not touch them
+ 'rho_deliv': 0.093, 'rho_turn': 0.078, 'triple_n': 82, 'triple_oc': -0.002}
 _STATE_LABEL = {
     "build_sell": ("SHORT BUILDUP + selling cash", "reads like a genuine bearish bet"),
     "build_buy":  ("SHORT BUILDUP + buying cash", "reads like a HEDGE, not a bet"),
@@ -715,19 +783,32 @@ def get_fii_hedge_read(as_of: date) -> dict:
 # while close-to-close is +0.0006% (up 48.3%). The overnight gap carries the
 # entire return; the part of the day you can actually trade on this data drifts
 # down.
-FII_FAMILY_SWEEP_2Y = {
-    "start": "2024-08-19", "end": "2026-08-20", "n": 515,
-    "n_signals": 22, "n_tests": 66,
-    "best_signal": "net_1d", "best_hz": "next-day open-close",
-    "best_ic": -0.0990, "best_t": 2.20,
-    "bonferroni_t": 3.37, "fdr_survivors": 0,
-    "null_best_t_median": 1.95, "null_best_t_p95": 2.99, "family_p": 0.314,
-    "q1_mean": +0.114, "q1_up": 55.0, "q5_mean": -0.119, "q5_up": 40.4,
-    "spread_bps": -23.3, "cost_bps": 50,
-    "base_oc": -0.0287, "base_oc_up": 45.0,
-    "base_cc": +0.0006, "base_cc_up": 48.3,
-    "base_wk": -0.0326, "base_wk_up": 44.3,
-}
+FII_FAMILY_SWEEP_2Y = {'start': '2024-11-13',
+ 'end': '2026-11-13',
+ 'n': 496,
+ 'n_signals': 23,
+ 'n_tests': 69,
+ 'best_signal': 'cash_20d',
+ 'best_hz': 'five sessions',
+ 'best_ic': -0.1359,
+ 'best_t': 3.03,
+ 'bonferroni_t': 3.38,
+ 'fdr_survivors': 0,
+ 'null_best_t_median': 2.85,
+ 'null_best_t_p95': 4.41,
+ 'family_p': 0.43,
+ 'q1_mean': 0.024,
+ 'q1_up': 48.5,
+ 'q5_mean': -0.006,
+ 'q5_up': 43.4,
+ 'spread_bps': -2.9,
+ 'cost_bps': 50,
+ 'base_oc': -0.0128,
+ 'base_oc_up': 47.3,
+ 'base_cc': 0.0167,
+ 'base_cc_up': 49.7,
+ 'base_wk': 0.0613,
+ 'base_wk_up': 46.6}
 
 
 def get_fii_price_map(as_of: date, zone: Optional[int] = None) -> dict:
@@ -783,6 +864,7 @@ def get_fii_price_map(as_of: date, zone: Optional[int] = None) -> dict:
         live_q, basis = {h: {0: _FII_QUANTILES[h][0], zone: _FII_QUANTILES[h][zone]}
                          for h in ("d1", "d5")}, "frozen 2018-2026 table"
 
+    tails = live_measures(as_of).get("tails") or _FII_TAIL
     bands = {}
     for h in ("d1", "d5"):
         cond = live_q[h][zone]
@@ -793,10 +875,10 @@ def get_fii_price_map(as_of: date, zone: Optional[int] = None) -> dict:
             "base_pts": [spot * (1 + z * sigma / 100.0) for z in base],
             "cond_sig": list(cond), "base_sig": list(base),
             "shift_pts": [spot * (c - b) * sigma / 100.0 for c, b in zip(cond, base)],
-            "tail_thr_pts": spot * (1 + _FII_TAIL[h]["thr"] * sigma / 100.0),
-            "tail_pct": _FII_TAIL[h][zone],
-            "tail_base_pct": _FII_TAIL[h][0],
-            "tail_sig": _FII_TAIL[h]["thr"],
+            "tail_thr_pts": spot * (1 + tails[h]["thr"] * sigma / 100.0),
+            "tail_pct": tails[h][zone],
+            "tail_base_pct": tails[h][0],
+            "tail_sig": tails[h]["thr"],
         }
     out.update({"ok": True, "as_of": px.index[-1].date(), "spot": spot,
                 "sigma_pct": sigma, "zone": zone, "basis": basis})
@@ -998,9 +1080,13 @@ def get_fii_only_view(as_of: date) -> dict:
     norm_hist = (raw_hist - _m) / _s.replace(0.0, np.nan)
     nscore = float(norm_hist.iloc[-1]) if len(norm_hist) and norm_hist.iloc[-1] == norm_hist.iloc[-1] else np.nan
 
+    lm = live_measures(as_of)
+    zones_tbl = lm.get("zones") or FII_ZONES
+    cuts = (zones_tbl.get("cuts") if lm.get("zones") else None) or _ZONE_CUTS
+    era_tbl = lm.get("era") or FII_ERA_SPLIT
     zone = None
     if nscore == nscore:
-        zone = 1 + int(sum(nscore > c for c in _ZONE_CUTS))
+        zone = 1 + int(sum(nscore > c for c in cuts))
 
     # STANCE IS GATED ON THE MEASURED ZONE, NOT ON A BARE THRESHOLD. Crossing
     # -0.5 sigma is a fact about the score's distribution, not evidence about
@@ -1074,7 +1160,8 @@ def get_fii_only_view(as_of: date) -> dict:
         "ok": True, "as_of": Z.index[-1].date(), "stance": stance, "score": score,
         "norm_score": nscore, "zone": zone,
         "zone_label": _ZONE_LABEL.get(zone, ""),
-        "zones": FII_ZONES, "era": FII_ERA_SPLIT,
+        "zones": zones_tbl, "era": era_tbl,
+        "zones_basis": "live" if lm.get("zones") else "re-measured constant",
         "n_live": len(live), "conviction": conviction,
         "components": pd.DataFrame(comps),
         "per_index": pd.DataFrame(per),

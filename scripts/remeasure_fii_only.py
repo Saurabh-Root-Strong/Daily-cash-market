@@ -199,6 +199,13 @@ def main() -> None:
         "FII_HEDGE_TEST": M.measure_hedge_test(as_of),
         "FII_FAMILY_SWEEP_2Y": family_sweep(as_of),
     }
+    # keep any field the old constant had that this script does not measure (e.g. the
+    # delivery/turnover correlations in FII_HEDGE_TEST, which do not use participant data)
+    for k, v in new.items():
+        old = getattr(F, k, None)
+        if isinstance(old, dict) and isinstance(v, dict):
+            for ok, ov in old.items():
+                v.setdefault(ok, ov)
     new = _plain(new)
     for k, v in new.items():
         old = getattr(F, k, None)

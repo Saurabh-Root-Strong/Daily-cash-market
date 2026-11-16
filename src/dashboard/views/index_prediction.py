@@ -2237,10 +2237,10 @@ def _fii_price_map_html(m: dict, zone_label: str) -> str:
             "<span title='Forward closes over 1,979 sessions were divided by a causal EWMA sigma "
             "and the quantiles taken per FII zone, so the band is sized by volatility and shaped "
             "by FIIs.&#10;&#10;Coloured edges = FII-conditioned. Grey ticks = the same band "
-            "ignoring FIIs. The gap between them IS what FII data is worth.&#10;&#10;Only the "
-            "downside survives a permutation test: Q1 p10 -0.30 sigma (p=0.003), Q1 minus Q4 "
-            "width +0.77 sigma (p&lt;0.0001). Starting volatility is flat across zones, so this "
-            "is not vol clustering.' style='display:inline-flex;align-items:center;"
+            "ignoring FIIs. The gap between them IS what FII data is worth.&#10;&#10;Re-tested "
+            "16 Nov 2026 on the repaired participant data: in Zone 1 a next-day drop below "
+            "-1 sigma came 18% of the time vs 14% overall (permutation p=0.02). The 5-day version "
+            "of that effect did NOT survive (p=0.14). Tail figures on this map are measured live.' style='display:inline-flex;align-items:center;"
             "justify-content:center;width:15px;height:15px;border-radius:50%;background:#2a2a2a;"
             "border:1px solid #555;color:#888;font-size:10px;font-weight:700;margin-left:7px;"
             "cursor:help;vertical-align:middle'>?</span></span>"
@@ -2486,9 +2486,12 @@ def _fii_leg_verdict_panel(n1: float, n5: float, bt: dict) -> None:
             "next session that closed **{first}** — mean **{mean:+.3f}%**, up "
             "**{up:.1f}%** of the time [{lo:.1f}–{hi:.1f}] on n={an}.\n\n"
             "Across both arms the verdict scored a directional hit of **{hit:.1f}%** "
-            "against **{naive:.1f}%** for simply always calling {side}. Over this "
-            "window the table has been **backwards**: bullish minus bearish came to "
-            "**{diff:+.3f}%** (Welch t={t:+.2f}).".format(
+            "against **{naive:.1f}%** for simply always calling {side}. Bullish minus "
+            "bearish came to **{diff:+.3f}%** (Welch t={t:+.2f}) — {verdict}.".format(
+                verdict=("the table has run BACKWARDS over this window"
+                         if bt["welch_t"] <= -2 else
+                         "no reliable relationship in either direction"
+                         if abs(bt["welch_t"]) < 2 else "the table has pointed the right way"),
                 said=said, n1=n1, start=bt["start"], end=bt["end"], n=bt["n"],
                 first=("DOWN more often than up" if arm["up"] < 50 else "up more often than down"),
                 mean=arm["mean"], up=arm["up"], lo=arm["ci"][0], hi=arm["ci"][1],
@@ -2501,12 +2504,11 @@ def _fii_leg_verdict_panel(n1: float, n5: float, bt: dict) -> None:
 
     _e, _f, _w = bt["exq"], bt["full_hist"], bt["week"]
     st.warning(
-        "**Before you invert it — three reasons not to.**\n\n"
-        "* **Most of the inversion is expiry settlement, not positioning.** NIFTY "
-        "expires weekly, so {en} of {n} sessions ({ep:.1f}%) carry leg changes that are "
-        "contracts expiring. On those days alone the verdict scored **{eh:.1f}%**. "
-        "Excluding them the effect drops to {ed:+.3f}% (t={et:+.2f}, hit {ech:.1f}%) — "
-        "weak, and not significant.\n"
+        "**Why not to trade it in either direction.**\n\n"
+        "* **Expiry days distort it.** NIFTY expires weekly, so {en} of {n} sessions "
+        "({ep:.1f}%) carry leg changes that are contracts expiring. On those days alone the "
+        "verdict scored **{eh:.1f}%**. Excluding them: {ed:+.3f}% (t={et:+.2f}, hit "
+        "{ech:.1f}%) — not significant.\n"
         "* **It is absent from the full history.** Over all {fn:,} sessions bullish "
         "minus bearish is **{fd:+.3f}%** (t={ft:+.2f}) — the correct sign with no "
         "strength. Two years at ~200 per arm is exactly the sample where a regime "
@@ -2903,28 +2905,27 @@ def _render_fii_only(selected_date: date) -> None:
         st.error(
             "**Everything in this database, tested once — last two years.** "
             "{ns} FII-derived signals x 3 horizons = **{nt} tests** over {n} sessions "
-            "({st_} to {en}). The strongest result in the whole family is `{bs}` on the "
-            "tradeable next-day leg, IC {ic:+.4f}, |t| **{bt:.2f}**.\n\n"
+            "({st_} to {en}). The strongest result in the whole family is `{bs}` at "
+            "{bhz}, IC {ic:+.4f}, |t| **{bt:.2f}**.\n\n"
             "* Bonferroni over {nt} tests needs |t| > {bonf:.2f} — nothing reaches it.\n"
             "* Benjamini-Hochberg FDR at 5% — **{fdr} survivors**.\n"
             "* Shuffling the forward returns and recomputing the BEST |t| across all "
             "{ns} signals gives a null whose median is {nm:.2f} and 95th percentile "
             "{np95:.2f}. Observed best is {bt:.2f}. **Family-wise p = {fp:.2f}.**\n\n"
             "The strongest thing here is weaker than what a search this wide produces "
-            "from pure noise. Even traded INVERTED — which is the direction that would "
-            "have paid — the best signal's Q5-minus-Q1 spread of {sp:.1f} bps a day "
-            "still loses against a ~{cost} bps round trip.".format(
+            "from pure noise. Traded on the next-day leg, the best signal's Q5-minus-Q1 "
+            "spread is {sp:+.1f} bps a day against a ~{cost} bps round trip.".format(
+                bhz=_SW["best_hz"],
                 ns=_SW["n_signals"], nt=_SW["n_tests"], n=_SW["n"], st_=_SW["start"],
                 en=_SW["end"], bs=_SW["best_signal"], ic=_SW["best_ic"], bt=_SW["best_t"],
                 bonf=_SW["bonferroni_t"], fdr=_SW["fdr_survivors"],
                 nm=_SW["null_best_t_median"], np95=_SW["null_best_t_p95"],
                 fp=_SW["family_p"], sp=_SW["spread_bps"], cost=_SW["cost_bps"]))
         st.caption(
-            "**The one thing here that survives a permutation test** is in section 1: "
-            "FII positioning shifts the DOWNSIDE tail of the next-day distribution "
-            "(Q1 p10 -0.30 sigma, p=0.003; Q1 minus Q4 width +0.77 sigma, p<0.0001) "
-            "while starting volatility is flat across zones. It is a risk gauge, not "
-            "a direction signal.")
+            "**What survives, re-tested 16 Nov 2026 on the repaired participant data:** "
+            "in FII Zone 1 a next-day drop below -1 sigma came 18% of the time vs 14% "
+            "overall (permutation p=0.02). The 5-day tail effect claimed earlier did not "
+            "survive (p=0.14). It is a modest next-day risk gauge, not a direction signal.")
 
 def _header_level_html(lv: dict) -> str:
     """Nifty 50 level for the page header.
