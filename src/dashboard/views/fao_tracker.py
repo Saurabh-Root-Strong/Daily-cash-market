@@ -4,7 +4,7 @@ Big Players F&O Tracker — institutional positioning via participant-wise OI & 
 Morgan Stanley-style analysis framework:
   • What FIIs Did Today        — contemporaneous OI + Volume + ₹-flow (the trustworthy read)
   • F&O-Positioning Lean       — next-day tilt from 9 signals, DEMOTED to context only:
-                                 walk-forward ~41% directional (below coin-flip), no edge
+                                 walk-forward ~38% directional over 250 sessions (below coin-flip), no edge
   • Positioning Scorecard      — FII / DII / Pro / Retail with role interpretation
   • Full Derivative Matrix     — Index Futures | Index Options | Stock Futures | Stock Opts
   • Signal Intelligence Engine — 9 signals sorted by impact magnitude
@@ -47,9 +47,9 @@ _ORDER = ["FII", "DII", "Client", "Pro"]
 # ── Role descriptions for positioning scorecard ───────────────────────────────
 _ROLES: dict[str, tuple[str, str]] = {
     "FII":    ("MARKET DRIVER",       "Foreign funds set index direction — the #1 signal to follow"),
-    "DII":    ("FLOOR SUPPORT",       "LIC, MFs, Insurance — buy on dips; SIP flows create natural floor"),
+    "DII":    ("HEDGER",              "LIC, MFs, Insurance — index futures mostly hedge cash holdings"),
     "Pro":    ("DELTA HEDGER",        "Prop desks often neutral — short futures = hedging long options books"),
-    "Client": ("CONTRARIAN SIGNAL",   "Retail — extreme longs = sell signal; extreme shorts = buy signal"),
+    "Client": ("FII MIRROR",          "Retail — sits opposite FII by arithmetic (file is zero-sum); most long at bottoms"),
 }
 
 
@@ -216,7 +216,7 @@ def _tomorrow_verdict_hero(mi) -> None:
             f"letter-spacing:2.5px;margin-bottom:10px'>F&amp;O-POSITIONING LEAN — CONTEXT, NOT A FORECAST</div>"
             f"<div style='font-size:10px;color:#ffb74d;background:#ffb74d14;"
             f"border-radius:6px;padding:7px 10px;margin-bottom:12px;line-height:1.45'>"
-            f"⚖ <b>Reality check:</b> walk-forward, this next-day arrow hits ~41% "
+            f"⚖ <b>Reality check:</b> walk-forward, this next-day arrow hits ~38% "
             f"directional (BELOW a 50% coin-flip) and HIGH-conviction calls are no more "
             f"accurate than LOW — the F&O-positioning data has <b>no measured next-day "
             f"directional edge</b>. Read it as positioning context only; the trustworthy "
@@ -2321,343 +2321,166 @@ def render(selected_date: date) -> None:
         _render_backtest(selected_date)
         return
 
-    # ── Controls ──────────────────────────────────────────────────────────────
-    c1, c2, _ = st.columns([2, 2, 4])
-    with c1:
-        data_type = st.radio(
-            "Data Type", ["OI", "Vol"], horizontal=True,
-            help="OI = Open Interest (positions held). Vol = Volume (daily traded).",
-        )
-    with c2:
-        lookback_opt = st.selectbox(
-            "Lookback", ["1 Month", "3 Months", "6 Months", "1 Year"], index=3,
-        )
-    lookback_map = {"1 Month": 30, "3 Months": 90, "6 Months": 180, "1 Year": 365}
-    lookback_days = lookback_map[lookback_opt]
-    start_date = selected_date - timedelta(days=lookback_days)
+    # ── Redesigned live page (2026-11-14) ─────────────────────────────────────
+    from src.dashboard.views import big_players_page as bp
+    from src.dashboard.cache.queries import cached_player_actions, cached_scenario_playbook
 
-    # ── Load data ─────────────────────────────────────────────────────────────
     with st.spinner("Loading F&O participant data…"):
-        latest      = cached_fao_latest(selected_date, data_type)
-        cum         = cached_fao_cumulative(selected_date, start_date, data_type)
-        daily       = cached_fao_daily(selected_date, lookback_days + 10, data_type)
-        fii_stats   = cached_fii_stats_latest(selected_date)
-        fii_stats_h = cached_fii_stats_history(selected_date, lookback_days)
+        acts = cached_player_actions(selected_date)
+        pb = cached_scenario_playbook(selected_date)
 
-    if latest.empty:
+    if acts.get("error"):
         st.warning(
-            "No F&O participant data found. "
-            "Run the backfill to load history:\n\n"
+            f"{acts['error']} Run the backfill to load history:\n\n"
             "```\npython -m src.cli backfill-fao 365\n```"
         )
         return
 
-    data_date = latest["trade_date"].iloc[0]
-    st.caption(
-        f"**{data_type}** data — as of **{data_date.strftime('%d %b %Y')}** "
-        f"| Lookback: {lookback_opt} (from {start_date.strftime('%d %b %Y')})"
-    )
+    st.caption(f"OI (open interest) data as of **{acts['data_date']:%d %b %Y}** · "
+               "NSE publishes it after the close, so it can be acted on at the next open at the earliest.")
+    _render_data_freshness(acts["data_date"], selected_date)
 
-    # ── Data freshness check ──────────────────────────────────────────────────
-    _render_data_freshness(data_date, selected_date)
+    bp.render_today(acts, pb)
+    st.divider()
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 1: TOMORROW'S VERDICT (Market Intelligence Engine)
-    # ══════════════════════════════════════════════════════════════════════════
-    st.markdown(
-        "<div style='font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);"
-        "letter-spacing:1.5px;margin:8px 0 10px'>"
-        "🧠 MARKET INTELLIGENCE ENGINE — 9-Signal Composite Analysis</div>",
-        unsafe_allow_html=True,
-    )
+    sections = ["🧭 Scenario Playbook", "🔄 Positioning Cycle", "👥 Player Deep-Dive",
+                "💰 FII Money Flow (₹)", "📋 Raw Data & Old Signals", "📖 How to Read"]
+    try:
+        sec = st.segmented_control("Section", sections, default=sections[0], key="bp_section",
+                                   label_visibility="collapsed")
+    except AttributeError:
+        sec = st.radio("Section", sections, horizontal=True, key="bp_section",
+                       label_visibility="collapsed")
+    sec = sec or sections[0]
 
-    with st.spinner("Running quant signal engine…"):
-        mi = cached_market_intelligence(selected_date)
-
-    if mi.market_view == "No Data":
-        st.info("Run F&O backfill first to enable market intelligence signals.")
-    else:
-        # Alerts
-        for alert in mi.alerts:
-            st.warning(f"🚨 {alert}")
-
-        # ── LEAD with the factual, contemporaneous read: what FIIs actually DID
-        #    today (3-layer: OI + Volume + Rupee Flow). This is the trustworthy half
-        #    of the page. The next-day positioning LEAN follows it, demoted, because
-        #    walk-forward it has no measured directional edge (~41% < coin-flip).
-        _fii_today_panel(mi)
-        st.markdown("")
-
-        # Positioning-lean panel (demoted from hero → context only)
-        _tomorrow_verdict_hero(mi)
-        st.markdown("")
-
-        # Signal Intelligence Engine
-        st.markdown(
-            "<div style='font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);"
-            "letter-spacing:1.5px;margin:14px 0 8px'>"
-            "⚡ SIGNAL BREAKDOWN — sorted by impact magnitude</div>",
-            unsafe_allow_html=True,
-        )
-        col_a, col_b = st.columns(2)
-        for i, sig in enumerate(mi.signals):
-            col = col_a if i % 2 == 0 else col_b
-            col.markdown(_signal_badge(sig), unsafe_allow_html=True)
-
-        if mi.fii_flow_available:
-            st.caption("✓ FII Money Flow signal included (fii_derivatives_stats data available).")
+    if sec == sections[0]:
+        if pb.get("error"):
+            st.info(pb["error"])
         else:
-            st.caption(
-                "FII Money Flow signal not available — "
-                "run `python -m src.cli backfill-fii-stats 365` to enable ₹Cr signals."
+            bp.render_playbook(pb)
+    elif sec == sections[1]:
+        bp.section_title("3", "Positioning Cycle — each player against its own last year",
+                         "Where the long share sits, and how often a swing turn was close from there.")
+        from src.dashboard.views.positioning_cycle_panel import render_positioning_cycle
+        try:
+            render_positioning_cycle(selected_date)
+        except Exception as exc:                              # noqa: BLE001
+            st.error(f"Positioning Cycle panel failed: {exc}")
+    elif sec == sections[2]:
+        bp.render_deep_dive(selected_date)
+    elif sec == sections[3]:
+        _render_money_flow(selected_date)
+    elif sec == sections[4]:
+        _render_raw(selected_date)
+    else:
+        st.markdown(bp.HOW_TO_READ)
+
+
+def _render_money_flow(selected_date: date) -> None:
+    from src.dashboard.views.big_players_page import section_title
+    section_title("5", "FII Money Flow — rupees FIIs put into index and stock F&O",
+                  "From NSE's FII derivatives statistics: contracts and ₹ crore bought and sold each day.")
+    with st.spinner("Loading FII derivatives statistics…"):
+        latest = cached_fao_latest(selected_date, "OI")
+        fii_stats = cached_fii_stats_latest(selected_date)
+        fii_stats_h = cached_fii_stats_history(selected_date, 365)
+    if fii_stats.empty:
+        st.info("Run `python -m src.cli backfill-fii-stats 365` to load FII statistics.")
+        return
+    _fii_index_focus(fii_stats, fii_stats_h, participant_latest=latest)
+    st.markdown("#### Today, by contract type")
+    _fii_stats_table(fii_stats)
+    if not fii_stats_h.empty:
+        st.markdown("#### Net FII flow — last year (₹ crore)")
+        st.caption("Bars above zero = FIIs bought more than they sold that day. Rupee flow moves with "
+                   "the same-day market, like the positions do; it is a record of what happened.")
+        st.plotly_chart(_fii_flow_chart(fii_stats_h), width="stretch", key="fii_flow_tab")
+        with st.expander("Full FII statistics history"):
+            h = fii_stats_h.copy()
+            h["net_value_cr"] = h["buy_value_cr"] - h["sell_value_cr"]
+            h["net_contracts"] = h["buy_contracts"] - h["sell_contracts"]
+            st.dataframe(
+                h.sort_values(["trade_date", "category"], ascending=[False, True]),
+                hide_index=True, width="stretch",
+                column_config={
+                    "trade_date": _hdc("Date", format="DD MMM YYYY"), "category": _htc("Category"),
+                    "net_contracts": _hnc("Net Contracts", format="%+,d"),
+                    "net_value_cr": _hnc("Net Flow (Cr)", format="%+.2f"),
+                    "buy_value_cr": _hnc("Buy (Cr)", format="%.2f"),
+                    "sell_value_cr": _hnc("Sell (Cr)", format="%.2f"),
+                    "oi_contracts": _hnc("OI Contracts", format="%,d"),
+                    "buy_contracts": None, "sell_contracts": None,
+                },
+                column_order=["trade_date", "category", "net_contracts", "buy_value_cr",
+                              "sell_value_cr", "net_value_cr", "oi_contracts"],
             )
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 2: INSTITUTIONAL POSITIONING SCORECARD
-    # ══════════════════════════════════════════════════════════════════════════
-    st.divider()
-    _positioning_scorecard(latest)
 
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 3: FULL DERIVATIVE MATRIX
-    # ══════════════════════════════════════════════════════════════════════════
+def _render_raw(selected_date: date) -> None:
+    from src.dashboard.views.big_players_page import section_title
+    section_title("6", "Raw Data & Old Signals",
+                  "Full position tables and the older charts. The old 9-signal engine is kept here for "
+                  "reference only — walk-forward it called next-day direction ~38% of the time (250 sessions to Nov-2026).")
+    c1, c2, _ = st.columns([2, 2, 4])
+    with c1:
+        data_type = st.radio("Data Type", ["OI", "Vol"], horizontal=True,
+                             help="OI = Open Interest (positions held). Vol = Volume (traded that day).")
+    with c2:
+        lookback_opt = st.selectbox("Lookback", ["1 Month", "3 Months", "6 Months", "1 Year"], index=3)
+    lookback_days = {"1 Month": 30, "3 Months": 90, "6 Months": 180, "1 Year": 365}[lookback_opt]
+    start_date = selected_date - timedelta(days=lookback_days)
+    with st.spinner("Loading F&O participant data…"):
+        latest = cached_fao_latest(selected_date, data_type)
+        cum = cached_fao_cumulative(selected_date, start_date, data_type)
+        daily = cached_fao_daily(selected_date, lookback_days + 10, data_type)
+    if latest.empty:
+        st.info("No participant data for this selection.")
+        return
+
+    _positioning_scorecard(latest)
     st.markdown("")
     _derivative_breakdown(latest)
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # SECTION 4: FII INDEX FOCUS + DERIVATIVES STATISTICS
-    # ══════════════════════════════════════════════════════════════════════════
-    if not fii_stats.empty:
-        st.divider()
-        st.markdown(
-            "<div style='font-size:10px;font-weight:700;color:rgba(255,255,255,0.35);"
-            "letter-spacing:1.5px;margin:4px 0 10px'>"
-            "💰 FII DERIVATIVES STATISTICS — Rupee Flow (₹ Crore)</div>",
-            unsafe_allow_html=True,
-        )
-        # Index focus cards — uses participant OI call/put split for Nifty verdict
-        _fii_index_focus(fii_stats, fii_stats_h, participant_latest=latest)
-
-        st.markdown("")
-        # Raw table + trend chart side-by-side (in expander to save space)
-        with st.expander("📋 Full Per-Index Breakdown Table", expanded=False):
-            c_tbl, c_chart = st.columns([1, 1])
-            with c_tbl:
-                _fii_stats_table(fii_stats)
-            with c_chart:
-                if not fii_stats_h.empty:
-                    st.caption("Net FII buy/sell flow by category")
-                    st.plotly_chart(
-                        _fii_flow_chart(fii_stats_h),
-                        use_container_width=True,
-                        key="fii_flow_summary",
-                    )
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # TABS: Charts | Position Analysis | FII Money Flow History
-    # ══════════════════════════════════════════════════════════════════════════
     st.divider()
-    tab_charts, tab_pos, tab_fii = st.tabs(
-        ["📈 Charts & PCR", "📋 Position Tables", "💰 FII Flow History"]
-    )
 
+    tab_charts, tab_pos, tab_old = st.tabs(["📈 Charts & PCR", "📋 Position Tables", "🗄️ Old 9-Signal Engine"])
     with tab_charts:
-        st.markdown("#### Put-Call Ratio (Contrarian Indicator)")
-        st.caption(
-            "PCR = Total Put OI ÷ Total Call OI. "
-            "Above 1.3 = fear peak → contrarian buy. Below 0.7 = complacency → contrarian sell."
-        )
+        st.markdown("#### Put-Call Ratio (all participants)")
+        st.caption("PCR = total put OI ÷ total call OI. Shown as context; it was not a reliable "
+                   "turn signal in the 2018-2026 test.")
         _pcr_metric(latest)
-        st.plotly_chart(_pcr_chart(cum), use_container_width=True)
-
-        st.divider()
-        st.markdown("#### Cumulative Index Futures Net Positions")
-        st.caption(
-            "Running sum of (Long − Short) since start date. "
-            "Rising above zero = sustained accumulation. Falling below zero = distribution phase."
-        )
-        st.plotly_chart(_cumulative_chart(cum), use_container_width=True)
-
-        st.markdown("#### FII & DII Long-to-Short % Trend")
-        st.caption("Above 50% = net long; below 50% = net short. FII drives direction; DII provides floor.")
-        st.plotly_chart(_ls_trend_chart(cum), use_container_width=True)
-
-        st.markdown("#### Daily Net — Index Futures (last 60 days)")
-        st.caption("Bar = daily net; dotted line = cumulative. Green bars = net long days. Red = net short.")
-        c_fii, c_dii = st.columns(2)
-        c_client, c_pro = st.columns(2)
-        with c_fii:
-            st.markdown(
-                f"<div style='font-size:11px;font-weight:700;color:{_COLORS['FII']}'>"
-                f"FII — Market Driver</div>",
-                unsafe_allow_html=True,
-            )
-            st.plotly_chart(_daily_net_chart(cum, "FII"), use_container_width=True)
-        with c_dii:
-            st.markdown(
-                f"<div style='font-size:11px;font-weight:700;color:{_COLORS['DII']}'>"
-                f"DII — Floor Support</div>",
-                unsafe_allow_html=True,
-            )
-            st.plotly_chart(_daily_net_chart(cum, "DII"), use_container_width=True)
-        with c_client:
-            st.markdown(
-                f"<div style='font-size:11px;font-weight:700;color:{_COLORS['Client']}'>"
-                f"Client (Retail) — Contrarian Signal (read in reverse)</div>",
-                unsafe_allow_html=True,
-            )
-            st.plotly_chart(_daily_net_chart(cum, "Client"), use_container_width=True)
-        with c_pro:
-            st.markdown(
-                f"<div style='font-size:11px;font-weight:700;color:{_COLORS['Pro']}'>"
-                f"Pro (Prop Desks) — Delta Hedger</div>",
-                unsafe_allow_html=True,
-            )
-            st.plotly_chart(_daily_net_chart(cum, "Pro"), use_container_width=True)
-
-        st.divider()
-        st.markdown("#### Cumulative Index Options — FII & DII Call vs Put Net")
-        st.caption(
-            "Solid = Call Net (bullish bets). Dashed = Put Net (bearish/hedge bets). "
-            "FII Call rising + Put falling → double bullish confirmation."
-        )
-        st.plotly_chart(_cumulative_options_chart(cum), use_container_width=True)
-
+        st.plotly_chart(_pcr_chart(cum), width="stretch")
+        st.markdown("#### Cumulative index futures net positions")
+        st.plotly_chart(_cumulative_chart(cum), width="stretch")
+        st.markdown("#### Long-to-short % trend")
+        st.plotly_chart(_ls_trend_chart(cum), width="stretch")
+        st.markdown("#### Daily net — index futures")
+        r1 = st.columns(2)
+        r2 = st.columns(2)
+        for col, who in zip(r1 + r2, ["FII", "DII", "Client", "Pro"]):
+            col.markdown(f"<div style='font-size:11px;font-weight:700;color:{_COLORS[who]}'>{who}</div>",
+                         unsafe_allow_html=True)
+            col.plotly_chart(_daily_net_chart(cum, who), width="stretch")
+        st.markdown("#### Cumulative index options — call vs put net")
+        st.plotly_chart(_cumulative_options_chart(cum), width="stretch")
     with tab_pos:
-        st.markdown("#### Daily Net Positions — Index Futures")
-        st.caption("Net = Long − Short contracts per day. Positive = net long that day.")
+        st.markdown("#### Daily net positions — index futures")
         _daily_table(daily)
-
-        st.markdown("#### Daily Net Positions — Index Options")
-        st.caption(
-            "Call Net = Call Long − Call Short. Put Net = Put Long − Put Short. "
-            "Options Delta = Call Net − Put Net."
-        )
+        st.markdown("#### Daily net positions — index options")
         _options_daily_table(daily)
-
-        st.markdown("#### Cumulative Net Positions — Index Futures")
-        st.caption(
-            f"Running total from {start_date.strftime('%d %b %Y')}. "
-            "L/S% = Long as % of (Long + Short). Below 50% = net short."
-        )
+        st.markdown("#### Cumulative net positions — index futures")
         _cumulative_table(cum)
-
-        st.markdown("#### Cumulative Net Positions — Index Options")
+        st.markdown("#### Cumulative net positions — index options")
         _options_cumulative_table(cum)
-
-    with tab_fii:
-        st.markdown("#### FII Derivatives Statistics — Daily Buy/Sell Activity")
-        st.caption(
-            "FII buy/sell contracts and rupee value (₹ Crore) by contract type. "
-            "Net Flow (Cr) = Buy − Sell. Positive = net buyer (bullish), Negative = net seller."
-        )
-        _fii_stats_table(fii_stats)
-
-        if not fii_stats_h.empty:
-            st.markdown("#### Net FII Flow Trend — Index F&O (₹ Crore)")
-            st.caption(
-                "Daily net rupee flow: Nifty Futures, BankNifty Futures, Index Futures aggregate. "
-                "Large positive bars = institutional money entering. Confirms or contradicts OI signal."
-            )
-            st.plotly_chart(_fii_flow_chart(fii_stats_h), use_container_width=True, key="fii_flow_tab")
-
-            with st.expander("Full FII Stats History Table"):
-                hist_display = fii_stats_h.copy()
-                hist_display["net_value_cr"]  = hist_display["buy_value_cr"] - hist_display["sell_value_cr"]
-                hist_display["net_contracts"] = hist_display["buy_contracts"] - hist_display["sell_contracts"]
-                col_cfg = {
-                    "trade_date":    _hdc("Date", format="DD MMM YYYY"),
-                    "category":      _htc("Category"),
-                    "net_contracts": _hnc("Net Contracts", format="%+,d"),
-                    "net_value_cr":  _hnc("Net Flow (Cr)",  format="%+.2f"),
-                    "buy_value_cr":  _hnc("Buy (Cr)",        format="%.2f"),
-                    "sell_value_cr": _hnc("Sell (Cr)",       format="%.2f"),
-                    "oi_contracts":  _hnc("OI Contracts",    format="%,d"),
-                    "buy_contracts": None, "sell_contracts": None,
-                }
-                st.dataframe(
-                    hist_display.sort_values(["trade_date", "category"], ascending=[False, True]),
-                    hide_index=True, use_container_width=True, column_config=col_cfg,
-                    column_order=["trade_date","category","net_contracts",
-                                  "buy_value_cr","sell_value_cr","net_value_cr","oi_contracts"],
-                )
+    with tab_old:
+        st.warning("Kept for reference. Walk-forward, this composite called the next day's direction "
+                   "about 38% of the time over the last 250 sessions (re-measured 16 Nov 2026) — worse than a coin flip. Do not trade it.")
+        with st.spinner("Running the old signal engine…"):
+            mi = cached_market_intelligence(selected_date)
+        if mi.market_view == "No Data":
+            st.info("No data for the old engine.")
         else:
-            st.info("Run `python -m src.cli backfill-fii-stats 365` to load FII statistics history.")
-
-    # ── How to Read (bottom) ──────────────────────────────────────────────────
-    with st.expander("📖 How to Read This Page", expanded=False):
-        st.markdown("""
-**⚡ CRITICAL: Institutional Bias ≠ Tomorrow's Trading Direction**
-
-This is the most important concept for real trading:
-
-| Situation | What it means | What market does |
-|-----------|--------------|-----------------|
-| FII net SHORT -200K (static, not changing) | Bearish BIAS (they are positioned bearish) | **Range-bound or squeeze** — DII floor prevents fall; any catalyst triggers covering rally |
-| FII net SHORT -200K **and adding more** (delta_5d negative, z < -1) | **Fresh Short Build** → high conviction BEARISH | Market likely falls — they are actively pressing the short |
-| FII net SHORT -200K **and reducing** (delta_5d positive, z > 1) | **Short Covering in Progress** → net BUYING | Market rallies — each covered short = 1 buy transaction. The massive short IS the fuel. |
-| FII net SHORT + DII net LONG (divergence) | **Squeeze Setup** — floor created | Consolidation or rally; short thesis cannot play out while DII buys |
-
-**Rule: Watch the DIRECTION of OI change, not just the level. A -200K FII short that is decreasing is BULLISH for tomorrow. A -200K FII short that is increasing is BEARISH.**
-
----
-
-**The 4 Participants — Who Does What**
-| Participant | Who they are | Role in signals |
-|-------------|-------------|-----------------|
-| **🔵 FII** | Foreign Institutional Investors (FPIs, foreign hedge funds, GDR) | **#1 Signal** — sets market direction. Net long = market goes up. Net short = market falls. |
-| **🟢 DII** | Domestic Institutions (LIC, Mutual Funds, Insurance, pension funds) | **Floor support** — buy on dips using SIP inflows. DII net short in futures usually = hedging equity portfolio (not bearish). |
-| **🟣 Pro** | Proprietary desks (brokers trading own capital) | **Delta hedger** — typically short Index Futures to hedge long options exposure. Don't panic if Pro is net short. |
-| **🟠 Client** | Retail traders & HNI | **Contrarian indicator** — retail is wrong at extremes. Extreme Client short = buy signal. Extreme Client long = sell signal. |
-
----
-
-**Futures vs Options**
-| Instrument | What it tells you |
-|---|---|
-| **Index Futures** | Pure directional bet. FII net long = bullish; net short = bearish. No ambiguity. |
-| **Index Options — Call Net** | +ve = buying calls → bullish directional bet. −ve = selling calls → expecting no rally. |
-| **Index Options — Put Net** | +ve = buying puts → hedging or bearish bet. −ve = selling puts → bullish (expectation market won't fall). |
-| **Options Delta** | Call Net − Put Net. Positive = overall bullish options stance. |
-| **Stock Futures** | Single-stock conviction plays. FII accumulating specific names → sector rotation signal. |
-
----
-
-**PCR (Put-Call Ratio) — Contrarian Indicator**
-- **PCR > 1.3**: Everyone has already bought puts (hedged downside). Markets rarely fall when participants are already protected → **contrarian BUY signal**.
-- **PCR 0.7–1.3**: Normal balanced positioning → no extreme signal.
-- **PCR < 0.7**: Excessive call buying → complacency at peaks → **contrarian SELL signal**.
-
----
-
-**OI vs Volume**
-- **OI (Open Interest)**: Contracts *outstanding* at day's end — actual positions being held. **Better signal for conviction.**
-- **Volume**: Contracts traded during the day — activity, but positions may have reversed. Good for detecting sudden moves.
-
----
-
-**Key signals to watch**
-- 🟢 **FII Net Futures +ve & rising** → strong bullish trend; institutions accumulating
-- 🔴 **FII Net Futures −ve & falling** → institutional distribution; bearish
-- 🟡 **FII buying puts aggressively** → smart-money hedge; possible reversal ahead
-- 📊 **PCR > 1.3** → contrarian buy (put crowd near capitulation → bounce likely)
-- 📊 **PCR < 0.5** → contrarian sell (complacent bulls → correction risk)
-- ⚡ **Client Net extreme short** while **FII Net long** → high-conviction bullish setup
-- ⚖️ **FII short + DII long** → institutional standoff; range-bound, no trend
-
----
-
-**The 9 Signal Engine**
-The Composite Score (range −18 to +18) combines:
-1. OI-Price Context (Fresh Long / Short Cover / Long Unwind / Fresh Short)
-2. FII Futures 5D Trend (z-score of position change)
-3. Consecutive Day Pattern (3+ consecutive days in one direction)
-4. FII-DII Alignment (both long = strongest; both short = most bearish)
-5. FII Volume Spike (unusual activity + OI direction = accumulation/distribution)
-6. PCR Trend (contrarian at extremes)
-7. FII Options Stance Shift (delta change over 5 days)
-8. Retail Contrarian (extreme Client positioning)
-9. FII Money Flow (₹Cr net buy/sell from fii_derivatives_stats)
-
-Score ≥ +7 → HIGH confidence UP | Score ≤ −7 → HIGH confidence DOWN | −3 to +3 → SIDEWAYS
-        """)
+            _fii_today_panel(mi)
+            _tomorrow_verdict_hero(mi)
+            col_a, col_b = st.columns(2)
+            for i, sig in enumerate(mi.signals):
+                (col_a if i % 2 == 0 else col_b).markdown(_signal_badge(sig), unsafe_allow_html=True)

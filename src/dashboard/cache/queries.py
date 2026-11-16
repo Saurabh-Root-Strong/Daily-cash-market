@@ -883,3 +883,31 @@ def cached_valuation_indices() -> list[str]:
 def cached_valuation_catalog() -> pd.DataFrame:
     from src.analytics.index_valuation import index_catalog
     return index_catalog()
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_positioning_cycle(as_of: date) -> dict:
+    """Participant positioning percentiles + what each state meant at past swing turns."""
+    from src.analytics.positioning_cycle import get_positioning_cycle
+    return get_positioning_cycle(as_of)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def cached_player_actions(as_of: date) -> dict:
+    """What each F&O participant did on the latest session <= as_of."""
+    from src.analytics.big_players import get_player_actions
+    return get_player_actions(as_of)
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def cached_scenario_playbook(as_of: date) -> dict:
+    """Every past session classified by FII 5-session flow x Nifty direction, with outcomes."""
+    from src.analytics.big_players import get_scenario_playbook
+    return get_scenario_playbook(as_of)
+
+
+@st.cache_data(ttl=_TTL, show_spinner=False)
+def cached_player_history(as_of: date, player: str) -> dict:
+    """One participant's last year of positioning."""
+    from src.analytics.big_players import get_player_history
+    return get_player_history(as_of, player)

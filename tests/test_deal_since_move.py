@@ -62,11 +62,17 @@ def test_be_series_spells_are_followed():
     The EQ-only chain gave +7,257%. Allow a generous band either side."""
     _cols()
     df = query_dataframe(
-        "SELECT since_pct FROM deal_client_events "
+        "SELECT since_pct, last_close FROM deal_client_events "
         "WHERE side = 'BUY' AND symbol = 'APOLLO' AND trade_date = DATE '2019-12-19'", [])
     if df.empty:
         pytest.skip("APOLLO event not present")
-    assert 30 < df.since_pct.iat[0] < 60, df.since_pct.iat[0]
+    # since_pct runs to the LATEST close, so a fixed band on it goes stale whenever the
+    # stock moves (it did: ~54x at Rs 385 when this was written, 66x at Rs 476 two
+    # months later — no code change). Test the time-invariant part instead: the
+    # split-adjusted entry price the figure implies, last_close / (1 + since_pct).
+    # Correct (BE spells followed): ~Rs 7.07. The EQ-only bug gave ~Rs 5.2.
+    implied_entry = df.last_close.iat[0] / (1 + df.since_pct.iat[0])
+    assert 6.0 < implied_entry < 8.5, implied_entry
 
 
 def test_leaderboard_and_drilldown_expose_since_columns():

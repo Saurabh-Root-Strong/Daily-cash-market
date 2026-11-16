@@ -1,0 +1,21 @@
+{
+ "fao_replaced": 218,
+ "fao_deleted": 82,
+ "fao_same": 1974,
+ "fao_missing_session": [
+  "2025-09-19"
+ ],
+ "fao_bad_title": [],
+ "fii_replaced": 207,
+ "fii_deleted": 82,
+ "fii_same": 1979,
+ "fii_missing_session": [
+  "2023-08-17"
+ ],
+ "fii_bad": [
+  [
+   "2018-09-10",
+   "parse: FII Stats file is for 2018-09-11, not 2018-09-10"
+  ]
+ ]
+}

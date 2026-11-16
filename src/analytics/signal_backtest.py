@@ -31,7 +31,10 @@ from typing import Optional
 
 import pandas as pd
 
+from src.core.logging import get_logger
 from src.data.repository import query_dataframe
+
+_log = get_logger(__name__)
 
 __all__ = ["run_signal_backtest", "BacktestRecord", "BacktestSummary"]
 
@@ -158,16 +161,21 @@ def run_signal_backtest(
     if nifty_df.empty:
         return _empty_summary(threshold_pct)
 
+    # DB returns pandas Timestamps; market_intelligence does `date - as_of` arithmetic and
+    # raised TypeError on a Timestamp, which the bare except below swallowed — so EVERY
+    # date was skipped and the backtest silently returned zero signals (audit 2026-11-16).
+    nifty_df["trade_date"] = pd.to_datetime(nifty_df["trade_date"]).dt.date
     nifty_pct   = nifty_df.set_index("trade_date")["pct_chg"].to_dict()
     nifty_dates = sorted(nifty_pct.keys())
 
     # Keep only the most recent backtest_days signal dates
-    all_sig_dates = sorted(sig_dates_df["trade_date"].tolist())
+    all_sig_dates = sorted(pd.to_datetime(sig_dates_df["trade_date"]).dt.date.tolist())
     # Require at least signal_lookback // 2 prior dates for baseline stats
     min_history = max(10, signal_lookback // 2)
     eval_dates = all_sig_dates[min_history:][-backtest_days:]
 
     records: list[BacktestRecord] = []
+    n_failed = 0
 
     for sig_date in eval_dates:
         # Next trading day with Nifty data
@@ -188,7 +196,9 @@ def run_signal_backtest(
         # ── Compute signal (walk-forward — only data ≤ sig_date) ─────────────
         try:
             mi = get_market_intelligence(sig_date, lookback_days=signal_lookback)
-        except Exception:
+        except Exception as exc:                            # noqa: BLE001
+            _log.warning("signal backtest: engine failed on %s: %s", sig_date, exc)
+            n_failed += 1
             continue
 
         if mi.market_view == "No Data" or mi.tomorrow_verdict is None:
