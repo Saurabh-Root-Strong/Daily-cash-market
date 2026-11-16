@@ -179,6 +179,7 @@ def get_player_actions(as_of: date) -> dict:
         absorb = {p["name"]: (abs(p["net_change"]) / tot_opp * 100 if tot_opp else 0.0) for p in opp}
     expiry_today = d0 in exp
     expiry_in5 = bool(((exp > d5) & (exp <= d0)).any())
+    lot_in5 = [d for d, _ in LOT_STEPS if d5 < d <= d0]
     warnings = []
     gap = int(((px.index > d1) & (px.index < d0)).sum())
     if gap:
@@ -192,6 +193,9 @@ def get_player_actions(as_of: date) -> dict:
     elif expiry_in5:
         warnings.append("The last 5 sessions include a monthly expiry, so the 5-session changes include "
                         "contracts that simply expired.")
+    if lot_in5:
+        warnings.append(f"NSE cut index lot sizes on {lot_in5[0]:%d %b %Y}, inside this 5-session window: the same "
+                        "exposure now shows ~15% more contracts, so the 5-session contract changes are overstated.")
     if ok and len(ok) == 4 and total_net is not None and abs(total_net) > 0.01 * max(
             1.0, sum(abs(p["net_change"]) for p in ok)):
         warnings.append(f"The four categories' futures changes do not sum to zero ({total_net:+,.0f}) — "
@@ -329,35 +333,25 @@ def get_scenario_playbook(as_of: date) -> dict:
                       "today": bool(absorber[-1] == ab and fsign[-1] == sgn)})
             by_absorber.append(r)
 
-    # ---- swing legs: every rally / fall, tagged by what FII did over it ------
-    fii_net = (fii["fut_idx_long"] - fii["fut_idx_short"]).values
-    share_pts = (share * 100).values
-    cshare = None
-    if "Client" in wide:
-        cw = wide["Client"].reindex(idx)
-        cshare = (cw["fut_idx_long"] / (cw["fut_idx_long"] + cw["fut_idx_short"]) * 100).values
-    legs = _swing_legs(idx, c.ffill().values, share_pts, fii_net, cshare, LEG_PCT)
-    # the lines that mark FII's own "heavy long" / "heavy short" territory: the 90th
-    # and 10th percentile of its long share over the trailing year (moves with regime)
-    sp = pd.Series(share_pts, index=idx)
-    p10, p90 = _roll_quantile(sp, 0.10).values, _roll_quantile(sp, 0.90).values
-    leg_stats = _leg_stats(legs)
-    current = dict(legs[-1]) if legs and legs[-1]["open"] else None
-    if current:
-        same = [g for g in legs if g["scenario"] == current["scenario"] and not g["open"] and not g["partial"]]
-        if same:
-            current["bigger_than_pct"] = float(100 * np.mean([abs(g["move_pct"]) < abs(current["move_pct"])
-                                                             for g in same]))
-            current["longer_than_pct"] = float(100 * np.mean([g["sessions"] < current["sessions"]
-                                                             for g in same]))
-            current["peers"] = len(same)
-        # of finished swings in the same direction that got at least this far, how many
-        # went another 3% or more before ending — the honest "is it exhausted?" number
-        mv_now = abs(current["move_pct"])
-        far = [abs(g["move_pct"]) for g in legs if not g["open"] and not g["partial"]
-               and g["dir"] == current["dir"] and abs(g["move_pct"]) >= mv_now]
-        current["reached_n"] = len(far)
-        current["extended_pct"] = float(100 * np.mean([m >= mv_now + 3 for m in far])) if far else None
+    # ---- swing legs, per FII book: index FUTURES and index OPTIONS ---------
+    cw = wide["Client"].reindex(idx) if "Client" in wide else None
+    fut = _book(idx, c, (share * 100).values,
+                (fii["fut_idx_long"] - fii["fut_idx_short"]).values,
+                fii["fut_idx_long"].astype(float), fii["fut_idx_short"].astype(float),
+                (cw["fut_idx_long"] / (cw["fut_idx_long"] + cw["fut_idx_short"]) * 100).values
+                if cw is not None else None, fwd, **BOOKS["fut"]["thresholds"])
+    o_bull = fii["opt_idx_call_long"] + fii["opt_idx_put_short"]
+    o_bear = fii["opt_idx_call_short"] + fii["opt_idx_put_long"]
+    if cw is not None:
+        c_bull = cw["opt_idx_call_long"] + cw["opt_idx_put_short"]
+        c_tot = c_bull + cw["opt_idx_call_short"] + cw["opt_idx_put_long"]
+    opt = _book(idx, c, (o_bull / (o_bull + o_bear).replace(0, np.nan) * 100).values,
+                (o_bull - o_bear).values, o_bull.astype(float), o_bear.astype(float),
+                (c_bull / c_tot.replace(0, np.nan) * 100).values if cw is not None else None,
+                fwd, smooth_sides=True, **BOOKS["opt"]["thresholds"])
+    legs, leg_stats, current = fut["legs_all"], fut["leg_stats"], fut["current"]
+    share_pts, p10, p90, pct = fut["series"], fut["p10"], fut["p90"], fut["pct"]
+    fii_net = fut["net"]
     raw_lab = [next((n for k, fs, d, n, _ in SCENARIOS if f in fs and dd == d), "")
                for f, dd in zip(flow, pdir)]
 
@@ -369,9 +363,29 @@ def get_scenario_playbook(as_of: date) -> dict:
                          "fii_share": share_pts[tail], "fii_pct": pct[tail],
                          "p10": p10[tail], "p90": p90[tail],
                          "fii_net5": pd.Series(fii_net).diff(5).values[tail]})
+    for key_, bk_ in (("fut", fut), ("opt", opt)):
+        hist[f"{key_}_dl5"], hist[f"{key_}_ds5"] = bk_["dl5"][tail], bk_["ds5"][tail]
+        for col in ("L", "S", "Lz", "Sz"):
+            hist[f"{key_}_{col}"] = bk_[col][tail]
+    hist["opt_share"] = opt["series"][tail]
+    hist["opt_pct"] = opt["pct"][tail]
+    hist["opt_p10"], hist["opt_p90"] = opt["p10"][tail], opt["p90"][tail]
     lo = idx[tail][0]
     win_legs = [g for g in legs if pd.Timestamp(g["end"]) >= lo]
-    peaks = _peak_levels(idx, share_pts, pct, legs, fwd)
+    peaks = fut["peaks"]
+    books = {}
+    for key, bk in (("fut", fut), ("opt", opt)):
+        books[key] = {**BOOKS[key]["meta"], "thresholds": BOOKS[key]["thresholds"],
+                      "legs": [g for g in bk["legs_all"] if pd.Timestamp(g["end"]) >= lo],
+                      "leg_stats": bk["leg_stats"], "current_leg": bk["current"],
+                      "peaks": bk["peaks"], "legs_total": len(bk["legs_all"]),
+                      "today_value": _f(bk["series"][-1]), "today_pct": _f(bk["pct"][-1]),
+                      "turn_actions": bk["turn_actions"], "today_state": str(bk["states"][-1]),
+                      "pos_turns": [t for t in bk["pos_turns"] if pd.Timestamp(t["date"]) >= lo],
+                      "level_odds": bk["level_odds"],
+                      "side_now": bk["side_now"],
+                      "turn_pcts": [{"kind": r["kind"], "date": r["date"], "pct": r["pct"],
+                                     "value": r["fii_long"]} for r in bk["peaks"]["at_turns"]]}
 
     n_tests = len(rows) + len(detail) + len(by_zone) + len(by_absorber)
     return {
@@ -387,6 +401,7 @@ def get_scenario_playbook(as_of: date) -> dict:
         "base": base, "base_up": base_up, "chance_bottom": chance_bot, "chance_top": chance_top,
         "history": hist, "n_tests": n_tests,
         "legs": win_legs, "leg_stats": leg_stats, "current_leg": current, "peaks": peaks,
+        "books": books,
         "leg_pct": LEG_PCT * 100, "leg_flat_pts": LEG_FLAT_PTS, "legs_total": len(legs),
         "params": {"cooldown": SCEN_COOLDOWN, "min_episodes": SCEN_MIN_EP,
                    "near_from": NEAR_FROM, "near_after": NEAR_AFTER, "turn_pct": TURN_PCT * 100},
@@ -409,6 +424,11 @@ def get_player_history(as_of: date, player: str, sessions: int = 250) -> dict:
     w = wide[player].dropna(subset=["fut_idx_long"])
     if len(w) < 2:
         return {"error": f"No {player} history on or before that date."}
+    # contract counts in today's lot size (audit: the one-year window spans the
+    # 30-Dec-2025 lot cut, which drew a fake ~15% jump in every count)
+    w = w.copy()
+    for col in _LEGS:
+        w[col] = _lot_adjust(w[col])
     share = w["fut_idx_long"] / (w["fut_idx_long"] + w["fut_idx_short"])
     pct = _pct_rank(share) if len(share) >= 120 else pd.Series(np.nan, index=share.index)
     dl, ds = w["fut_idx_long"].diff(), w["fut_idx_short"].diff()
@@ -427,7 +447,8 @@ def get_player_history(as_of: date, player: str, sessions: int = 250) -> dict:
     df["action"] = [FLOW_STATES[_flow_state(a, b)][0] for a, b in zip(dl.values, ds.values)]
     df["nifty_chg"] = pd.Series(df["nifty"]).pct_change().values * 100
     df = df.tail(sessions).reset_index(drop=True)
-    return {"player": player, "data_date": w.index[-1].date(), "df": df}
+    return {"player": player, "data_date": w.index[-1].date(), "df": df,
+            "lot_note": "Counts before 30 Dec 2025 are converted to today's lot size (Nifty 75 -> 65)."}
 
 
 # ───────────────────────────────────────────────────────────────────── swing legs
@@ -440,7 +461,8 @@ LEG_TYPES = {  # (direction, FII side) -> name
 }
 
 
-def _swing_legs(idx, close, share_pts, fii_net, client_share, thr: float) -> list[dict]:
+def _swing_legs(idx, close, share_pts, fii_net, client_share, thr: float,
+                flat: float = None, fragile: float = 3.0) -> list[dict]:
     """Cut the price history into swing legs (rally / fall between confirmed turns)
     and tag each by what FII did over the WHOLE leg.
 
@@ -451,6 +473,7 @@ def _swing_legs(idx, close, share_pts, fii_net, client_share, thr: float) -> lis
     Leg boundaries are only known in hindsight (a turn needs a 3% reversal), so
     this is a map of what happened, not a signal.
     """
+    flat = LEG_FLAT_PTS if flat is None else flat
     n = len(close)
     turns = _zigzag(close, thr)
     # Endpoint values are the median of the 3 sessions ending there. A single day's
@@ -475,7 +498,7 @@ def _swing_legs(idx, close, share_pts, fii_net, client_share, thr: float) -> lis
         v_b = np.nanmedian(wb) if np.isfinite(wb).any() else np.nan
         ds = v_b - v_a
         seg_c = close[a:b + 1]
-        side = 0 if not np.isfinite(ds) or abs(ds) < LEG_FLAT_PTS else (1 if ds > 0 else -1)
+        side = 0 if not np.isfinite(ds) or abs(ds) < flat else (1 if ds > 0 else -1)
         seg = share_pts[a:b + 1]
         legs.append({
             "scenario": LEG_TYPES[(d, side)], "dir": d, "fii_side": side,
@@ -489,7 +512,7 @@ def _swing_legs(idx, close, share_pts, fii_net, client_share, thr: float) -> lis
             "open": b == n - 1 and (not turns or turns[-1][0] != b),
             # the first leg starts at the start of the data, not at a turn
             "partial": a == 0,
-            "fragile": bool(not np.isfinite(ds) or abs(ds) < 3.0),
+            "fragile": bool(not np.isfinite(ds) or abs(ds) < fragile),
             "extreme_close": float(seg_c.max() if d > 0 else seg_c.min()),
             "extreme_date": idx[a + int(np.argmax(seg_c) if d > 0 else np.argmin(seg_c))].date(),
         })
@@ -595,3 +618,200 @@ def _peak_levels(idx, share_pts, pct, legs, fwd) -> dict:
             "chance_top": ch_top, "chance_bottom": ch_bot, "zone_test": zone_test,
             "level_test": level_test, "level_chance_top": _near(sv, top_i),
             "level_chance_bottom": _near(sv, bot_i)}
+
+
+
+# ───────────────────────────────────────────────────────────────────── FII books
+# The same swing map, read off two different FII books. Thresholds are per book
+# because the two ratios move on different scales: the options bullish share's
+# median daily change is ~0.84 pts vs ~1.5 for the futures long share (2018-2026),
+# so its "on the sidelines" and "fragile" cut-offs are about half the futures ones.
+# Evidence (scripts/study_fii_options_swings.py, repaired data, 2026-11-16):
+#   options bullish share: sides with 80% of 3% swings (shuffled-time null 39%);
+#     5-day change vs PAST Nifty +0.43, vs NEXT +0.02 (follows price, like futures);
+#     heavy-short -> 3% bottom next 1-10 sessions 37% vs 24%, p 0.001 (survives 20-test
+#     Bonferroni); 5% bottom 17% vs 11%, p 0.011; heavy-long -> top: nothing (p 0.54).
+#   put/call ratio of bought options: sides with 51% vs 42% null -- useless, not shown.
+BOOKS = {
+    "fut": {"thresholds": {"flat": 1.0, "fragile": 3.0},
+            "meta": {"key": "fut", "name": "Index futures",
+                     "actions": {"LB": "Long buildup", "SC": "Short covering",
+                                 "SB": "Short buildup", "LU": "Long unwinding"},
+                     "sides": ("longs", "shorts"),
+                     "metric": "FII long %",
+                     "definition": "FII longs ÷ (longs + shorts) in index futures",
+                     "aside": "short % = 100 − this",
+                     "sig": {"short_bottom": "p ≈ 0.02 for 3% bottoms, 0.003 for 5%",
+                             "short_ok": True,
+                             "long_top": "p ≈ 0.06 — not statistically reliable",
+                             "long_ok": False}}},
+    "opt": {"thresholds": {"flat": 0.5, "fragile": 1.5},
+            "meta": {"key": "opt", "name": "Index options",
+                     "actions": {"LB": "Bullish buildup", "SC": "Bearish covering",
+                                 "SB": "Bearish buildup", "LU": "Bullish unwinding"},
+                     "sides": ("bullish legs (calls bought + puts written)",
+                               "bearish legs (calls written + puts bought)"),
+                     "metric": "FII options bullish %",
+                     "definition": "(calls bought + puts written) ÷ all four FII index-option legs",
+                     "aside": "bearish % = 100 − this: calls written + puts bought",
+                     "sig": {"short_bottom": "p ≈ 0.001 for 3% bottoms, 0.011 for 5% — the strongest "
+                                             "bottom warning of any FII ratio tested",
+                             "short_ok": True,
+                             "long_top": "p ≈ 0.54 — no warning of tops at all",
+                             "long_ok": False}}},
+}
+
+
+def _book(idx, c: pd.Series, series: np.ndarray, net: np.ndarray, L: pd.Series, S: pd.Series,
+          client: np.ndarray | None, fwd: dict, flat: float, fragile: float,
+          smooth_sides: bool = False) -> dict:
+    """Swing legs, leg stats, the open leg, zone lines and peak tests for ONE FII book."""
+    legs = _swing_legs(idx, c.ffill().values, series, net, client, LEG_PCT, flat=flat, fragile=fragile)
+    sp = pd.Series(series, index=idx)
+    pct = _pct_rank(sp).values
+    p10, p90 = _roll_quantile(sp, 0.10).values, _roll_quantile(sp, 0.90).values
+    current = dict(legs[-1]) if legs and legs[-1]["open"] else None
+    if current:
+        same = [g for g in legs if g["scenario"] == current["scenario"] and not g["open"] and not g["partial"]]
+        if same:
+            current["bigger_than_pct"] = float(100 * np.mean([abs(g["move_pct"]) < abs(current["move_pct"])
+                                                             for g in same]))
+            current["longer_than_pct"] = float(100 * np.mean([g["sessions"] < current["sessions"] for g in same]))
+            current["peers"] = len(same)
+        mv_now = abs(current["move_pct"])
+        far = [abs(g["move_pct"]) for g in legs if not g["open"] and not g["partial"]
+               and g["dir"] == current["dir"] and abs(g["move_pct"]) >= mv_now]
+        current["reached_n"] = len(far)
+        current["extended_pct"] = float(100 * np.mean([m >= mv_now + 3 for m in far])) if far else None
+    Lp, Sp = _lot_adjust(L), _lot_adjust(S)
+    dl5, ds5, states = _side_flows(Lp, Sp)
+    Lz = Lp.rolling(5, min_periods=1).median()
+    Sz = Sp.rolling(5, min_periods=1).median()
+    pos_turns, side_now = _position_turns(idx, Lz.values, Sz.values)
+    level_odds = _level_odds(c.ffill().values, pct)
+    return {"legs_all": legs, "leg_stats": _leg_stats(legs), "current": current, "level_odds": level_odds,
+            "L": Lp.values, "S": Sp.values, "Lz": Lz.values, "Sz": Sz.values,
+            "pos_turns": pos_turns, "side_now": side_now,
+            "series": series, "net": net, "pct": pct, "p10": p10, "p90": p90,
+            "dl5": dl5, "ds5": ds5, "states": states,
+            "turn_actions": _turn_actions(c.ffill().values, states),
+            "peaks": _peak_levels(idx, series, pct, legs, fwd)}
+
+
+def _side_flows(L: pd.Series, S: pd.Series):
+    """5-session change of each side as a % of that side's own 60-session average,
+    and the action it names (bigger side wins: build / unwind / cover).
+    Percent, not contracts: lot sizes changed several times, a percentage of the
+    book does not care."""
+    dl5 = (L.diff(5) / L.rolling(60, min_periods=20).mean() * 100).values
+    ds5 = (S.diff(5) / S.rolling(60, min_periods=20).mean() * 100).values
+    states = np.array([_flow_state(a, b) for a, b in zip(dl5, ds5)], dtype=object)
+    return dl5, ds5, states
+
+
+def _turn_actions(close: np.ndarray, states: np.ndarray) -> dict:
+    """Share of each action in the 5 sessions ending ON a 3% swing turn and in the
+    5 sessions after it, against all days. Descriptive: the turn itself is only
+    known in hindsight. (Significance from scripts/study_fii_actions_at_turns.py.)"""
+    n = len(close)
+    turns = [(i, k) for i, k in _zigzag(close, LEG_PCT) if 10 <= i < n - 6]
+    valid = states != "FLAT"
+    keys = ("LB", "SB", "LU", "SC")
+    out = {"base": {k: float(100 * np.mean(states[valid] == k)) for k in keys} if valid.any() else {}}
+    for kind in ("TOP", "BOTTOM"):
+        ti = np.array([i for i, k in turns if k == kind], int)
+        out[kind] = {"n": int(len(ti))}
+        for when, off in (("before", 0), ("after", 5)):
+            lab = states[ti + off] if len(ti) else np.array([])
+            out[kind][when] = {k: float(100 * np.mean(lab == k)) if len(lab) else None for k in keys}
+    return out
+
+
+
+# ───────────────────────────────────────────────────────────────────── positions
+# Index-derivative lot sizes were cut on 30-Dec-2025 (Nifty 75 -> 65; verified from
+# fii_derivatives_stats oi_value / (oi_contracts x spot)). The same FII exposure shows
+# ~15% MORE contracts after that date, so a raw line fakes a buildup. Counts before a
+# step are multiplied by its factor to express them in today's lot size. (The Nov-2024
+# change was phased over months and lies outside the one-year chart; not adjusted.)
+LOT_STEPS = [(pd.Timestamp("2025-12-30"), 75 / 65)]
+POS_TURN_PCT = 0.30      # a position peak/trough = a 30% reversal of the 5-session median
+# (calibrated 2026-11-16: 12% on raw counts caught every monthly-expiry settlement, ~40 turns a
+# year; 30% on the 5-session median gives ~8-12 a year per side. About 4 in 10 futures turns and
+# 1 in 3 options turns fall within 5 sessions of a Nifty 3% turn, vs ~1 in 4 by chance.)
+
+
+def _lot_adjust(x: pd.Series) -> pd.Series:
+    out = x.astype(float).copy()
+    for d, f in LOT_STEPS:
+        out[out.index < d] *= f
+    return out
+
+
+def _position_turns(idx, L: np.ndarray, S: np.ndarray) -> tuple[list[dict], dict]:
+    """Peaks and troughs of each side's position (12% reversals in contracts), and
+    where each side stands now relative to its last turn.
+
+    Measured 2018-2026 (scripts/study_fii_position_peaks.py): these turns land on Nifty's
+    swing turns with a median offset of 0 sessions -- about a third before, a quarter the
+    same day, the rest after -- so they CONFIRM a turn in real time rather than lead it,
+    and a 'position rolled over 10% off its 20-day extreme' rule did not beat chance."""
+    turns, now = [], {}
+    for side, x in (("L", L), ("S", S)):
+        zz = []
+        fin = np.flatnonzero(np.isfinite(x))
+        if len(fin) < 2:
+            continue
+        start = int(fin[0])
+        d, hi, lo = 0, start, start
+        for i in range(start + 1, len(x)):
+            if not np.isfinite(x[i]):
+                continue
+            if x[i] > x[hi]:
+                hi = i
+            if x[i] < x[lo]:
+                lo = i
+            last = zz[-1][0] if zz else -1
+            if d >= 0 and x[i] <= x[hi] * (1 - POS_TURN_PCT) and hi > last and hi > start:
+                zz.append((hi, "PEAK")); d, lo = -1, i
+            elif d <= 0 and x[i] >= x[lo] * (1 + POS_TURN_PCT) and lo > last and lo > start:
+                zz.append((lo, "TROUGH")); d, hi = 1, i
+        for i, k in zz:
+            turns.append({"side": side, "kind": k, "date": idx[i].date(), "value": _f(x[i])})
+        if zz and np.isfinite(x[-1]):
+            i, k = zz[-1]
+            seg = x[i:]
+            ext = int(np.nanargmax(seg) if k == "TROUGH" else np.nanargmin(seg)) + i
+            now[side] = {"last_kind": k, "last_date": idx[i].date(), "last_value": _f(x[i]),
+                         "now": _f(x[-1]), "chg_pct": _f((x[-1] / x[i] - 1) * 100),
+                         "sessions": int(len(x) - 1 - i),
+                         "direction": "rising" if k == "TROUGH" else "falling",
+                         "extreme_value": _f(x[ext]), "extreme_date": idx[ext].date(),
+                         "off_extreme_pct": _f((x[-1] / x[ext] - 1) * 100)}
+    return turns, now
+
+
+
+def _level_odds(close: np.ndarray, pct: np.ndarray, band: float = 10.0) -> dict | None:
+    """How often a 3% swing top / bottom FOLLOWED (next 1-10 sessions) from days whose
+    ratio sat within +-band percentile points of today's, against all days.
+
+    Audit 2026-11-16: the page used to count past TURNS near today's level ("5 tops,
+    0 bottoms"). That ignores how long FII spends at each level -- a level visited
+    often collects turns just by being common. Rates per episode fix that."""
+    today = pct[-1] if len(pct) else np.nan
+    valid = np.isfinite(pct)
+    if not np.isfinite(today) or valid.sum() < 250:
+        return None
+    zz = _zigzag(close, LEG_PCT)
+    tops = np.array([i for i, k in zz if k == "TOP"], int)
+    bots = np.array([i for i, k in zz if k == "BOTTOM"], int)
+    lo, hi = max(0.0, today - band), min(100.0, today + band)
+    m = valid & (pct >= lo) & (pct <= hi)
+    m[-NEAR_AFTER:] = False                     # their outcome is not known yet
+    ep = np.flatnonzero(_episodes(m, SCEN_COOLDOWN))
+    allv = np.flatnonzero(valid)
+    allv = allv[allv < len(close) - NEAR_AFTER]
+    return {"band": (round(lo, 1), round(hi, 1)), "episodes": int(len(ep)),
+            "top_after": _near(ep, tops), "bottom_after": _near(ep, bots),
+            "top_base": _near(allv, tops), "bottom_base": _near(allv, bots)}

@@ -99,3 +99,54 @@ def test_swing_legs_classify_by_fii_share_change():
     assert legs[2]["scenario"] == "Rally, FII on sidelines"      # +0.5 pts < 1-point threshold
     assert legs[2]["open"] and not legs[0]["open"]
     assert legs[0]["client_share_chg"] < 0                       # client on the other side
+
+
+def test_both_fii_books_present_and_consistent(temp_db, days):
+    _seed(days)
+    bp = _fresh()
+    pb = bp.get_scenario_playbook(days[-1])
+    assert set(pb["books"]) == {"fut", "opt"}
+    assert pb["books"]["fut"]["legs"] == pb["legs"]           # futures stays the default view
+    o = pb["books"]["opt"]
+    assert o["thresholds"]["flat"] < pb["books"]["fut"]["thresholds"]["flat"]
+    assert 0 <= o["today_value"] <= 100
+    for g in o["legs"]:
+        assert g["scenario"] in bp.LEG_TYPES.values()
+    assert {"opt_share", "opt_p10", "opt_p90"} <= set(pb["history"].columns)
+
+
+def test_turn_actions_shares_sum_to_100(temp_db, days):
+    _seed(days)
+    bp = _fresh()
+    pb = bp.get_scenario_playbook(days[-1])
+    for key in ("fut", "opt"):
+        ta = pb["books"][key]["turn_actions"]
+        assert set(ta["base"]) == {"LB", "SB", "LU", "SC"}
+        assert abs(sum(ta["base"].values()) - 100) < 1e-6
+        for kind in ("TOP", "BOTTOM"):
+            for when in ("before", "after"):
+                vals = [v for v in ta[kind][when].values() if v is not None]
+                if ta[kind]["n"]:
+                    assert sum(vals) <= 100 + 1e-6          # FLAT days make up any remainder
+        assert {"fut_dl5", "fut_ds5", "opt_dl5", "opt_ds5"} <= set(pb["history"].columns)
+
+
+def test_lot_adjust_only_before_the_step():
+    import pandas as pd
+    from src.analytics.big_players import _lot_adjust, LOT_STEPS
+    d, f = LOT_STEPS[0]
+    s = pd.Series([100.0, 100.0, 100.0], index=[d - pd.Timedelta(days=2), d, d + pd.Timedelta(days=2)])
+    out = _lot_adjust(s)
+    assert out.iloc[0] == pytest.approx(100 * f) and out.iloc[1] == 100 and out.iloc[2] == 100
+
+
+def test_position_turns_alternate_and_report_state():
+    import pandas as pd
+    from src.analytics.big_players import _position_turns
+    x = np.array([100, 130, 160, 200, 150, 120, 100, 140, 180], float)   # peak 200, bottom 100
+    idx = pd.date_range("2026-01-01", periods=len(x), freq="B")
+    turns, now = _position_turns(idx, x, x[::-1].copy())
+    lt = [t["kind"] for t in turns if t["side"] == "L"]
+    assert lt == ["PEAK", "TROUGH"]
+    assert now["L"]["direction"] == "rising" and now["L"]["last_value"] == 100
+    assert now["L"]["chg_pct"] == pytest.approx(80)

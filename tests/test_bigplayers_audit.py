@@ -5,6 +5,7 @@ from datetime import date, timedelta
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from tests.test_positioning_cycle import _seed, _sessions
 
@@ -65,3 +66,28 @@ def test_partial_first_leg_and_extreme():
     assert all(not g["partial"] for g in legs[1:])
     cur = legs[-1]
     assert cur["open"] and cur["extreme_close"] == 107.0   # reversal level must use the high, not today's 106
+
+
+def test_level_odds_normalised_and_censored():
+    from src.analytics.big_players import _level_odds
+    rng = np.random.default_rng(0)
+    close = 100 * np.cumprod(1 + rng.normal(0, 0.01, 600))
+    pct = rng.uniform(0, 100, 600)
+    out = _level_odds(close, pct)
+    assert out is not None and out["episodes"] > 0
+    assert 0 <= out["top_after"] <= 100 and 0 <= out["top_base"] <= 100
+    assert _level_odds(close[:100], pct[:100]) is None          # too little history
+
+
+def test_deep_dive_counts_in_todays_lot_size(temp_db):
+    from src.analytics import big_players as bp
+    days = _sessions(date(2025, 6, 2), 200)                     # spans the 30-Dec-2025 lot cut
+    _seed(days)
+    bp._load_cached.cache_clear()
+    h = bp.get_player_history(days[-1], "FII", sessions=200)
+    df = h["df"].set_index(h["df"]["date"].dt.date)
+    step, f = bp.LOT_STEPS[0]
+    before = [d for d in days if d < step.date()][-1]
+    raw = bp._load(days[-1])[0]["FII"].loc[pd.Timestamp(before), "fut_idx_long"]
+    assert df.loc[before, "long"] == pytest.approx(raw * f)
+    assert "lot_note" in h
